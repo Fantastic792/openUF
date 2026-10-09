@@ -151,6 +151,11 @@ local TYPED = {
 	-- one-shot cmds, so both have to outlive a restart.
 	guest_wlans               = "table",
 	guest_authorized          = "table",
+	-- The portal's enforcement facts (guestportal.parse) while it is on;
+	-- the nft tables are rebuilt from it at startup.
+	guest_portal              = "table",
+	-- Reported as guest_token while the portal is on (32 hex).
+	guest_token               = "string",
 }
 -- Exported for tests and tooling that check what survives a restart (upstream
 -- names the same table FIELDS).
