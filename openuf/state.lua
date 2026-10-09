@@ -145,6 +145,12 @@ local TYPED = {
 	-- The tagged SSIDs' VLANs carried over the mesh hop on a swconfig board
 	-- ({bridge, vids}, meshvlan.lua): kernel state, rebuilt at startup.
 	meshvlan                  = "table",
+	-- Guest portal: the WLANs that need it ({wlanconf_id = true}, from the
+	-- last system_cfg) and the guests the controller authorized
+	-- ({mac = epoch s}, from authorize-guest). Only carried by pushes and
+	-- one-shot cmds, so both have to outlive a restart.
+	guest_wlans               = "table",
+	guest_authorized          = "table",
 }
 -- Exported for tests and tooling that check what survives a restart (upstream
 -- names the same table FIELDS).
