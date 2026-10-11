@@ -6202,8 +6202,15 @@ return {
 				assert_eq(saves, 2, "saved")
 				assert_true(log:find("up: phy0-ap1", 1, true) ~= nil, "said so")
 
-				-- (Upstream also checks that a guest WLAN selfrun holds down stays
-				-- down when its schedule ends; the guest portal is not adopted here.)
+				-- selfrun_guest_mode=off holds it too: the schedule's end leaves it down.
+				now = mon_2300
+				with_stderr(function() inform._sched_resync(st) end)
+				st.guest_vaps_down = {"phy0-ap1"}
+				now = tue_0700
+				with_stderr(function() inform._sched_resync(st) end)
+				assert_false(links["phy0-ap1"], "selfrun still holds it")
+				assert_nil(st.sched_vaps_down, "but the schedule no longer does")
+				st.guest_vaps_down = nil
 
 				-- The schedule removed while it held a WLAN down: brought back up.
 				now = mon_2300
@@ -7041,7 +7048,7 @@ return {
 				handle_response = inform.handle_response,
 				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
 				stderr = io.stderr, gp = inform._guestportal, vaps = inform._guest_vaps,
-				save = inform._state.save,
+				save = inform._state.save, ws = inform._wlansched,
 			}
 			local logged = {}
 			io.stderr = {write = function(_, s) logged[#logged + 1] = s end}
@@ -7054,12 +7061,16 @@ return {
 			local saves = 0
 			inform._state.save = function() saves = saves + 1 end
 			local calls, links = {}, {}
-			inform._guestportal = {
-				set_selfrun = function(pass) calls[#calls + 1] = pass end,
-				set_vaps_up = function(names, up)
-					links[#links + 1] = (up and "up " or "down ") .. table.concat(names, " ")
+			inform._guestportal = {set_selfrun = function(pass) calls[#calls + 1] = pass end}
+			local link = {["phy0-ap1"] = true, ["phy1-ap1"] = true}
+			inform._wlansched = setmetatable({
+				set_bss = function(n, up)
+					links[#links + 1] = (up and "up " or "down ") .. n
+					link[n] = up
+					return true
 				end,
-			}
+				is_up = function(n) return link[n] end,
+			}, {__index = orig.ws})
 			inform._guest_vaps = function() return {{ifname = "phy0-ap1"}, {ifname = "phy1-ap1"}} end
 			inform._inform_fails, inform._guest_selfrun_on, inform._guest_built = 0, false, "phy0-ap1=x"
 			local ok, err = pcall(function()
@@ -7088,19 +7099,19 @@ return {
 				tick(false); tick(false)
 				assert_eq(#links, 0, "off: nothing before the third failure")
 				tick(false)
-				assert_eq(links[1], "down phy0-ap1 phy1-ap1", "off: the guest WLANs go down")
+				assert_eq(table.concat(links, ", "), "down phy0-ap1, down phy1-ap1", "off: the guest WLANs go down")
 				assert_eq(#calls, 2, "off never opens the portal")
 				assert_eq(table.concat(st.guest_vaps_down, " "), "phy0-ap1 phy1-ap1", "kept for a restart")
 				local saved = saves
 				assert_true(saved > 0, "the ledger is saved")
 				tick(false); tick(false)
-				assert_eq(#links, 1, "once")
+				assert_eq(#links, 2, "once")
 				-- a daemon restart while down: module state is fresh, the ledger is not
 				inform._inform_fails, inform._guest_selfrun_on = 0, false
 				tick(false)
-				assert_eq(#links, 1, "still no controller after the restart: they stay down")
+				assert_eq(#links, 2, "still no controller after the restart: they stay down")
 				tick(true)
-				assert_eq(links[2], "up phy0-ap1 phy1-ap1", "the answer brings them back up")
+				assert_eq(links[3] .. ", " .. links[4], "up phy0-ap1, up phy1-ap1", "the answer brings them back up")
 				assert_nil(st.guest_vaps_down, "ledger cleared")
 				assert_eq(#calls, 2, "and the portal was never opened")
 
@@ -7124,7 +7135,7 @@ return {
 				inform._reload_if_changed, inform._rrm_tick, inform._guestportal =
 				orig.build_json, orig.build_packet, orig.http_post,
 				orig.parse_packet, orig.handle_response, orig.reload, orig.rrm, orig.gp
-			inform._guest_vaps, inform._state.save = orig.vaps, orig.save
+			inform._guest_vaps, inform._state.save, inform._wlansched = orig.vaps, orig.save, orig.ws
 			inform._inform_fails, inform._guest_selfrun_on, inform._guest_built = 0, false, nil
 			if not ok then error(err, 0) end
 		end

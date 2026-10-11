@@ -4445,6 +4445,7 @@ end
 M.GUEST_SELFRUN_FAILS = 3
 M._inform_fails = 0
 M._guest_selfrun_on = false
+M._guest_up_failed = ""
 function M._guest_selfrun(st, contacted)
 	M._inform_fails = contacted and 0 or M._inform_fails + 1
 	local spec = st and st.guest_portal
@@ -4460,17 +4461,38 @@ function M._guest_selfrun(st, contacted)
 	if mode == "off" and not st.guest_vaps_down then
 		local names = {}
 		for _, v in ipairs(M._guest_vaps(st)) do names[#names + 1] = v.ifname end
-		pcall(M._guestportal.set_vaps_up, names, false)
+		for _, n in ipairs(names) do pcall(M._wlansched.set_bss, n, false) end
 		st.guest_vaps_down = names
 		M._state.save(st)
 		io.stderr:write("guestportal: " .. M._inform_fails .. " informs unanswered, "
 			.. "selfrun_guest_mode=off -- guest WLANs down (" .. table.concat(names, " ") .. ")\n")
 		changed = true
 	elseif mode ~= "off" and st.guest_vaps_down then
-		pcall(M._guestportal.set_vaps_up, st.guest_vaps_down, true)
-		io.stderr:write("guestportal: guest WLANs back up ("
-			.. table.concat(st.guest_vaps_down, " ") .. ")\n")
-		st.guest_vaps_down = nil
+		-- A WLAN its blackout schedule or the Uplink Connectivity Monitor
+		-- holds down stays down (each brings it up when it lets go). One whose
+		-- beacon did not restart (wlansched.set_bss) stays in the ledger,
+		-- down, and the next answered inform tries again.
+		local held, up, failed = {}, {}, {}
+		for _, n in ipairs(st.sched_vaps_down or {}) do held[n] = true end
+		for _, n in ipairs(st.uplinkmon_down or {}) do held[n] = true end
+		for _, n in ipairs(st.guest_vaps_down) do
+			-- Already up (a wifi reload recreated it) or gone: nothing to do.
+			if not held[n] and M._wlansched.is_up(n) == false then
+				local ok, res = pcall(M._wlansched.set_bss, n, true)
+				if ok and res then up[#up + 1] = n else failed[#failed + 1] = n end
+			end
+		end
+		if #up > 0 then
+			io.stderr:write("guestportal: guest WLANs back up (" .. table.concat(up, " ") .. ")\n")
+		end
+		-- Said once per set of failures, not on every retry.
+		local said = table.concat(failed, " ")
+		if #failed > 0 and said ~= M._guest_up_failed then
+			io.stderr:write("guestportal: could not put guest WLANs back on the air ("
+				.. said .. ") -- retrying at every answer\n")
+		end
+		M._guest_up_failed = said
+		st.guest_vaps_down = (#failed > 0) and failed or nil
 		M._state.save(st)
 		changed = true
 	end
@@ -5720,9 +5742,10 @@ function M._sched_resync(st)
 	local t = os.date("*t", M._time())
 	local down = M._wlansched.down_set(vaps, t.wday - 1, t.hour * 60 + t.min)
 	-- keep: VAPs something else holds down (the Uplink Connectivity
-	-- Monitor), which the schedule must not bring back up.
+	-- Monitor, guest selfrun), which the schedule must not bring back up.
 	local keep = {}
 	for _, n in ipairs(st.uplinkmon_down or {}) do keep[n] = true end
+	for _, n in ipairs(st.guest_vaps_down or {}) do keep[n] = true end
 	local held, changed = M._wlansched.reconcile(down, st.sched_vaps_down, keep)
 	if #changed.down > 0 then
 		io.stderr:write("wlansched: outside the WLAN schedule -- down: "
@@ -5783,6 +5806,7 @@ function M._uplinkmon_resync(st, cfg)
 	end
 	local keep = {}
 	for _, n in ipairs(st.sched_vaps_down or {}) do keep[n] = true end
+	for _, n in ipairs(st.guest_vaps_down or {}) do keep[n] = true end
 	local held, changed = M._wlansched.reconcile(down, st.uplinkmon_down, keep)
 	if #changed.down > 0 then
 		io.stderr:write("uplinkmon: uplink unreachable -- SSIDs off the air: "
