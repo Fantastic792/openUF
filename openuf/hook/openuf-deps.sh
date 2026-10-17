@@ -81,7 +81,8 @@ usteer|cmd:usteerd|no|band steering, roaming assistant
 nftables|cmd:nft|no|client blocking, multicast/broadcast blocker, L2 hardening
 kmod-nft-bridge|kmod:nft_meta_bridge|no|the blocker and L2 hardening rules
 tc-tiny|cmd:tc|no|WiFi speed limit
-kmod-sched-act-police|kmod:act_police|no|the upload half of the WiFi speed limit'
+kmod-ifb|kmod:ifb|no|the upload half of the WiFi speed limit, queued
+kmod-sched-act-police|kmod:act_police|no|the upload half of the WiFi speed limit, policed when there is no IFB'
 
 # rpcd and cgi-io run with a short PATH; look where OpenWrt puts things.
 have_cmd() {
@@ -115,7 +116,9 @@ PKGS
 # full build knows the bss_transition option (a basic one rejects it with
 # "unknown configuration item"), and a tarball user may have built their own.
 hostapd_full() {
-	[ -x "$HOSTAPD" ] && grep -q bss_transition "$HOSTAPD" 2>/dev/null
+	# wnm_sleep_mode, not bss_transition: a basic binary carries the
+	# bss_transition_* event names too, so that grep passed on it.
+	[ -x "$HOSTAPD" ] && grep -q wnm_sleep_mode "$HOSTAPD" 2>/dev/null
 }
 
 WPAD_VARIANTS="wpad-mesh-openssl wpad-mesh-wolfssl wpad-mesh-mbedtls

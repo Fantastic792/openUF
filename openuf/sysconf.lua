@@ -14,8 +14,9 @@
 	The cron job is the interesting one: the controller schedules a nightly
 	04:00 (device local time) neighbour scan on every AP through the AP's own
 	cron -- the "automated RRM scans" Ubiquiti's Channel AI describes. The
-	verb is added to syswrapper.sh, which asks the running inform daemon to
-	scan on its next heartbeat (inform.lua's _maybe_scan_neighbours), so the
+	verb is added to syswrapper.sh, which, as UniFi firmware does, picks two
+	random times within the next hour and asks the running inform daemon to
+	scan at each (inform.lua's _maybe_scan_neighbours), so the
 	scan code stays in one place and the result rides out on the next inform.
 
 	Timezone -> UCI system.@system[0].timezone (the wire string IS a POSIX TZ
@@ -35,17 +36,13 @@
 ]]--
 
 local M = {}
+local util = package.loaded["openuf.util"]
+	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable seams, as in the other modules.
 M._uci  = nil                                            -- mock UCI table; nil = require("uci")
-M._exec = function(cmd) return os.execute(cmd) end
-M._read_file = function(path)
-	local f = io.open(path, "r")
-	if not f then return nil end
-	local s = f:read("*a")
-	f:close()
-	return s
-end
+M._exec = os.execute
+M._read_file = util.read_file
 -- Sibling temp file and rename, like state.save: crond must never see half a file.
 M._write_file = function(path, content)
 	local tmp = path .. ".tmp"
@@ -65,6 +62,13 @@ M.END_MARK   = "# openuf-cron-end"
 -- Wire command -> what crond runs. Extend only alongside the verb itself.
 M.CRON_COMMANDS = {
 	["syswrapper.sh 11k-scan"] = "/usr/bin/syswrapper.sh 11k-scan",
+}
+
+-- Wire commands openUF's inform loop already does on its own, so they need
+-- no crontab line: the WiFi Blackout Schedule's re-check (wlansched.lua),
+-- done on every heartbeat.
+M.CRON_IN_DAEMON = {
+	["syswrapper.sh schedule-action"] = true,
 }
 
 local function get_uci()
@@ -318,7 +322,9 @@ function M.apply_cron(cron)
 		for _, job in ipairs(cron.jobs or {}) do
 			if job.enabled ~= false then
 				local runs = M.CRON_COMMANDS[job.cmd]
-				if not runs then
+				if M.CRON_IN_DAEMON[job.cmd] then
+					-- Nothing to install.
+				elseif not runs then
 					io.stderr:write("sysconf: cron job not installed -- not a command this build provides: "
 						.. ("%q"):format(tostring(job.cmd)) .. "\n")
 				elseif not M.is_valid_schedule(job.schedule) then

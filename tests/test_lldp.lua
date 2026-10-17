@@ -120,30 +120,28 @@ return {
 		end
 	},
 	{
-		name = "lldp: the neighbour list is reused for a minute, not re-forked every heartbeat",
+		name = "lldp: every heartbeat re-reads lldpctl, so a topology change is never a minute late",
 		fn = function()
-			-- lldpd advertises on a 30-second TX interval and the controller
-			-- renders this as topology, not as a statistic, so forking lldpctl
-			-- and cjson-decoding a full chassis tree every 10-second heartbeat
-			-- bought nothing.
-			local orig_cmd, orig_time = lldp._run_cmd, lldp._time
-			local clock, forks = 9000, 0
-			lldp._time = function() return clock end
+			-- By decision: what the controller shows follows reality on the
+			-- next inform. Upstream reuses the list for a minute to save a
+			-- fork; this tree does not (see lldp.neighbors).
+			local orig_cmd = lldp._run_cmd
+			local forks, answer = 0, fixture("lldpctl_output.json")
 			lldp._neighbours_cache = nil
 			lldp._run_cmd = function()
 				forks = forks + 1
-				return fixture("lldpctl_output.json")
+				return answer
 			end
 
 			assert_eq(#lldp.neighbors(), 1, "the neighbour is found")
 			lldp.neighbors(); lldp.neighbors()
-			assert_eq(forks, 1, "one lldpctl fork serves a minute of heartbeats")
+			assert_eq(forks, 3, "one lldpctl read per call, nothing reused")
+			answer = '{\n  "lldp": {\n    \n  }\n}\n'
+			assert_eq(#lldp.neighbors(), 0, "the cable came out: gone on the very next read")
+			answer = fixture("lldpctl_output.json")
+			assert_eq(#lldp.neighbors(), 1, "and back the moment lldpd hears it again")
 
-			clock = clock + lldp.NEIGHBOURS_TTL + 1
-			assert_eq(#lldp.neighbors(), 1, "and it is re-read once the TTL is up")
-			assert_eq(forks, 2, "with a second fork")
-
-			lldp._run_cmd, lldp._time = orig_cmd, orig_time
+			lldp._run_cmd = orig_cmd
 			lldp._neighbours_cache = nil
 		end
 	},
@@ -167,6 +165,16 @@ return {
 			assert_eq(#lldp.neighbors(), 0, "nothing yet")
 			up = true
 			assert_eq(#lldp.neighbors(), 1, "and the neighbour lands immediately, not in a minute")
+
+			for _, junk in ipairs({'{"lldp":{"interf', '{"other":1}', "[1]"}) do
+				lldp._neighbours_cache = nil
+				up = false
+				local reply = junk
+				lldp._run_cmd = function() return up and fixture("lldpctl_output.json") or reply end
+				assert_eq(#lldp.neighbors(), 0, "garbage reads as nothing: " .. junk)
+				up = true
+				assert_eq(#lldp.neighbors(), 1, "and is not pinned: " .. junk)
+			end
 
 			lldp._run_cmd, lldp._time = orig_cmd, orig_time
 			lldp._neighbours_cache = nil

@@ -15,24 +15,14 @@
 local cjson = require("cjson")
 
 local M = {}
+local util = package.loaded["openuf.util"]
+	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable: override in tests to return fixture lldpctl output
-M._run_cmd = function(cmd)
-	local h = io.popen(cmd .. " 2>/dev/null")
-	if not h then return "" end
-	local s = h:read("*a")
-	h:close()
-	return s or ""
-end
+M._run_cmd = util.capture
 
 -- Injectable: override in tests to return fixture file contents
-M._read_file = function(path)
-	local f = io.open(path, "r")
-	if not f then return nil end
-	local s = f:read("*a")
-	f:close()
-	return s
-end
+M._read_file = util.read_file
 
 -- Injectable: override in tests to control elapsed time deterministically.
 M._time = os.time
@@ -61,42 +51,37 @@ end
 -- Each entry: {port, local_port_idx, chassis_id, port_id, port_descr,
 --              system_name, system_desc, capabilities}
 -- Returns {} if lldpctl is not available or has no neighbors.
--- How long a neighbour list is reused. lldpd advertises on a 30-second TX
--- interval by default and the controller renders this as topology rather than
--- as a statistic, so re-forking lldpctl and cjson-decoding a full
--- chassis/port/capability tree on every 10-second heartbeat bought nothing.
--- The trade: a topology change -- a new neighbour, a moved cable -- reaches
--- the controller up to a minute late.
-M.NEIGHBOURS_TTL = 60
+--
+-- Read fresh on EVERY heartbeat, by decision (2026-10-18): a topology change
+-- -- a new neighbour, a moved cable, lldpd coming up after openUF -- reaches
+-- the controller on the next inform, never a minute late. Upstream caches the
+-- list (and since 2026-10-16 lldpd's own "no neighbours" answer) for 60 s to
+-- save one lldpctl fork per heartbeat on their small boards; this tree's rule
+-- is that what the controller shows follows reality as soon as it can, and
+-- one fork per 10 s is the price. _neighbours_cache stays as a field the
+-- test harnesses reset, and is never filled.
 M._neighbours_cache = nil
 
 function M.neighbors()
-	local now = M._time()
-	local c = M._neighbours_cache
-	if c and (now - c.at) < M.NEIGHBOURS_TTL then return c.value end
-	local value = M._neighbors_uncached()
-	-- Only a real answer is cached. No lldpd, a failed fork or a truncated
-	-- reply all come back empty, and pinning that for a minute would blank the
-	-- topology on a transient the very next heartbeat would have fixed.
-	if #value > 0 then M._neighbours_cache = {value = value, at = now} end
-	return value
+	return (M._neighbors_uncached())
 end
 
+-- Returns the neighbour list and whether lldpd actually answered.
 function M._neighbors_uncached()
 	local output = M._run_cmd("lldpctl -f json")
-	if not output or output == "" then return {} end
+	if not output or output == "" then return {}, false end
 
 	local ok, data = pcall(cjson.decode, output)
-	if not ok or type(data) ~= "table" then return {} end
+	if not ok or type(data) ~= "table" then return {}, false end
 
 	local result = {}
 
 	-- lldpctl -f json structure: {"lldp": {"interface": {...}}}
 	local lldp = data.lldp
-	if type(lldp) ~= "table" then return {} end
+	if type(lldp) ~= "table" then return {}, false end
 
 	local ifaces = lldp.interface
-	if type(ifaces) ~= "table" then return {} end
+	if type(ifaces) ~= "table" then return {}, true end
 
 	-- ifaces can be a single object or array depending on lldpd version
 	local iface_list = {}
@@ -123,7 +108,7 @@ function M._neighbors_uncached()
 		end
 	end
 
-	return result
+	return result, true
 end
 
 -- Parse a single neighbor table from lldpctl JSON output.

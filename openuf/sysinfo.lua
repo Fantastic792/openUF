@@ -6,24 +6,14 @@
 ]]--
 
 local M = {}
+local util = package.loaded["openuf.util"]
+	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable: override in tests to return fixture file contents
-M._read_file = function(path)
-	local f = io.open(path, "r")
-	if not f then return nil end
-	local s = f:read("*a")
-	f:close()
-	return s
-end
+M._read_file = util.read_file
 
 -- Injectable: override in tests to return fixture command output
-M._run_cmd = function(cmd)
-	local h = io.popen(cmd .. " 2>/dev/null")
-	if not h then return "" end
-	local s = h:read("*a")
-	h:close()
-	return s or ""
-end
+M._run_cmd = util.capture
 
 
 -- ─── Lookup pass ────────────────────────────────────────────────────────────
@@ -117,16 +107,27 @@ function M.uptime()
 	end)
 end
 
--- Returns {total_kb, free_kb} by parsing /proc/meminfo.
+-- Returns {total_kb, free_kb, buffers_kb} by parsing /proc/meminfo.
 function M.meminfo()
 	local s = M._read_file("/proc/meminfo")
-	if not s then return {total_kb = 0, free_kb = 0} end
+	if not s then return {total_kb = 0, free_kb = 0, buffers_kb = 0} end
 	local total = tonumber(s:match("MemTotal:%s+(%d+)"))
 	local free  = tonumber(s:match("MemFree:%s+(%d+)"))
+	local bufs  = tonumber(s:match("Buffers:%s+(%d+)"))
 	return {
-		total_kb = total or 0,
-		free_kb  = free  or 0,
+		total_kb   = total or 0,
+		free_kb    = free  or 0,
+		buffers_kb = bufs  or 0,
 	}
+end
+
+-- The 1, 5 and 15 minute load averages as /proc/loadavg prints them
+-- ("0.05"), strings as UniFi firmware sends them in sys_stats.
+function M.loadavg()
+	local s = M._read_file("/proc/loadavg") or ""
+	local a, b, c = s:match("^(%S+)%s+(%S+)%s+(%S+)")
+	if not a then return "0.00", "0.00", "0.00" end
+	return a, b, c
 end
 
 -- Previous /proc/stat sample for delta-based CPU% (see M.cpu_percent).
@@ -214,6 +215,33 @@ function M.channel_from_freq(freq)
 	return nil
 end
 
+-- The key of an `iw` dump line: the text before its first colon, without the
+-- indent and the " * " bullet ("\t\t * channel width: 1" -> "channel width").
+-- The three dump parsers below look each line's key up first and try only the
+-- pattern written for that key. They used to try every pattern on every line,
+-- which on the Archer C5 cost about 13 matches per line of scan dump and made
+-- these parsers most of a heartbeat's CPU. Each pattern is still the one it
+-- was, so a line its key routes to reads exactly as before. It now also reads
+-- only from its own line: an SSID such as "x freq: 2412" no longer sets the
+-- neighbour's frequency. A plain find for the colon: a pattern that also
+-- strips the indent backtracks over it on every line without one, which cost
+-- more than the patterns it saves.
+local function dump_key(line)
+	local colon = line:find(":", 1, true)
+	return colon and line:sub(line:match("^[%s%*]*()"), colon - 1)
+end
+
+-- survey dump key -> {field, pattern}. Anchored to (whitespace-then-)start of
+-- line so "channel busy time:" doesn't also match inside the separate
+-- "extension channel busy time:" field iw emits on wider channels.
+local SURVEY_FIELDS = {
+	["noise"]                 = {"noise",             "noise:%s+(-?%d+)"},
+	["channel active time"]   = {"channel_time",      "^%s*channel active time:%s+(%d+)"},
+	["channel busy time"]     = {"channel_time_busy", "^%s*channel busy time:%s+(%d+)"},
+	["channel receive time"]  = {"channel_time_rx",   "^%s*channel receive time:%s+(%d+)"},
+	["channel transmit time"] = {"channel_time_tx",   "^%s*channel transmit time:%s+(%d+)"},
+}
+
 -- Returns per-radio channel utilisation from `iw dev <ifname> survey dump`.
 -- Returns a table: {freq, noise, channel_time, channel_time_busy, channel_time_rx, channel_time_tx}
 function M.radio_stats(ifname)
@@ -222,7 +250,8 @@ function M.radio_stats(ifname)
 	local result = {}
 	local current = nil
 	for line in output:gmatch("[^\n]+") do
-		local freq = line:match("frequency:%s+(%d+)")
+		local key = dump_key(line)
+		local freq = key == "frequency" and line:match("frequency:%s+(%d+)")
 		if freq then
 			if current then result[#result + 1] = current end
 			-- iw marks the operating channel's entry "[in use]" on this same
@@ -238,19 +267,9 @@ function M.radio_stats(ifname)
 			-- /usr/sbin/iw`; the previous patterns never matched any real
 			-- iw output on any hardware, so channel utilisation always
 			-- silently reported 0%/absent regardless of actual airtime.
-			-- Anchored to (whitespace-then-)start of line so "channel busy
-			-- time:" doesn't also match inside the separate "extension
-			-- channel busy time:" field iw emits on wider channels.
-			local noise   = line:match("noise:%s+(-?%d+)")
-			local ct      = line:match("^%s*channel active time:%s+(%d+)")
-			local ct_busy = line:match("^%s*channel busy time:%s+(%d+)")
-			local ct_rx   = line:match("^%s*channel receive time:%s+(%d+)")
-			local ct_tx   = line:match("^%s*channel transmit time:%s+(%d+)")
-			if noise   then current.noise              = tonumber(noise)   end
-			if ct      then current.channel_time       = tonumber(ct)      end
-			if ct_busy then current.channel_time_busy  = tonumber(ct_busy) end
-			if ct_rx   then current.channel_time_rx    = tonumber(ct_rx)   end
-			if ct_tx   then current.channel_time_tx    = tonumber(ct_tx)   end
+			local f = SURVEY_FIELDS[key]
+			local v = f and line:match(f[2])
+			if v then current[f[1]] = tonumber(v) end
 		end
 	end
 	if current then result[#result + 1] = current end
@@ -291,16 +310,56 @@ local function _bitrate_generation_nss(line)
 	return nil, nil
 end
 
+-- A u32 station counter read as signed, floored at 0. mt76 as shipped in
+-- OpenWrt 25.12 (2026.03.19~39c960c3, mt7915 tx-free path) adds
+-- FIELD_GET(COUNT) - 1 to tx_retries and tx_failed with no guard for a count
+-- of 0, so a fresh station's counters can read 4294967295; upstream later
+-- made it `count ? count - 1 : 0`. Passed on, one such reading added exactly
+-- 2^32 to the controller's per-band totals (the Office AP showed 47 billion
+-- tx packets and 50 % retries). No real retry count gets near 2^31.
+function M.u32_count(v)
+	if v and v >= 2147483648 then return 0 end
+	return v
+end
+
+-- station dump key -> {field, pattern, u32 counter}.
+-- signal is ANCHORED, and this matters: `iw` emits "avg ack signal:\t-95 dBm"
+-- further down the same station block, which an unanchored "signal:%s+" also
+-- matches -- and being later, it overwrote the real reading. Every client was
+-- reported at the ack-signal value (-95 dBm on this driver) no matter its
+-- actual RSSI. That feeds the Clients list, the vap's avg_client_signal, the
+-- satisfaction estimate AND Minimum RSSI enforcement, which would have
+-- deauthed every client on the radio the moment the feature was switched on.
+-- The per-chain suffix ("-53 [-76, -53, -66] dBm") is ignored -- the first
+-- number is the combined RSSI.
+local STA_FIELDS = {
+	["signal"]         = {"signal",        "^%s*signal:%s+(-?%d+)"},
+	["signal avg"]     = {"signal_avg",    "^%s*signal avg:%s+(-?%d+)"},
+	["tx bytes"]       = {"tx_bytes",      "tx bytes:%s+(%d+)"},
+	["rx bytes"]       = {"rx_bytes",      "rx bytes:%s+(%d+)"},
+	["tx packets"]     = {"tx_packets",    "tx packets:%s+(%d+)"},
+	["rx packets"]     = {"rx_packets",    "rx packets:%s+(%d+)"},
+	["tx retries"]     = {"tx_retries",    "tx retries:%s+(%d+)", true},
+	["tx failed"]      = {"tx_failed",     "tx failed:%s+(%d+)",  true},
+	["inactive time"]  = {"inactive_ms",   "inactive time:%s+(%d+)"},
+	["connected time"] = {"connected_sec", "connected time:%s+(%d+)"},
+}
+-- "tx bitrate"/"rx bitrate" -> the patterns and fields of that direction.
+local BITRATE = {}
+for _, d in ipairs({"tx", "rx"}) do
+	BITRATE[d .. " bitrate"] = {
+		rate_pat = d .. " bitrate:%s+(%S+)", mcs_pat = d .. " bitrate:.*MCS%s+(%d+)",
+		rate = d .. "_bitrate", mcs = d .. "_mcs", gen = d .. "_generation",
+		nss = d .. "_nss", width = d .. "_width",
+	}
+end
+
 -- Returns a table of connected stations from `iw dev <ifname> station dump`.
--- Each entry: {mac, signal, tx_bitrate, rx_bitrate, tx_mcs, rx_mcs,
---              tx_generation, tx_nss, rx_generation, rx_nss, tx_bytes,
---              rx_bytes, tx_packets, rx_packets, tx_retries, tx_failed,
---              inactive_ms, connected_sec, tx_width, rx_width,
---              tx_duration, rx_duration}
--- tx_duration/rx_duration: airtime in µs, from mac80211's per-station
--- airtime accounting (drivers that call ieee80211_sta_register_airtime:
--- ath9k, ath10k, mt76). ath9k counts every retry attempt into it; nil where
--- the driver reports none.
+-- Each entry: {mac, signal, signal_avg, tx_bitrate, rx_bitrate, tx_mcs,
+--              rx_mcs, tx_generation, tx_nss, rx_generation, rx_nss,
+--              tx_bytes, rx_bytes, tx_packets, rx_packets, tx_retries,
+--              tx_failed, inactive_ms, connected_sec, tx_width, rx_width}
+-- signal is the last frame's, signal_avg mac80211's running average.
 -- tx_retries/tx_failed: iw(8) only exposes TX-side retry/failure counters
 -- (802.11 ARQ is TX-side by nature) -- there is no rx-side equivalent in
 -- `station dump` output, confirmed via `strings /usr/sbin/iw`.
@@ -315,133 +374,167 @@ function M.sta_table(ifname)
 			if cur then clients[#clients + 1] = cur end
 			cur = {mac = mac}
 		elseif cur then
-			-- ANCHORED, and this matters: `iw` emits "avg ack signal:\t-95 dBm"
-			-- further down the same station block, which an unanchored
-			-- "signal:%s+" also matches -- and being later, it overwrote the
-			-- real reading. Every client was reported at the ack-signal value
-			-- (-95 dBm on this driver) no matter its actual RSSI. That feeds
-			-- the Clients list, the vap's avg_client_signal, the satisfaction
-			-- estimate AND Minimum RSSI enforcement, which would have deauthed
-			-- every client on the radio the moment the feature was switched
-			-- on. ("last ack signal:-95" escaped only by luck: no space after
-			-- the colon.) The per-chain suffix ("-53 [-76, -53, -66] dBm") is
-			-- ignored -- the first number is the combined RSSI.
-			local signal     = line:match("^%s*signal:%s+(-?%d+)")
-			local tx_rate    = line:match("tx bitrate:%s+(%S+)")
-			local rx_rate    = line:match("rx bitrate:%s+(%S+)")
-			-- tx_mcs/rx_mcs: only present on their respective bitrate line,
-			-- and only for 11n/ac/ax rates -- legacy (pre-MCS) rates have no
-			-- "MCS N" suffix, so these stay nil for those, same as other
-			-- optional fields below.
-			local tx_mcs     = line:match("tx bitrate:.*MCS%s+(%d+)")
-			local rx_mcs     = line:match("rx bitrate:.*MCS%s+(%d+)")
-			if line:find("tx bitrate:") then
-				cur.tx_generation, cur.tx_nss = _bitrate_generation_nss(line)
+			local key = dump_key(line)
+			local b = BITRATE[key]
+			if b then
+				-- tx_mcs/rx_mcs: only for 11n/ac/ax rates -- legacy (pre-MCS)
+				-- rates have no "MCS N" suffix, so these stay nil for those,
+				-- same as other optional fields below.
+				local rate = line:match(b.rate_pat)
+				local mcs  = line:match(b.mcs_pat)
+				if rate then cur[b.rate] = tonumber(rate) end
+				if mcs  then cur[b.mcs]  = tonumber(mcs)  end
+				cur[b.gen], cur[b.nss] = _bitrate_generation_nss(line)
 				-- "80MHz"; iw prints no width token for 20 MHz rates.
-				cur.tx_width = tonumber(line:match("(%d+)MHz")) or 20
-			elseif line:find("rx bitrate:") then
-				cur.rx_generation, cur.rx_nss = _bitrate_generation_nss(line)
-				cur.rx_width = tonumber(line:match("(%d+)MHz")) or 20
+				cur[b.width] = tonumber(line:match("(%d+)MHz")) or 20
+			else
+				local f = STA_FIELDS[key]
+				local v = f and line:match(f[2])
+				if v then
+					v = tonumber(v)
+					if f[3] then v = M.u32_count(v) end
+					cur[f[1]] = v
+				end
 			end
-			local tx_dur = line:match("^%s*tx duration:%s+(%d+)")
-			local rx_dur = line:match("^%s*rx duration:%s+(%d+)")
-			if tx_dur then cur.tx_duration = tonumber(tx_dur) end
-			if rx_dur then cur.rx_duration = tonumber(rx_dur) end
-			local tx_bytes   = line:match("tx bytes:%s+(%d+)")
-			local rx_bytes   = line:match("rx bytes:%s+(%d+)")
-			local tx_pkts    = line:match("tx packets:%s+(%d+)")
-			local rx_pkts    = line:match("rx packets:%s+(%d+)")
-			local tx_retries = line:match("tx retries:%s+(%d+)")
-			local tx_failed  = line:match("tx failed:%s+(%d+)")
-			local inactive   = line:match("inactive time:%s+(%d+)")
-			local connected  = line:match("connected time:%s+(%d+)")
-			if signal    then cur.signal      = tonumber(signal)     end
-			if tx_rate   then cur.tx_bitrate  = tonumber(tx_rate)    end
-			if rx_rate   then cur.rx_bitrate  = tonumber(rx_rate)    end
-			if tx_mcs    then cur.tx_mcs      = tonumber(tx_mcs)     end
-			if rx_mcs    then cur.rx_mcs      = tonumber(rx_mcs)     end
-			if tx_bytes  then cur.tx_bytes    = tonumber(tx_bytes)   end
-			if rx_bytes  then cur.rx_bytes    = tonumber(rx_bytes)   end
-			if tx_pkts   then cur.tx_packets  = tonumber(tx_pkts)    end
-			if rx_pkts   then cur.rx_packets  = tonumber(rx_pkts)    end
-			if tx_retries then cur.tx_retries = tonumber(tx_retries) end
-			if tx_failed  then cur.tx_failed  = tonumber(tx_failed)  end
-			if inactive  then cur.inactive_ms = tonumber(inactive)   end
-			if connected then cur.connected_sec = tonumber(connected) end
 		end
 	end
 	if cur then clients[#clients + 1] = cur end
 	return clients
 end
 
--- Integer value of a hostapd hex field ("0x006e" or "fffe"), or nil.
-local function _hex(v)
-	if not v then return nil end
-	return tonumber((v:gsub("^0x", "")), 16)
+-- The kernel driver behind a wireless netdev ("ath9k", "ath10k_pci",
+-- "mt798x-wmac"), or nil. It does not change while the board runs, so it is
+-- read once per netdev.
+M._driver_cache = {}
+function M.wifi_driver(ifname)
+	if not ifname then return nil end
+	if M._driver_cache[ifname] == nil then
+		M._driver_cache[ifname] = util.driver_of(ifname, M._read_file) or false
+	end
+	return M._driver_cache[ifname] or nil
 end
 
--- The ceiling one station negotiated at association, from hostapd's record
--- of its capability elements: {mode = "ht"/"vht"/"he", nss, max_mcs, width}.
--- nil for a station without HT (legacy rates only), whose rate has no MCS
--- to compare. `rx_vht_mcs_map` is what the STATION can receive, so what the
--- AP can send it: two bits per spatial stream, 3 = stream unsupported,
--- 0/1/2 = MCS 0-7/0-8/0-9. The HT bitmask has one byte per stream. HE
--- stations are taken as MCS 0-11 with the HT/VHT stream count and width:
--- hostapd's `all_sta` on these builds has shown no HE-specific fields yet.
-local function _sta_ceiling(f)
-	local flags = f.flags or ""
-	if not flags:find("[HT]", 1, true) then return nil end
-	local c = {mode = "ht", max_mcs = 7, nss = 0}
-	local bm = f.ht_mcs_bitmask or ""
-	for i = 1, 4 do
-		local byte = bm:sub(i * 2 - 1, i * 2)
-		if byte ~= "" and byte ~= "00" then c.nss = i end
-	end
-	-- ht_caps_info bit 1: Supported Channel Width Set (40 MHz).
-	local ht = _hex(f.ht_caps_info) or 0
-	c.width = math.floor(ht / 2) % 2 == 1 and 40 or 20
-	local vmap = _hex(f.rx_vht_mcs_map)
-	if flags:find("[VHT]", 1, true) and vmap then
-		local nss, mcs = 0, nil
-		for stream = 0, 7 do
-			local v = math.floor(vmap / 4 ^ stream) % 4
-			if v ~= 3 then
-				nss = stream + 1
-				mcs = mcs or 7 + v
-			end
+-- Whether a station is dozing right now (UniFi firmware's sta `state` bit
+-- 0x10, which the controller turns into powersave_enabled): true/false, or nil
+-- when this radio cannot say. mac80211 keeps the PS_STA flag itself only when
+-- the driver leaves power-save tracking to it; a driver that sets AP_LINK_PS
+-- in hwflags takes that job over, and neither ath10k nor mt76 reports back
+-- (both APs, 2026-10-10: ath9k showed PS_STA on a dozing client, ath10k and
+-- mt798x never once in 10 s across 17 stations). There, false would be a
+-- guess. Needs debugfs, which OpenWrt mounts.
+M._ps_phy_cache = {}
+function M.sta_powersave(ifname, mac)
+	if not ifname or not mac then return nil end
+	local phy = M._ps_phy_cache[ifname]
+	if phy == nil then
+		phy = (M._read_file("/sys/class/net/" .. ifname .. "/phy80211/name") or ""):match("^%s*(%S+)")
+		if phy then
+			local hw = M._read_file("/sys/kernel/debug/ieee80211/" .. phy .. "/hwflags")
+			if not hw or hw:find("AP_LINK_PS", 1, true) then phy = nil end
 		end
-		c.mode = "vht"
-		if nss > 0 then c.nss, c.max_mcs = nss, mcs end
-		-- vht_caps_info bits 2-3: Supported Channel Width Set; 0 = 80 MHz.
-		local vw = math.floor((_hex(f.vht_caps_info) or 0) / 4) % 4
-		c.width = vw == 0 and 80 or 160
+		M._ps_phy_cache[ifname] = phy or false
 	end
-	if flags:find("[HE]", 1, true) then
-		c.mode, c.max_mcs = "he", 11
+	if not phy then return nil end
+	local flags = M._read_file("/sys/kernel/debug/ieee80211/" .. phy .. "/netdev:"
+		.. ifname .. "/stations/" .. mac:lower() .. "/flags")
+	if not flags then return nil end
+	for word in flags:gmatch("%S+") do
+		if word == "PS_STA" then return true end
 	end
-	if c.nss == 0 then c.nss = 1 end
-	return c
+	return false
 end
 
--- Per-station association ceilings on one hostapd BSS, keyed by MAC, from
--- `hostapd_cli all_sta`: one fork per BSS. See _sta_ceiling().
-function M.hostapd_sta_caps(ifname)
-	if not ifname then return {} end
-	local out = M._run_cmd("hostapd_cli -i " .. ifname .. " all_sta")
-	local fields, cur = {}, nil
-	for line in out:gmatch("[^\n]+") do
+-- Each station's AKM suite on the given hostapd BSSes, as hostapd prints it
+-- ("00-0f-ac-9"), keyed by lower-case MAC. One hostapd_cli run for all of them.
+-- The second result is the set of stations hostapd listed at all, so a
+-- station it listed without an AKM (an open network) can be told from one
+-- it never answered for.
+function M.sta_akms(bsses)
+	local out, listed = {}, {}
+	local names = {}
+	for _, b in ipairs(bsses or {}) do
+		if b:match("^[%w%-%._]+$") then names[#names + 1] = b end
+	end
+	if #names == 0 then return out, listed end
+	local text = M._run_cmd("for b in " .. table.concat(names, " ")
+		.. "; do hostapd_cli -i $b all_sta; done")
+	local cur
+	for line in text:gmatch("[^\n]+") do
 		local mac = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s*$")
 		if mac then
-			cur = {}
-			fields[mac:lower()] = cur
+			cur = mac:lower()
+			listed[cur] = true
 		elseif cur then
-			local k, v = line:match("^([%w_]+)=(.*)$")
-			if k then cur[k] = v end
+			local akm = line:match("^AKMSuiteSelector=(%S+)")
+			if akm then out[cur] = akm:lower() end
 		end
 	end
-	local caps = {}
-	for mac, f in pairs(fields) do caps[mac] = _sta_ceiling(f) end
-	return caps
+	return out, listed
+end
+
+-- A station's AKM is fixed for the life of its association, so it is asked
+-- of hostapd once per association, not every heartbeat. An association is
+-- the station's BSS plus its start (uptime minus iw's connected time); a
+-- start that moved by more than the slack is a new association, which
+-- covers a reconnect between two heartbeats that iw's counter alone could
+-- hide. A station unseen for AKM_IDLE seconds is forgotten.
+M.AKM_IDLE = 300
+M.AKM_START_SLACK = 5
+M._akm_cache = {}   -- [mac] = {bss = ifname, start = s, akm = akm|false, seen = s}
+
+-- stas: {{mac = , bss = , conn = connected seconds}, ...}. Returns sta_akms'
+-- map for those stations, running hostapd_cli only on BSSes that hold a
+-- station with no current answer.
+function M.sta_akms_cached(stas)
+	local now_up = M.uptime()
+	local bsses, want = {}, {}
+	if now_up <= 0 then -- no clock to date associations by: ask every time
+		for _, s in ipairs(stas) do
+			if not want[s.bss] then want[s.bss] = true; bsses[#bsses + 1] = s.bss end
+		end
+		return (M.sta_akms(bsses))
+	end
+	local cache = M._akm_cache
+	for mac, e in pairs(cache) do
+		if e.seen + M.AKM_IDLE < now_up then cache[mac] = nil end
+	end
+	local out = {}
+	for _, s in ipairs(stas) do
+		local mac = s.mac:lower()
+		local e = cache[mac]
+		if e and s.conn and e.bss == s.bss
+			and math.abs(now_up - s.conn - e.start) <= M.AKM_START_SLACK then
+			e.seen = now_up
+			out[mac] = e.akm or nil
+		elseif not want[s.bss] then
+			want[s.bss] = true; bsses[#bsses + 1] = s.bss
+		end
+	end
+	if #bsses == 0 then return out end
+	local akms, listed = M.sta_akms(bsses)
+	listed = listed or {}
+	for _, s in ipairs(stas) do
+		if want[s.bss] then
+			local mac = s.mac:lower()
+			out[mac] = akms[mac]
+			-- Only an answer hostapd gave is kept: a station it did not list
+			-- (it failed, or the station came after iw's read) is asked again.
+			if listed[mac] and s.conn then
+				cache[mac] = {bss = s.bss, start = now_up - s.conn,
+					akm = akms[mac] or false, seen = now_up}
+			end
+		end
+	end
+	return out
+end
+
+-- AKM suites that use Fast BSS Transition (IEEE 802.11-2020 table 9-151:
+-- 3 FT-802.1X, 4 FT-PSK, 9 FT-SAE, 13 FT-802.1X-SHA384, 19 FT-PSK-SHA384,
+-- 25 FT-SAE-EXT-KEY).
+local FT_AKMS = {["00-0f-ac-3"] = true, ["00-0f-ac-4"] = true, ["00-0f-ac-9"] = true,
+	["00-0f-ac-13"] = true, ["00-0f-ac-19"] = true, ["00-0f-ac-25"] = true}
+function M.akm_is_ft(akm)
+	return akm ~= nil and FT_AKMS[akm] == true
 end
 
 -- Sibling-AP recognition. The controller decides whether a scanned BSS is
@@ -483,36 +576,82 @@ end
 -- it is present wherever those are. The script prints "<bssid> <mac>" per
 -- sibling BSS and nothing else; any failure (no ucode, no module) is simply
 -- no siblings.
+--
+-- A real UniFi AP is a sibling too, on a site that mixes the two: without the
+-- tag, openUF reported its BSSes as rogues whenever they carried a site SSID.
+-- UniFi firmware's own element (firmware-confirmed for 4.0.15, umac.ko
+-- ieee80211_add_ubnt_ie + libubnt's scan parser; seen live in 2026 on a
+-- neighbour's current-firmware AP):
+--   dd <len> | 00 15 6d | 00 01 01 (UniFi AP) | flags | 01 02 <system id>
+--            | TLVs from body offset 11: 81 06 <serialno = device MAC>, ...
+-- The TLVs are walked, not indexed: current firmware adds tags 4.0.15 did not
+-- have (0x89, a UUID). Only the tag-0x81 MAC is used; the flags are ignored.
 local function ucode_bytes(hex)
 	return (hex:gsub("(%x%x)", "\\x%1"))
 end
 
+-- The ucode function pm(d): the MAC an element body d announces, or null.
+-- Kept separate so it can be run on a device against fixed inputs.
+function M.peer_match_ucode()
+	local head = ucode_bytes(M.PEER_IE_OUI:gsub(":", "") .. M.PEER_IE_MAGIC .. M.PEER_IE_VER)
+	return 'function mac(d,o){let m=[];for(let i=o;i<o+6;i++)push(m,sprintf("%02x",ord(d,i)));return join(":",m);}'
+		.. 'function pm(d){let n=length(d);'
+		.. 'if(n==13&&substr(d,0,7)=="' .. head .. '")return mac(d,7);'
+		.. 'if(n<11||ord(d,0)!=0||ord(d,1)!=0x15||ord(d,2)!=0x6d'
+		.. '||ord(d,3)!=0||ord(d,4)!=1||ord(d,5)!=1)return null;'
+		.. 'for(let i=11;i+2<=n;i+=2+ord(d,i+1)){'
+		.. 'if(ord(d,i)==0x81&&ord(d,i+1)==6&&i+8<=n)return mac(d,i+2);}'
+		.. 'return null;}'
+end
+
+-- The reader's last line, printed once it has walked the whole scan cache.
+-- A dump that returned nothing at all prints no such line: nl80211 answers an
+-- empty cache and a failed request alike (null, checked on the C5), and the
+-- reader only runs when `iw` has just listed BSSes, so null is the failure.
+M.PEER_SCAN_DONE = "openuf-peer-scan-done"
+
 function M.peer_scan_cmd(ifname)
 	if type(ifname) ~= "string" or not ifname:match("^[%w%.%-_]+$") then return nil end
-	local head = ucode_bytes(M.PEER_IE_OUI:gsub(":", "") .. M.PEER_IE_MAGIC .. M.PEER_IE_VER)
-	local script = 'let nl=require("nl80211");'
+	local script = M.peer_match_ucode()
+		.. 'let nl=require("nl80211");'
 		.. 'let r=nl.request(nl.const.NL80211_CMD_GET_SCAN,nl.const.NLM_F_DUMP,{dev:"' .. ifname .. '"});'
 		.. 'for(let x in (r||[])){let b=x.bss;if(!b)continue;'
 		.. 'for(let l in [b.information_elements||[],b.beacon_ies||[]]){let hit=null;'
-		.. 'for(let e in l){let d=e.data;'
-		.. 'if(e.type==221&&length(d)==13&&substr(d,0,7)=="' .. head .. '"){'
-		.. 'let m=[];for(let i=7;i<13;i++)push(m,sprintf("%02x",ord(d,i)));'
-		.. 'hit=join(":",m);break;}}'
+		.. 'for(let e in l){if(e.type==221){hit=pm(e.data);if(hit)break;}}'
 		.. 'if(hit){print(b.bssid," ",hit,"\\n");break;}}}'
+		.. 'if(r!=null)print("' .. M.PEER_SCAN_DONE .. '\\n");'
 	return "ucode -e '" .. script .. "' 2>/dev/null"
 end
 
 -- {bssid = identity MAC} for every BSS in ifname's scan cache that carries
--- the sibling-AP element.
+-- the sibling-AP element, and whether the reader ran to its end: without the
+-- closing line (no ucode, no nl80211 module, killed) a BSS missing from the
+-- map is unknown, not a stranger.
 function M.peer_macs(ifname)
 	local cmd = M.peer_scan_cmd(ifname)
-	if not cmd then return {} end
+	if not cmd then return {}, false end
+	local out = M._run_cmd(cmd) or ""
 	local peers = {}
-	for bssid, mac in (M._run_cmd(cmd) or ""):gmatch(
+	for bssid, mac in out:gmatch(
 			"(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)") do
 		peers[bssid:lower()] = mac:lower()
 	end
-	return peers
+	return peers, out:find(M.PEER_SCAN_DONE, 1, true) ~= nil
+end
+
+-- The reader is a ucode fork that loads the nl80211 module, run per radio on
+-- every scan read -- by decision (2026-10-18). Upstream keeps its answer per
+-- BSSID (a sibling for an hour, a stranger for ten minutes) to save the fork;
+-- this tree's rule is that what the controller shows follows reality on the
+-- next heartbeat, and a BSS that starts carrying the element under a BSSID
+-- already seen (an AP that beaconed before openUF wrote it) is a sibling the
+-- moment it does, not ten minutes later. _peer_cache stays as a field the
+-- test harnesses reset, and is never filled.
+M._peer_cache = {}
+
+local function peer_tag(ifname, nets)
+	local peers = M.peer_macs(ifname)
+	for _, n in ipairs(nets) do n.peer_mac = peers[n.bssid:lower()] end
 end
 
 -- Returns a table of neighboring wireless networks visible to ifname, by
@@ -522,7 +661,7 @@ end
 -- cache here is cheap and non-disruptive enough to do on every inform,
 -- unlike a real scan).
 -- Each entry: {bssid, essid, freq, channel, signal, security, age, bw,
--- peer_mac} -- peer_mac only for a sibling openUF AP (see peer_ie_hex).
+-- peer_mac} -- peer_mac only for a sibling openUF or UniFi AP (see peer_ie_hex).
 -- `bw` is channel width in MHz, from iw's own "BSS operating channel width:
 -- N MHz" line (only present for HE/VHT-capable neighbors; confirmed via
 -- `strings /usr/sbin/iw`). The controller's Environment tab's "Ch. Width"
@@ -550,6 +689,98 @@ local function unescape_iw_ssid(s)
 	return s
 end
 
+-- Channel width in MHz from a BSS's operation elements: the VHT Operation
+-- width field and centre segments, and the HT Operation secondary channel
+-- offset ("above"/"below", anything else = none). How the fields combine is
+-- described in scan_table's flush() below. Shared with rrmscan.lua, which
+-- reads the same two elements out of a client's beacon report.
+function M.channel_width(vht_w, vht_seg1, vht_seg2, ht_sec)
+	if vht_w and vht_w >= 1 then
+		local seg2 = vht_seg2 or 0
+		if vht_w == 2 or (vht_w == 1 and seg2 > 0
+				and math.abs(seg2 - (vht_seg1 or 0)) == 8) then
+			return 160
+		end
+		return 80
+	elseif ht_sec == "above" or ht_sec == "below" then
+		return 40
+	end
+	return 20
+end
+
+-- scan dump key -> what that line sets: on the BSS (cur) or in the per-BSS
+-- evidence (ev) that flush() resolves into bw and security.
+local SCAN_LINE = {
+	-- Operation-element width evidence. The VHT line is anchored on
+	-- "* channel width:" so that the HT capability line sitting two lines
+	-- below it cannot match: that one reads "* STA channel width: 20 MHz" on
+	-- a 20 MHz neighbour, and reading its 20 as a VHT width field would report
+	-- the BSS as 80 MHz. (Its key differs too, "STA channel width".)
+	["channel width"] = function(line, cur, ev)
+		local w = line:match("^%s*%*%s+channel width:%s+(%d+)")
+		if w then ev.vht_w = tonumber(w) end
+	end,
+	["center freq segment 1"] = function(line, cur, ev)
+		local s1 = line:match("center freq segment 1:%s+(%d+)")
+		if s1 then ev.vht_seg1 = tonumber(s1) end
+	end,
+	["center freq segment 2"] = function(line, cur, ev)
+		local s2 = line:match("center freq segment 2:%s+(%d+)")
+		if s2 then ev.vht_seg2 = tonumber(s2) end
+	end,
+	["secondary channel offset"] = function(line, cur, ev)
+		local sec = line:match("secondary channel offset:%s+(%a+)")
+		if sec then ev.ht_sec = sec end
+	end,
+	["freq"] = function(line, cur)
+		local freq = line:match("freq:%s+(%d+)")
+		if freq then
+			cur.freq    = tonumber(freq)
+			cur.channel = M.channel_from_freq(freq)
+		end
+	end,
+	-- Anchored for the same reason as the station-dump copy above,
+	-- defensively: scan output carries no ack-signal lines today.
+	["signal"] = function(line, cur)
+		local signal = line:match("^%s*signal:%s+(-?%d+)")
+		if signal then cur.signal = tonumber(signal) end
+	end,
+	["SSID"] = function(line, cur)
+		local ssid = line:match("^\tSSID:%s?(.*)$")
+		if ssid and not cur.essid then cur.essid = unescape_iw_ssid(ssid) end
+	end,
+	-- iw also prints the driver's BOOTTIME stamp: "last seen: 662754.792s
+	-- [boottime]". Some entries carry ONLY that form -- seen on our own
+	-- AX3000T -- which the "ms ago" pattern never matched, so their age
+	-- stayed at the 0 default and every such neighbour was reported as seen
+	-- this instant, however stale. The "ms ago" line wins when both are
+	-- printed for one BSS (it is what the controller's own staleness rule is
+	-- written against, and it is printed second); this fills in when it is
+	-- the only one.
+	["last seen"] = function(line, cur, ev, now_up)
+		local last_ms = line:match("last seen:%s+(%d+) ms ago")
+		local last_bt = line:match("last seen:%s+([%d%.]+)s %[boottime%]")
+		if last_ms then
+			cur.age = math.floor(tonumber(last_ms) / 1000)
+		elseif last_bt and cur.age == nil and now_up > 0 then
+			cur.age = math.max(0, math.floor(now_up - tonumber(last_bt)))
+		end
+	end,
+	["BSS operating channel width"] = function(line, cur)
+		local bw = line:match("BSS operating channel width:%s+(%d+) MHz")
+		if bw then cur.bw = tonumber(bw) end
+	end,
+	["capability"] = function(line, cur, ev)
+		if line:find("capability:.*Privacy") then ev.privacy = true end
+	end,
+	["RSN"] = function(line, cur, ev)
+		if line:find("^\tRSN:") then ev.rsn = true end
+	end,
+	["WPA"] = function(line, cur, ev)
+		if line:find("^\tWPA:") then ev.wpa = true end
+	end,
+}
+
 function M.scan_table(ifname)
 	if not ifname then return {} end
 	local output = M._run_cmd("iw dev " .. ifname .. " scan dump")
@@ -558,9 +789,9 @@ function M.scan_table(ifname)
 	local now_up = M.uptime()
 	local nets = {}
 	local cur = nil
-	local seen_rsn, seen_wpa, seen_privacy = false, false, false
-	-- Width evidence from the operation elements, per BSS (see flush).
-	local vht_w, vht_seg1, vht_seg2, ht_sec = nil, nil, nil, nil
+	-- Per BSS: the security elements seen, and the width evidence from the
+	-- operation elements (see flush()).
+	local ev = {}
 
 	local function flush()
 		if not cur then return end
@@ -582,23 +813,11 @@ function M.scan_table(ifname)
 		-- of the same two. No VHT operation and a secondary channel offset
 		-- means HT40; nothing at all means 20.
 		if not cur.bw then
-			if vht_w and vht_w >= 1 then
-				local seg2 = vht_seg2 or 0
-				if vht_w == 2 or (vht_w == 1 and seg2 > 0
-						and math.abs(seg2 - (vht_seg1 or 0)) == 8) then
-					cur.bw = 160
-				else
-					cur.bw = 80
-				end
-			elseif ht_sec == "above" or ht_sec == "below" then
-				cur.bw = 40
-			else
-				cur.bw = 20
-			end
+			cur.bw = M.channel_width(ev.vht_w, ev.vht_seg1, ev.vht_seg2, ev.ht_sec)
 		end
-		if seen_rsn then cur.security = "wpa2"
-		elseif seen_wpa then cur.security = "wpa"
-		elseif seen_privacy then cur.security = "wep"
+		if ev.rsn then cur.security = "wpa2"
+		elseif ev.wpa then cur.security = "wpa"
+		elseif ev.privacy then cur.security = "wep"
 		else cur.security = "open" end
 		nets[#nets + 1] = cur
 	end
@@ -608,58 +827,14 @@ function M.scan_table(ifname)
 		if bssid then
 			flush()
 			cur = {bssid = bssid}
-			seen_rsn, seen_wpa, seen_privacy = false, false, false
-			vht_w, vht_seg1, vht_seg2, ht_sec = nil, nil, nil, nil
+			ev = {}
 		elseif cur then
-			-- Operation-element width evidence, consumed by flush(). The VHT
-			-- line is anchored on "* channel width:" so the HT capability
-			-- line "STA channel width: any" cannot match it.
-			local w = line:match("^%s*%*%s+channel width:%s+(%d+)")
-			if w then vht_w = tonumber(w) end
-			local s1 = line:match("center freq segment 1:%s+(%d+)")
-			if s1 then vht_seg1 = tonumber(s1) end
-			local s2 = line:match("center freq segment 2:%s+(%d+)")
-			if s2 then vht_seg2 = tonumber(s2) end
-			local sec = line:match("secondary channel offset:%s+(%a+)")
-			if sec then ht_sec = sec end
-			local freq     = line:match("freq:%s+(%d+)")
-			-- Anchored for the same reason as the station-dump copy above,
-			-- defensively: scan output carries no ack-signal lines today.
-			local signal   = line:match("^%s*signal:%s+(-?%d+)")
-			local ssid     = line:match("^\tSSID:%s?(.*)$")
-			local last_ms  = line:match("last seen:%s+(%d+) ms ago")
-			-- Newer iw also prints the driver's BOOTTIME stamp: "last seen:
-			-- 403.024s [boottime]". On a 25.12 JIDU6101 most entries carried
-			-- ONLY this form, which the pattern above never matched, so their
-			-- age stayed at the 0 default -- every neighbour reported as seen
-			-- this instant, however stale. The "ms ago" line wins when both
-			-- are printed for one BSS (it is what the controller's own
-			-- staleness rule is written against); this form fills in when
-			-- it is the only one.
-			local last_bt  = line:match("last seen:%s+([%d%.]+)s %[boottime%]")
-			local bw       = line:match("BSS operating channel width:%s+(%d+) MHz")
-			if freq then
-				cur.freq    = tonumber(freq)
-				cur.channel = M.channel_from_freq(freq)
-			end
-			if signal then cur.signal = tonumber(signal) end
-			if ssid and not cur.essid then cur.essid = unescape_iw_ssid(ssid) end
-			if last_ms then
-				cur.age = math.floor(tonumber(last_ms) / 1000)
-			elseif last_bt and cur.age == nil and now_up > 0 then
-				cur.age = math.max(0, math.floor(now_up - tonumber(last_bt)))
-			end
-			if bw then cur.bw = tonumber(bw) end
-			if line:find("capability:.*Privacy") then seen_privacy = true end
-			if line:find("^\tRSN:") then seen_rsn = true end
-			if line:find("^\tWPA:") then seen_wpa = true end
+			local on_line = SCAN_LINE[dump_key(line)]
+			if on_line then on_line(line, cur, ev, now_up) end
 		end
 	end
 	flush()
-	if #nets > 0 then
-		local peers = M.peer_macs(ifname)
-		for _, n in ipairs(nets) do n.peer_mac = peers[n.bssid:lower()] end
-	end
+	if #nets > 0 then peer_tag(ifname, nets) end
 	return nets
 end
 
@@ -868,9 +1043,56 @@ function M.phy_frequencies(ifname)
 	return out
 end
 
+-- The secondary 20 MHz channel's side of the primary, as the QCA driver
+-- reports it (getparam chextoffset; UniFi firmware sends it as vap
+-- extchannel): 1 above, -1 below, 0 without one. Above 40 MHz it is the
+-- primary's partner in its 40 MHz half, so halve the block around the
+-- primary until 40 MHz is left (80 MHz at 5530, primary 5520: 40 MHz at
+-- 5510, so -1).
+function M.ext_offset(freq, width, center)
+	if not (freq and width and center) or width < 40 then return 0 end
+	while width > 40 do
+		width = width / 2
+		if freq < center then center = center - width / 2
+		else center = center + width / 2 end
+	end
+	return freq < center and 1 or -1
+end
+
+-- What `iw dev <ifname> info` says about one interface. Inside a pass every
+-- radio's answer comes off one `iw dev`, which lists each interface under a
+-- `phy#N` header with the same lines `info` prints minus `wiphy N`; that line
+-- is put back, so callers read either text alike. An interface the dump does
+-- not list is asked for on its own.
+local function iw_dev_info(ifname)
+	local by_ifname = M._pass and pass_memo("iw_dev", function()
+		local map, phy, lines = {}, nil, nil
+		for line in (M._run_cmd("iw dev") or ""):gmatch("[^\n]+") do
+			local p = line:match("^phy#(%d+)")
+			if p then
+				phy, lines = p, nil
+			elseif line:match("^\t%S") then
+				-- A new interface entry; an unnamed one (a P2P device) is
+				-- skipped whole rather than read as part of the last.
+				local name = line:match("^\tInterface (%S+)")
+				lines = nil
+				if name and phy then
+					lines = {"Interface " .. name, "\twiphy " .. phy}
+					map[name] = lines
+				end
+			elseif lines then
+				lines[#lines + 1] = line:sub(2)
+			end
+		end
+		for name, l in pairs(map) do map[name] = table.concat(l, "\n") .. "\n" end
+		return map
+	end)
+	return by_ifname and by_ifname[ifname] or M._run_cmd("iw dev " .. ifname .. " info")
+end
+
 function M.radio_caps(ifname)
 	if not ifname then return {} end
-	local dev_info = M._run_cmd("iw dev " .. ifname .. " info")
+	local dev_info = iw_dev_info(ifname)
 	local phy = dev_info:match("wiphy%s+(%d+)")
 	if not phy then return {} end
 	local phy_info, static = M._phy_info(phy)
@@ -900,6 +1122,11 @@ function M.radio_caps(ifname)
 	-- Live channel width in MHz ("width: 80 MHz"), for the satisfaction
 	-- estimate's rate ceiling. Not a wire field: build_json takes it off.
 	caps.width    = tonumber(dev_info:match("width:%s+(%d+)"))
+	-- Which side of the primary the secondary 20 MHz sits: 1 above, -1
+	-- below, 0 at 20 MHz. Not a radio_table field: build_json moves it to
+	-- each vap's extchannel.
+	caps.extchannel = M.ext_offset(tonumber(dev_info:match("channel%s+%d+%s+%((%d+) MHz%)")),
+		caps.width, tonumber(dev_info:match("center1:%s+(%d+)")))
 
 	return caps
 end
@@ -915,25 +1142,34 @@ M._time = os.time
 
 -- How long a host stays remembered after it was last seen. See M._note_seen.
 M.MAC_FORGET_AFTER = 3600
+-- How often the forget sweep walks the tables. It ran once per sighting, so a
+-- heartbeat with N wired hosts walked them N times.
+M.MAC_SWEEP_EVERY = 60
+M._mac_swept_at = nil
 
 -- Record that key was seen now; returns when it was FIRST seen. Also the only
 -- place the two tables ever shrink: a host not seen for an hour is forgotten,
 -- so a daemon that runs for months does not keep every MAC that ever crossed
 -- the bridge.
 --
--- The sweep runs BEFORE this sighting is recorded, so it applies to `key`
--- itself as well: a host back after an hour away starts a fresh uptime instead
--- of reporting the wall-clock time since it was first seen, which for a host
--- that was gone for most of it is not an uptime at all. That is also what a
--- real switch reports for a re-learned MAC.
+-- The sweep runs at most once a minute; `key` itself is checked every time:
+-- a host back after an hour away starts a fresh uptime instead of reporting
+-- the wall-clock time since it was first seen, which for a host that was gone
+-- for most of it is not an uptime at all. That is also what a real switch
+-- reports for a re-learned MAC.
 function M._note_seen(key, now)
-	for k, last in pairs(M._mac_last_seen) do
-		if now - last > M.MAC_FORGET_AFTER then
-			M._mac_last_seen[k]  = nil
-			M._mac_first_seen[k] = nil
+	local swept = M._mac_swept_at
+	if not swept or now - swept >= M.MAC_SWEEP_EVERY or now < swept then
+		M._mac_swept_at = now
+		for k, last in pairs(M._mac_last_seen) do
+			if now - last > M.MAC_FORGET_AFTER then
+				M._mac_last_seen[k]  = nil
+				M._mac_first_seen[k] = nil
+			end
 		end
 	end
-	local first = M._mac_first_seen[key]
+	local first, last = M._mac_first_seen[key], M._mac_last_seen[key]
+	if first and last and now - last > M.MAC_FORGET_AFTER then first = nil end
 	if not first then
 		first = now
 		M._mac_first_seen[key] = now
@@ -1221,15 +1457,13 @@ end
 -- ARP entry for the gateway, no `bridge` binary, gateway not yet learned);
 -- callers must then refuse to attribute hosts to any socket rather than guess.
 -- The bridge a netdev is enslaved to, or nil when it is not a bridge port.
--- /sys/class/net/<if>/master symlinks to the enslaving device.
+-- A sysfs read (/sys/class/net/<if>/master/uevent, util.master_of), cheap
+-- enough to ask live: it used to fork `readlink` and memoize the answer for
+-- UPLINK_TTL, which is what forget_uplink_cache existed to invalidate after
+-- openUF itself moved a socket. The gateway memo below still needs that.
 function M.bridge_of(ifname)
 	if not ifname then return nil end
-	return uplink_memo("bridge_of:" .. ifname, function()
-		local m = M._run_cmd("readlink /sys/class/net/" .. ifname .. "/master")
-		m = type(m) == "string" and m:match("([^/%s]+)%s*$") or nil
-		if m and m ~= "" and m ~= ifname then return m end
-		return nil
-	end)
+	return util.master_of(ifname, M._read_file)
 end
 
 -- The bridge whose FDB answers "which socket is the gateway behind", given

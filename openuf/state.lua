@@ -94,6 +94,18 @@ local TYPED = {
 	-- trigger a Locate displaced, for the unset-locate that may arrive after
 	-- a restart.
 	led_enabled               = "boolean",
+	-- mgmt_cfg's capability list asked for STA_ASSOC_TRACKER notifs. Only
+	-- carried by setparam, so it has to outlive a restart.
+	notif_assoc_stat          = "boolean",
+	-- mgmt_cfg's stun_url, the controller's STUN server (stun.lua). Only
+	-- carried by setparam, likewise.
+	stun_url                  = "string",
+	-- The VAP ifnames a WiFi Blackout Schedule took down (wlansched.lua),
+	-- until they are brought back up (also after a restart in between).
+	sched_vaps_down           = "table",
+	-- Per-client WiFi Speed Limits from rate-update ({mac = {up=, down=}}
+	-- kbps, -1 = none), one association each (inform._shaper_resync).
+	sta_rates                 = "table",
 	locating                  = "boolean",
 	locate_prev_trigger       = "string",
 	-- The per-port VLAN reversibility ledgers: the stock switch_vlan `ports`
@@ -114,6 +126,9 @@ local TYPED = {
 	backhaul_wired_port       = "string",
 	backhaul_parent           = "string",
 }
+-- Exported for tests and tooling that check what survives a restart (upstream
+-- names the same table FIELDS).
+M.FIELDS = TYPED
 
 -- Load state from disk. Missing file returns defaults. Applies security
 -- invariant: resets authkey if adopted == false.
@@ -154,6 +169,20 @@ function M.load()
 		end
 	end
 
+	-- blocked_stas is a list, but a cjson build that tags decoded objects
+	-- (the lab image's) saves `{}` plus an append as {"1":mac}, which
+	-- reloads with a string key that ipairs never sees -- every block gone
+	-- after a restart. Rebuild it as a plain array, in key order.
+	local entries = {}
+	for k, v in pairs(st.blocked_stas) do
+		if type(v) == "string" and tonumber(k) then
+			entries[#entries + 1] = {tonumber(k), v}
+		end
+	end
+	table.sort(entries, function(a, b) return a[1] < b[1] end)
+	st.blocked_stas = {}
+	for i, e in ipairs(entries) do st.blocked_stas[i] = e[2] end
+
 	-- Security invariant: never use a custom key when not adopted
 	if not st.adopted then
 		st.authkey = M.DEFAULT_KEY
@@ -167,13 +196,19 @@ end
 -- directory almost always already exists).
 --
 -- Written to a sibling temp file and renamed into place. rename(2) is atomic
--- on the same filesystem, so a power cut or a full overlay mid-write leaves
--- either the old file or the new one -- never a truncated one. That matters
--- more here than for most files: load() treats unparseable JSON as "start
--- from defaults", which resets the authkey and un-adopts the device, so an
--- in-place write interrupted at the wrong moment cost the adoption outright.
--- A side effect worth knowing: the bootstrap `ubnt` account only needs write
--- permission on the DIRECTORY now, not on the previous file.
+-- within a filesystem, so a power cut or a full overlay mid-write leaves
+-- either the old file or the new one and never a truncated one. That matters
+-- more here than for most files: load() reads unparseable JSON as "start from
+-- defaults", which resets the authkey and clears `adopted` -- so an in-place
+-- write interrupted at the wrong moment cost the adoption outright.
+-- A side effect worth knowing: the bootstrap account now needs write
+-- permission on the DIRECTORY, not on the previous file.
+--
+-- M.last_written keeps the exact bytes, so inform's change detection can tell
+-- this process's own write from syswrapper's: without it every save was read
+-- back on the next heartbeat as an out-of-process change, and the full reload
+-- rebuilt the firewall's nft table each time.
+M.last_written = nil
 function M.save(st)
 	local tmp = M._state_file .. ".tmp"
 	local f = io.open(tmp, "w")
@@ -185,13 +220,15 @@ function M.save(st)
 			error("state.save: cannot write to " .. tmp)
 		end
 	end
-	f:write(cjson.encode(st))
+	local body = cjson.encode(st)
+	f:write(body)
 	f:close()
 	local ok, err = os.rename(tmp, M._state_file)
 	if not ok then
 		os.remove(tmp)
 		error("state.save: cannot replace " .. M._state_file .. ": " .. tostring(err))
 	end
+	M.last_written = body
 end
 
 -- Reset state to defaults and persist immediately.

@@ -58,7 +58,264 @@ local function by_bssid(list)
 	return m
 end
 
+-- A Beacon Report element as hex, from its parts. body_ies = nil means no
+-- Reported Frame Body; frag = {num, more} adds a Fragment ID subelement.
+local function hexs(str)
+	return (str:gsub(".", function(c) return string.format("%02x", c:byte()) end))
+end
+local function ie(id, bytes) return string.char(id, #bytes) .. bytes end
+local function report_hex(o)
+	local fixed = string.char(o.op or 115, o.channel or 36) .. string.rep("\0", 8)
+		.. string.char(0, 0, 0, o.rcpi or 122, 0)
+		.. string.char(0x00, 0x00, 0x5e, 0x00, 0x53, o.last or 0x02)
+		.. string.rep("\0", 5)
+	local subs = ""
+	if o.body_ies then
+		local cap = o.privacy and 0x11 or 0x01
+		local body = string.rep("\0", 8) .. string.char(0x64, 0, cap, 0) .. o.body_ies
+		subs = subs .. string.char(1, #body) .. body
+	end
+	if o.frag then
+		subs = subs .. string.char(2, 2, 1, o.frag[1] + (o.frag[2] and 128 or 0))
+	end
+	return hexs(fixed .. subs)
+end
+local RSN = ie(48, string.char(1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0, 0))
+
+local function with_width(fn)
+	local orig = rrmscan._channel_width
+	rrmscan._channel_width = dofile("openuf/sysinfo.lua").channel_width
+	local ok, err = pcall(fn)
+	rrmscan._channel_width = orig
+	if not ok then error(err, 0) end
+end
+
 return {
+	{
+		-- A real BEACON-RESP-RX from the Archer C5's 5 GHz BSS, 2026-10-12
+		-- (MAC and SSID replaced): a 205-byte frame body, cut, holding the
+		-- SSID, RSN, HT and VHT operation of an 80 MHz BSS on channel 36.
+		name = "rrmscan: a control-socket report yields SSID, security, width and primary",
+		fn = function()
+			local line = read_fixture("hostapd_beacon_resp_rx.txt")
+			local hex = line:match("(%x+)%s*$")
+			with_width(function()
+				local r = rrmscan.parse_report(hex)
+				assert_eq(r.bssid, "00:00:5e:00:53:01", "bssid")
+				assert_eq(r.essid, "HomeTest", "SSID from the frame body")
+				assert_eq(r.security, "wpa2", "RSN element")
+				assert_eq(r.bw, 80, "VHT operation width 1")
+				assert_eq(r.channel, 36, "primary channel")
+				assert_eq(r.band, "na", "band")
+				assert_eq(r.signal, -49, "rcpi 122")
+			end)
+			-- Without the shared width function the width is unknown, not guessed.
+			assert_nil(rrmscan.parse_report(hex).bw, "no width function, no width")
+		end
+	},
+	{
+		name = "rrmscan: a report's fields are taken only where the body proves them",
+		fn = function()
+			with_width(function()
+				local P = rrmscan.parse_report
+				-- Hidden SSID: empty or NUL-filled.
+				assert_nil(P(report_hex({body_ies = ie(0, "") .. RSN})).essid, "empty SSID")
+				assert_nil(P(report_hex({body_ies = ie(0, "\0\0\0") .. RSN})).essid, "NUL SSID")
+				-- Privacy bit clear: open, even when the body was cut.
+				assert_eq(P(report_hex({body_ies = ie(0, "x"), frag = {0, true}})).security,
+					"open", "privacy clear is open")
+				-- Privacy set, no RSN/WPA: unknown, flagged cut or not. Clients
+				-- shorten bodies without saying so (seen live), and proving WPA
+				-- absent would take the very end of the beacon.
+				assert_nil(P(report_hex({privacy = true, body_ies = ie(0, "x")})).security,
+					"no RSN in the body is not proof of wep")
+				assert_nil(P(report_hex({privacy = true, body_ies = ie(0, "x"),
+					frag = {0, true}})).security, "nor in a flagged-cut body")
+				-- WPA vendor element.
+				local wpa = ie(221, string.char(0x00, 0x50, 0xf2, 0x01, 1, 0))
+				assert_eq(P(report_hex({privacy = true, body_ies = wpa})).security, "wpa", "WPA")
+				-- The fixed field names the centre channel; HT operation the primary.
+				local ht40 = ie(61, string.char(36, 1) .. string.rep("\0", 20))
+				local tpe  = ie(195, string.char(2, 0x2e, 0x2e, 0x2e))
+				local r = P(report_hex({channel = 38, privacy = true, body_ies = RSN .. ht40 .. tpe}))
+				assert_eq(r.channel, 36, "primary from HT operation")
+				-- HT-only on 5 GHz: the VHT element may just not have been sent,
+				-- and element order proves nothing (seen out of order live).
+				assert_nil(r.bw, "5 GHz HT-only body: width unknown")
+				-- On 2.4 GHz HT operation is the width.
+				local ht40_ng = ie(61, string.char(1, 1) .. string.rep("\0", 20))
+				assert_eq(P(report_hex({channel = 1, privacy = true, body_ies = RSN .. ht40_ng})).bw,
+					40, "2.4 GHz HT40")
+				-- No operation elements at all: unknown, the merge's 20 floor.
+				assert_nil(P(report_hex({privacy = true, body_ies = RSN})).bw, "no op elements")
+				-- A continuation fragment is a report of its own for the same
+				-- BSSID; it must not stand in for fragment 0.
+				assert_nil(P(report_hex({privacy = true, body_ies = ie(0, "x") .. RSN,
+					frag = {1, false}})), "continuation fragment dropped")
+				-- A filtered body (live: SSID + one vendor element, privacy set).
+				local fb = P(report_hex({privacy = true,
+					body_ies = ie(0, "x") .. ie(221, string.char(0x00, 0x10, 0x18, 2, 0))}))
+				assert_nil(fb.security, "filtered body: security unknown")
+				assert_nil(fb.bw, "and width unknown")
+				-- No body at all: what ubus gives, and nothing more.
+				local nb = P(report_hex({channel = 6}))
+				assert_nil(nb.essid, "no body, no SSID")
+				assert_nil(nb.security, "no body, no security")
+				assert_eq(nb.band, "ng", "band from the fixed channel")
+				-- Malformed.
+				assert_nil(P("zz"), "not hex")
+				assert_nil(P("0011"), "too short")
+				assert_nil(P(report_hex({}) .. "0"), "odd length")
+			end)
+		end
+	},
+	{
+		name = "rrmscan: harvest prefers the control-socket record and counts its reporter",
+		fn = function()
+			local ctrl = read_fixture("hostapd_beacon_resp_rx.txt")
+			local ubus = '{ "beacon-report": {"address":"00:00:5e:00:53:11","op-class":81,'
+				.. '"channel":42,"rcpi":120,"bssid":"00:00:5e:00:53:01","rep-mode":0} }\n'
+			with_width(function()
+				with_events(ubus .. ctrl, function()
+					local out, reporters = rrmscan.harvest()
+					assert_eq(#out, 1, "one record per BSSID")
+					assert_eq(out[1].essid, "HomeTest", "the control-socket record wins")
+					assert_eq(out[1].channel, 36, "with its primary channel, not 42")
+					assert_true(reporters["00:00:5e:00:53:10"] == true, "ctrl reporter counted")
+					assert_true(reporters["00:00:5e:00:53:11"] == true, "ubus reporter counted")
+				end)
+			end)
+			-- Fragment 1 of the same BSSID arriving first does not take its place.
+			local hex = ctrl:match("(%x+)%s*$")
+			local cont = "BEACON-RESP-RX 00:00:5e:00:53:10 60 00 " .. hex:sub(1, 52)
+				.. "01020000" .. "02020101\n"
+			with_width(function()
+				with_events(cont .. ctrl, function()
+					local out = rrmscan.harvest()
+					assert_eq(#out, 1, "one record")
+					assert_eq(out[1].essid, "HomeTest", "fragment 0 kept")
+				end)
+			end)
+			-- A non-zero report mode is a refusal on this path too.
+			local refused = ctrl:gsub("BEACON%-RESP%-RX (%S+) (%d+) 00", "BEACON-RESP-RX %1 %2 04")
+			with_events(refused, function()
+				local out, reporters = rrmscan.harvest()
+				assert_eq(#out, 0, "refusal reports nothing")
+				assert_nil(reporters["00:00:5e:00:53:10"], "and is not an answer")
+			end)
+		end
+	},
+	{
+		name = "rrmscan: merge carries proven fields, skips own and sibling BSSIDs",
+		fn = function()
+			local n = {
+				{bssid = "00:00:5e:00:53:01", band = "na", channel = 36, signal = -60,
+					seen_at = 100, essid = "Neighbour", security = "wpa2", bw = 80},
+				{bssid = "00:00:5e:00:53:02", band = "na", channel = 48, signal = -70,
+					seen_at = 100, essid = "SiteNet", security = "wpa2"},
+				{bssid = "00:00:5E:00:53:03", band = "na", channel = 36, signal = -20,
+					seen_at = 100, essid = "SiteNet", security = "wpa2"},
+			}
+			local out = by_bssid(rrmscan.merge_into({}, n, {
+				band = "na", radio = "na", radio_name = "radio0", now = 105,
+				skip = {["00:00:5e:00:53:03"] = true},
+				site_ssids = {SiteNet = true},
+			}))
+			local a = out["00:00:5e:00:53:01"]
+			assert_eq(a.essid, "Neighbour", "essid carried")
+			assert_eq(a.security, "wpa2", "security carried")
+			assert_eq(a.bw, 80, "width carried")
+			local b = out["00:00:5e:00:53:02"]
+			assert_nil(b.essid, "a site SSID from an unknown BSS is withheld")
+			assert_eq(b.security, "wpa2", "its security is still reported")
+			assert_eq(b.bw, 20, "unknown width falls to the 20 MHz floor")
+			assert_nil(out["00:00:5E:00:53:03"], "own/sibling BSSID skipped, any case")
+		end
+	},
+	{
+		name = "rrmscan: siblings are read from usteer's remote nodes",
+		fn = function()
+			with_popen('{"192.0.2.4#hostapd.phy0-ap0": {"bssid": "00:00:5E:00:53:21",'
+				.. '"ssid": "SiteNet"}, "192.0.2.4#hostapd.phy1-ap0": {"bssid":'
+				.. '"00:00:5e:00:53:22"}}', function(seen)
+				local s = rrmscan.sibling_bssids()
+				assert_true(s["00:00:5e:00:53:21"] == true, "lowercased")
+				assert_true(s["00:00:5e:00:53:22"] == true, "second node")
+				assert_true(seen[1]:find("usteer remote_info", 1, true) ~= nil, "asks usteer")
+			end)
+			with_popen(nil, function()
+				assert_true(next(rrmscan.sibling_bssids()) == nil, "no usteer, no siblings")
+			end)
+		end
+	},
+	{
+		name = "rrmscan: one control-socket monitor per BSS, restarted only when missing",
+		fn = function()
+			local orig = rrmscan.ACTION_SCRIPT
+			rrmscan.ACTION_SCRIPT = os.tmpname()
+			os.remove(rrmscan.ACTION_SCRIPT)
+			local ok, err = pcall(function()
+				local ps = ""
+				local answers = function(cmd)
+					if cmd:find("^ls ") then return "global\nphy0-ap0\nphy1-ap0\n" end
+					if cmd:find("^ps ") then return ps end
+					return ""
+				end
+				with_popen(answers, function()
+					with_exec(function(cmds)
+						assert_eq(rrmscan.monitors_ensure(), 2, "one per BSS, not global")
+						local all = table.concat(cmds, "\n")
+						assert_true(all:find("kill $(pgrep -f '[h]ostapd_cli", 1, true) ~= nil,
+							"a new script replaces any old monitor")
+						assert_true(all:find("hostapd_cli -p /var/run/hostapd -i phy1-ap0 -a "
+							.. rrmscan.ACTION_SCRIPT .. " -B", 1, true) ~= nil, "started detached")
+						assert_false(all:find("-i global", 1, true) ~= nil, "global skipped")
+					end)
+				end)
+				ps = " 1 root 1152 S hostapd_cli -p /var/run/hostapd -i phy0-ap0 -a "
+					.. rrmscan.ACTION_SCRIPT .. " -B\n"
+				with_popen(answers, function()
+					with_exec(function(cmds)
+						assert_eq(rrmscan.monitors_ensure(), 1, "only the missing one")
+						assert_true(cmds[1]:find("-i phy1-ap0", 1, true) ~= nil, "phy1-ap0")
+					end)
+				end)
+			end)
+			os.remove(rrmscan.ACTION_SCRIPT)
+			rrmscan.ACTION_SCRIPT = orig
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- The action script is shell, run per event by hostapd_cli as
+		-- "<script> <ifname> <event words...>". Run it for real and feed what
+		-- it writes back through harvest.
+		name = "rrmscan: the action script appends only beacon reports, in a line harvest reads",
+		fn = function()
+			local orig_ev, orig_sc = rrmscan.EVENT_FILE, rrmscan.ACTION_SCRIPT
+			rrmscan.EVENT_FILE, rrmscan.ACTION_SCRIPT = os.tmpname(), os.tmpname()
+			local ok, err = pcall(function()
+				local f = assert(io.open(rrmscan.ACTION_SCRIPT, "w"))
+				f:write(rrmscan.action_script())
+				f:close()
+				local hex = read_fixture("hostapd_beacon_resp_rx.txt"):match("(%x+)%s*$")
+				os.execute("sh " .. rrmscan.ACTION_SCRIPT .. " phy0-ap0 AP-STA-CONNECTED 00:00:5e:00:53:10 2>/dev/null")
+				os.execute("sh " .. rrmscan.ACTION_SCRIPT
+					.. " phy0-ap0 BEACON-RESP-RX 00:00:5e:00:53:10 60 00 " .. hex .. " 2>/dev/null")
+				local g = assert(io.open(rrmscan.EVENT_FILE, "r"))
+				local text = g:read("*a")
+				g:close()
+				assert_false(text:find("AP-STA-CONNECTED", 1, true) ~= nil, "other events ignored")
+				local out = rrmscan.harvest(text)
+				assert_eq(#out, 1, "the report is read back")
+				assert_eq(out[1].essid, "HomeTest", "intact")
+			end)
+			os.remove(rrmscan.EVENT_FILE)
+			os.remove(rrmscan.ACTION_SCRIPT)
+			rrmscan.EVENT_FILE, rrmscan.ACTION_SCRIPT = orig_ev, orig_sc
+			if not ok then error(err, 0) end
+		end
+	},
 	{
 		name = "rrmscan: RCPI converts on the 0.5-dBm scale anchored at -110",
 		fn = function()
@@ -266,35 +523,206 @@ return {
 	{
 		name = "rrmscan: the collector is started only when it is not running",
 		fn = function()
-			with_popen(function(cmd)
-				if cmd:find("pgrep", 1, true) then return "" end   -- not running
-				if cmd:find("ubus list", 1, true) then
-					return "hostapd.phy0-ap0\nhostapd.phy1-ap0\nnetwork.wireless\n"
-				end
-				return ""
-			end, function()
-				with_exec(function(cmds)
-					assert_true(rrmscan.collector_ensure(), "starts when absent")
-					local all = table.concat(cmds, "\n")
-					assert_true(all:find("ubus subscribe hostapd.phy0-ap0 hostapd.phy1-ap0", 1, true) ~= nil,
-						"subscribes to every hostapd BSS at once")
-					-- `ubus listen` catches broadcast events and receives
-					-- NOTHING here; only subscribe gets hostapd's per-object
-					-- notifications. Confirmed live.
-					assert_false(all:find("ubus listen", 1, true) ~= nil,
-						"never uses listen, which sees no beacon reports")
-					assert_true(all:find("&") ~= nil, "runs in the background")
+			local orig_script = rrmscan.COLLECTOR_SCRIPT
+			rrmscan.COLLECTOR_SCRIPT = os.tmpname()
+			local ok, err = pcall(function()
+				with_popen(function(cmd)
+					if cmd:find("pgrep", 1, true) then return "" end   -- not running
+					if cmd:find("ubus list", 1, true) then
+						return "hostapd.phy0-ap0\nhostapd.phy1-ap0\nnetwork.wireless\n"
+					end
+					return ""
+				end, function()
+					with_exec(function(cmds)
+						assert_true(rrmscan.collector_ensure(), "starts when absent")
+						local all = table.concat(cmds, "\n")
+						assert_true(all:find("sh " .. rrmscan.COLLECTOR_SCRIPT
+							.. " hostapd.phy0-ap0 hostapd.phy1-ap0", 1, true) ~= nil,
+							"runs the script over every hostapd BSS at once")
+						assert_true(all:find("&") ~= nil, "runs in the background")
+						local script = rrmscan._read_file(rrmscan.COLLECTOR_SCRIPT)
+						-- `ubus listen` catches broadcast events and receives
+						-- NOTHING here; only subscribe gets hostapd's per-object
+						-- notifications. Confirmed live.
+						assert_true(script:find('ubus subscribe "$@"', 1, true) ~= nil,
+							"the script subscribes to the objects it is given")
+						assert_false(script:find("ubus listen", 1, true) ~= nil,
+							"never uses listen, which sees no beacon reports")
+						-- So collector_running keeps matching the live process.
+						assert_true(("ubus subscribe hostapd.phy0-ap0"):find("ubus subscribe hostapd", 1, true) ~= nil,
+							"the spawned process still matches the liveness pattern")
+					end)
+				end)
+
+				-- Running, and it is this script unchanged: left alone.
+				with_popen(function(cmd)
+					if cmd:find("pgrep", 1, true) then return "4711\n" end  -- running
+					return ""
+				end, function()
+					with_exec(function(cmds)
+						assert_false(rrmscan.collector_ensure(), "no-op while running")
+						assert_eq(#cmds, 0, "spawns no second collector")
+					end)
 				end)
 			end)
-
-			with_popen(function(cmd)
-				if cmd:find("pgrep", 1, true) then return "4711\n" end  -- running
-				return ""
-			end, function()
-				with_exec(function(cmds)
-					assert_false(rrmscan.collector_ensure(), "no-op while running")
-					assert_eq(#cmds, 0, "spawns no second collector")
+			os.remove(rrmscan.COLLECTOR_SCRIPT)
+			rrmscan.COLLECTOR_SCRIPT = orig_script
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- A collector is reparented to init, so it survives an openUF upgrade
+		-- and a config change. One from an older openUF writes untimestamped
+		-- lines; one without the on_auth hook leaves stale set evidence in
+		-- place. Either must be replaced, not merely found alive.
+		name = "rrmscan: a running collector that is not the wanted script is replaced",
+		fn = function()
+			local orig_script = rrmscan.COLLECTOR_SCRIPT
+			rrmscan.COLLECTOR_SCRIPT = os.tmpname()
+			local ok, err = pcall(function()
+				local answers = function(cmd)
+					if cmd:find("pgrep", 1, true) then return "4711\n" end
+					if cmd:find("ubus list", 1, true) then return "hostapd.phy0-ap0\n" end
+					return ""
+				end
+				-- Old-style collector: ubus subscribe is alive, no script file.
+				os.remove(rrmscan.COLLECTOR_SCRIPT)
+				with_popen(answers, function()
+					with_exec(function(cmds)
+						assert_true(rrmscan.collector_ensure(), "replaced")
+						local all = table.concat(cmds, "\n")
+						assert_true(all:find("kill $(pgrep", 1, true) ~= nil, "the old one is stopped")
+						assert_true(all:find("sh " .. rrmscan.COLLECTOR_SCRIPT, 1, true) ~= nil,
+							"and the script started")
+					end)
 				end)
+				-- Same script but a hook is now wanted: replaced again.
+				with_popen(answers, function()
+					with_exec(function(cmds)
+						assert_true(rrmscan.collector_ensure({on_auth = "true"}), "replaced on opts change")
+					end)
+				end)
+				-- And left alone once it matches.
+				with_popen(answers, function()
+					with_exec(function(cmds)
+						assert_false(rrmscan.collector_ensure({on_auth = "true"}), "kept when unchanged")
+						assert_eq(#cmds, 0, "nothing spawned or killed")
+					end)
+				end)
+			end)
+			os.remove(rrmscan.COLLECTOR_SCRIPT)
+			rrmscan.COLLECTOR_SCRIPT = orig_script
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- Roam reports (assoctrack.lua): the old AP learns that a station
+		-- left from its bridge, which moves the address to the uplink in the
+		-- same second. The fdb half runs beside the subscriber, in the
+		-- background, and writes lines assoctrack.parse_events reads.
+		name = "rrmscan: opts.fdb adds a bridge monitor to the collector, stamped like the rest",
+		fn = function()
+			local plain = rrmscan.collector_script({on_auth = "true"})
+			assert_false(plain:find("bridge", 1, true) ~= nil, "no fdb half unless asked")
+			local s = rrmscan.collector_script({on_auth = "true", fdb = true})
+			local b = s:find("bridge monitor fdb", 1, true)
+			local u = s:find('ubus subscribe "$@"', 1, true)
+			assert_true(b ~= nil and u ~= nil and b < u, "the monitor is started before the subscriber")
+			assert_true(s:find("done &\n", b, true) ~= nil, "in the background: the subscriber keeps the foreground")
+			assert_true(s:find("Deleted*|*' self'*) continue", 1, true) ~= nil,
+				"ageing and the switch's own entries are dropped in the shell")
+			assert_true(s:find("printf '%s fdb %s\\n'", 1, true) ~= nil, "uptime, then 'fdb', then the line")
+			assert_true(s:find("on_auth", 1, true) == nil and s:find("true ;;", 1, true) ~= nil,
+				"the auth hook is still there")
+		end
+	},
+	{
+		-- Run for real: a stub `ubus` replays the captured events through the
+		-- script under sh. Probe requests never reach the file; every event a
+		-- consumer reads does, stamped.
+		name = "rrmscan: the collector drops probe requests in the shell, keeps the rest",
+		fn = function()
+			local dir = os.tmpname()
+			os.remove(dir)
+			assert_true(os.execute("mkdir " .. dir) ~= false, "tmp dir")
+			local fixture = read_fixture("ubus_assoc_events.txt")
+			local raw = {}
+			for line in fixture:gmatch("[^\n]+") do raw[#raw + 1] = (line:gsub("^%d+%.%d+ ", "")) end
+			local events = table.concat(raw, "\n") .. "\n"
+			local function put(name, body)
+				local f = io.open(dir .. "/" .. name, "w"); f:write(body); f:close()
+			end
+			put("events", events)
+			put("uptime", "123.45 6.78\n")
+			put("ubus", "#!/bin/sh\ncat " .. dir .. "/events\n")
+			os.execute("chmod +x " .. dir .. "/ubus")
+			local script = rrmscan.collector_script({on_auth = ":"}):gsub("/proc/uptime", dir .. "/uptime")
+			put("collect.sh", script)
+			local p = io.popen("PATH=" .. dir .. ":$PATH sh " .. dir .. "/collect.sh 2>&1")
+			local out = p:read("*a")
+			p:close()
+			os.execute("rm -rf " .. dir)
+			assert_true(events:find('{ "probe": ', 1, true) ~= nil, "the fixture has a probe to drop")
+			assert_true(out:find('"probe"', 1, true) == nil, "no probe line written")
+			local n_in, n_out = 0, 0
+			for line in events:gmatch("[^\n]+") do
+				if not line:find('{ "probe": ', 1, true) then n_in = n_in + 1 end
+			end
+			for line in out:gmatch("[^\n]+") do
+				n_out = n_out + 1
+				assert_true(line:sub(1, 7) == "123.45 ", "stamped: " .. line)
+			end
+			assert_eq(n_out, n_in, "every other event kept")
+			local evs = dofile("openuf/assoctrack.lua").parse_events(out)
+			assert_true(#evs >= 4, "auth/assoc/authorized/disassoc still parse")
+		end
+	},
+	{
+		-- A wifi reload kills the subscriber, never the monitor: each restart
+		-- would otherwise leave one more `bridge monitor` behind.
+		name = "rrmscan: the fdb half is killed before every start and on stop",
+		fn = function()
+			local orig_script = rrmscan.COLLECTOR_SCRIPT
+			rrmscan.COLLECTOR_SCRIPT = os.tmpname()
+			local ok, err = pcall(function()
+				with_popen(function(cmd)
+					if cmd:find("pgrep", 1, true) then return "" end
+					if cmd:find("ubus list", 1, true) then return "hostapd.phy0-ap0\n" end
+					return ""
+				end, function()
+					with_exec(function(cmds)
+						assert_true(rrmscan.collector_ensure({fdb = true}), "started")
+						local kill_at, start_at
+						for i, c in ipairs(cmds) do
+							if c:find("[b]ridge monitor fdb", 1, true) and c:find("kill", 1, true) then kill_at = kill_at or i end
+							if c:find("sh " .. rrmscan.COLLECTOR_SCRIPT, 1, true) then start_at = i end
+						end
+						assert_true(kill_at ~= nil and start_at ~= nil and kill_at < start_at,
+							"a leftover monitor is killed before the new collector starts")
+					end)
+				end)
+			end)
+			os.remove(rrmscan.COLLECTOR_SCRIPT)
+			rrmscan.COLLECTOR_SCRIPT = orig_script
+			if not ok then error(err, 0) end
+			with_exec(function(cmds)
+				rrmscan.collector_stop()
+				assert_true(table.concat(cmds, "\n"):find("kill $(pgrep -f '[b]ridge monitor fdb')", 1, true) ~= nil,
+					"collector_stop kills it too")
+			end)
+		end
+	},
+	{
+		name = "rrmscan: harvest takes a blob drained once for several consumers",
+		fn = function()
+			local blob = read_fixture("ubus_beacon_report.txt")
+			with_events("", function()
+				assert_true(#rrmscan.harvest(blob) > 0, "parses the blob it is given")
+			end)
+			-- Timestamp prefixes added by the collector do not disturb it.
+			local stamped = blob:gsub("([^\n]+)", "5905613.20 %1")
+			with_events("", function()
+				assert_eq(#rrmscan.harvest(stamped), #rrmscan.harvest(blob), "prefix-agnostic")
 			end)
 		end
 	},
@@ -332,11 +760,75 @@ return {
 			with_exec(function(cmds)
 				rrmscan.collector_stop()
 				local all = table.concat(cmds, "\n")
-				assert_true(all:find("pkill -f 'ubus subscribe hostapd'", 1, true) ~= nil,
+				assert_true(all:find("kill $(pgrep -f '[u]bus subscribe hostapd')", 1, true) ~= nil,
 					"kills the subscriber by the pattern collector_ensure spawns")
+				-- busybox on the Archer C5 (OpenWrt 25.12) has no pkill applet
+				-- (upstream's finding): a pkill here is a no-op on real hardware.
+				assert_false(all:find("pkill", 1, true) ~= nil, "does not rely on pkill")
 				assert_true(all:find("rm -f " .. rrmscan.EVENT_FILE, 1, true) ~= nil,
 					"removes the notification file it was appending to")
 			end)
+		end
+	},
+	{
+		name = "rrmscan: rcpi_verdict tells a signed-dBm client from a standard one",
+		fn = function()
+			-- Live 2026-10-13: own AP at 0xbf, hostapd measured -71 dBm.
+			assert_true(rrmscan.rcpi_verdict(0xbf, -71) == true, "signed dBm")
+			-- The capture rcpi_to_dbm was checked on: 124 -> -48.
+			assert_true(rrmscan.rcpi_verdict(124, -50) == false, "standard RCPI")
+			assert_nil(rrmscan.rcpi_verdict(124, -80), "neither fits: no verdict")
+			assert_nil(rrmscan.rcpi_verdict(nil, -70), "no reading")
+			assert_nil(rrmscan.rcpi_verdict(0xbf, nil), "no measurement")
+			-- Below 128 the byte cannot be a negative dBm value.
+			assert_true(rrmscan.rcpi_verdict(100, -60) == false, "100 is RCPI -60")
+		end
+	},
+	{
+		name = "rrmscan: harvest calibrates each client on its own AP's report",
+		fn = function()
+			local function line(sta, last, rcpi)
+				return "100.5 phy0-ap1 BEACON-RESP-RX " .. sta .. " 7 00 "
+					.. report_hex({op = 81, channel = 1, last = last, rcpi = rcpi,
+						body_ies = ie(0, "N" .. last) .. RSN}) .. "\n"
+			end
+			local signed_sta, std_sta = "00:00:5e:00:53:10", "00:00:5e:00:53:11"
+			-- Own AP is ...:02. The signed client reports a neighbour ...:03 at
+			-- 0xa6 (-90) first and its AP at 0xbf (-65); the standard one gives
+			-- 124 (-48) for its AP and 40 (-90) for the neighbour ...:04. The
+			-- neighbour line comes first: calibration must find the AP's.
+			local blob = line(signed_sta, 0x03, 0xa6) .. line(signed_sta, 0x02, 0xbf)
+				.. line(std_sta, 0x02, 124) .. line(std_sta, 0x04, 40)
+			local orig = rrmscan._rcpi_signed
+			rrmscan._rcpi_signed = {}
+			local ok, err = pcall(function()
+				with_popen(function(cmd)
+					if cmd:find(" info", 1, true) then return "Interface phy0-ap1\n\taddr 00:00:5e:00:53:02\n" end
+					if cmd:find(signed_sta, 1, true) then return "\tsignal avg:\t-70 [-71, -77] dBm\n" end
+					if cmd:find(std_sta, 1, true) then return "\tsignal avg:\t-50 [-51, -55] dBm\n" end
+				end, function()
+					local m = by_bssid(rrmscan.harvest(blob))
+					assert_eq(m["00:00:5e:00:53:02"].signal, -65, "own AP, signed reading")
+					assert_eq(m["00:00:5e:00:53:03"].signal, -90, "neighbour, signed reading")
+					assert_eq(m["00:00:5e:00:53:04"].signal, -90, "standard client unchanged")
+					assert_true(m["00:00:5e:00:53:03"].body == true, "a bodied record says so")
+				end)
+				-- The verdict outlives the drain: the same station's bodiless ubus
+				-- copy, arriving later, is read the same way.
+				local ubus = '{ "beacon-report": {"address":"' .. signed_sta
+					.. '","op-class":81,"channel":6,"rcpi":178,"bssid":"00:00:5e:00:53:05","rep-mode":0} }\n'
+				local m = by_bssid(rrmscan.harvest(ubus))
+				assert_eq(m["00:00:5e:00:53:05"].signal, -78, "remembered for the ubus path")
+				assert_nil(m["00:00:5e:00:53:05"].body, "and a ubus record has no body")
+				-- An unknown station is read the standard way.
+				local other = ubus:gsub(signed_sta, "00:00:5e:00:53:12")
+				assert_eq(rrmscan.harvest(other)[1].signal, -21, "uncalibrated: RCPI")
+			end)
+			rrmscan._rcpi_signed = orig
+			if not ok then error(err, 0) end
+			-- Names off the event file never reach a shell unchecked.
+			assert_nil(rrmscan.iface_bssid("phy0;reboot"), "bad ifname refused")
+			assert_nil(rrmscan.sta_signal("phy0-ap1", "x; reboot"), "bad station refused")
 		end
 	},
 }

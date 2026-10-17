@@ -7,6 +7,7 @@ dofile("openuf/lib/lib.lua")	-- needed by announce (loaded by inform)
 local crypto = dofile("openuf/crypto.lua")
 local state  = dofile("openuf/state.lua")
 local inform = dofile("openuf/inform.lua")
+local cjson  = require("cjson")
 
 -- Redirect state file to /tmp so handle_response tests don't need /etc/openuf
 inform._state._state_file = "/tmp/openuf_test_inform.json"
@@ -16,6 +17,7 @@ inform._state._state_file = "/tmp/openuf_test_inform.json"
 inform._firewall = {
 	reconcile = function() end,
 	deauth = function() end,
+	hostapd_sockets = function() return "" end, deny_sync = function() return false end,
 }
 -- Same for the controller's L2 hardening (nft) and system settings (UCI
 -- system, root's crontab); the tests that exercise them stub their own.
@@ -31,6 +33,18 @@ inform._sysconf = {parse = function() return nil end, apply = function() return 
 -- (see "different authkeys produce different ciphertext").
 local FIXED_IV = string.rep("\0", 16)
 crypto._random_bytes = function(n) return string.rep("\0", n) end
+
+-- A device with two SSIDs on radio0 (the second one VLAN-tagged, so netifd
+-- also lists its VLAN netdev) and one on radio1, as ucihelper.ap_ifnames
+-- reports it.
+local function bss_mock()
+	return {
+		ap_ifnames = function()
+			return {"phy0-ap0", "phy0-ap1", "phy0-ap1.10", "phy1-ap0"}
+		end,
+		bss_ifname = function(n) if n == "phy0-ap1.10" then return "phy0-ap1" end return n end,
+	}
+end
 
 -- Minimal state for packet building
 local function sample_state(overrides)
@@ -948,6 +962,58 @@ return {
 		end
 	},
 	{
+		name = "inform packet: a DSA push works out the switch block and uplink socket once",
+		fn = function()
+			-- Both the port-VLAN set handed to the WiFi pass and the switch
+			-- pass after it need the parsed switch.* block and the socket the
+			-- uplink cable is in. Each consumer used to work both out again,
+			-- and the uplink is a `bridge fdb` dump.
+			local st = sample_state()
+			local si, sv = inform._sysinfo, inform._switchvlan
+			local orig_parse = inform._parse_switch_system_cfg
+			local orig_bo, orig_up = si.lan_bridge, si.uplink_bridge_port
+			local parses, fdb_dumps, seen = 0, 0, {}
+			inform._parse_switch_system_cfg = function(raw)
+				parses = parses + 1
+				return orig_parse(raw)
+			end
+			si.lan_bridge = function() return "br-lan" end
+			si.uplink_bridge_port = function(br)
+				fdb_dumps = fdb_dumps + 1
+				assert_eq(br, "br-lan", "asked of the LAN bridge")
+				return "wan"
+			end
+			inform._switchvlan = {
+				dsa_members = function(sw, _, up) seen.members = {sw = sw, up = up}; return {} end,
+				apply = function(sw, _, _, _, phys, ifname)
+					seen.apply = {sw = sw, phys = phys, ifname = ifname}
+				end,
+				restore = function() seen.restore = true end,
+			}
+			local sys_cfg = "switch.status=enabled\nswitch.vlan.status=enabled\n"
+				.. "switch.port.2.name=Data\nswitch.port.2.opmode=switch\n"
+				.. "switch.port.2.pvid=20\n"
+				.. "switch.vlan.1.id=1\nswitch.vlan.1.mode=untagged\nswitch.vlan.1.status=enabled\n"
+				.. "switch.vlan.2.id=20\nswitch.vlan.2.mode=tagged\nswitch.vlan.2.status=enabled\n"
+			local resp = ('{"_type":"setparam","system_cfg":"%s"}'):format(sys_cfg:gsub("\n", "\\n"))
+			local ok, err = pcall(inform.handle_response, resp, st, nil)
+			inform._parse_switch_system_cfg = orig_parse
+			si.lan_bridge, si.uplink_bridge_port = orig_bo, orig_up
+			inform._switchvlan = sv
+			if not ok then error(err, 0) end
+			assert_eq(parses, 1, "switch.* parsed once")
+			assert_eq(fdb_dumps, 1, "uplink socket looked up once")
+			assert_not_nil(seen.members, "the port-VLAN set was asked for")
+			assert_not_nil(seen.apply, "and the switch pass ran")
+			assert_eq(seen.members.up, "wan", "port-VLAN set gets the uplink")
+			assert_eq(seen.apply.ifname, "wan", "switch pass gets the same uplink")
+			assert_nil(seen.apply.phys, "no swconfig ARL lookup on DSA")
+			assert_true(seen.apply.sw ~= nil and seen.apply.sw == seen.members.sw,
+				"both get the same parsed switch block")
+			assert_true(seen.apply.sw.enabled, "and it is the enabled one that was pushed")
+		end
+	},
+	{
 		name = "inform packet: a tagged SSID's VLAN reaches switchvlan as a trunk request",
 		fn = function()
 			-- The switch drops frames for a VID it has no entry for, so a
@@ -1321,11 +1387,63 @@ return {
 			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
 			assert_eq(db.wireless.radio0.minrssi_enabled, "1", "push 1: enforcement enabled")
 			assert_eq(db.wireless.radio0.minrssi_rssi, "15", "push 1: raw threshold stored")
+			assert_eq(db.wireless.radio0.rssi_reject_assoc_rssi, "-77",
+				"push 1: hostapd refuses association below -80 + 3 dBm")
+			assert_eq(db.wireless.radio0.rssi_ignore_probe_request, "-77",
+				"push 1: and ignores probes there")
 
 			rt, vt = inform._parse_wifi_system_cfg(off_blob)
 			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
 			assert_eq(db.wireless.radio0.minrssi_enabled, "0",
 				"push 2 (stamgr absent): enforcement flag explicitly cleared")
+			assert_nil(db.wireless.radio0.rssi_reject_assoc_rssi, "push 2: refusal removed")
+			assert_nil(db.wireless.radio0.rssi_ignore_probe_request, "push 2: probe filter removed")
+			assert_nil(db.wireless.radio0.openuf_minrssi, "push 2: stamp removed")
+		end
+	},
+	{
+		name = "inform packet: Load balance's cap is parsed from stamgr.<n> and stored, and removed when off",
+		fn = function()
+			-- Captured from the lab (10.4.57, 2026-10-10): Load balance on for
+			-- radio0 with maxsta 3 and Minimum RSSI off. Turning it off made the
+			-- whole stamgr.<n> block disappear.
+			local ucihelper, db = new_apply_env()
+			local on_blob = "radio.1.phyname=radio0\nradio.1.channel=6\n"
+				.. "stamgr.1.status=true\nstamgr.1.radio=ng\n"
+				.. "stamgr.1.minrssi.status=false\nstamgr.1.minrssi.rssi=15\n"
+				.. "stamgr.1.loadbalance.status=true\nstamgr.1.loadbalance.maxsta=3\n"
+				.. "radio.2.phyname=radio1\nradio.2.channel=36\n"
+			local off_blob = "radio.1.phyname=radio0\nradio.1.channel=6\n"
+				.. "radio.2.phyname=radio1\nradio.2.channel=36\n"
+
+			local rt, vt = inform._parse_wifi_system_cfg(on_blob)
+			assert_eq(rt[1].loadbalance_maxsta, 3, "radio0's cap")
+			assert_eq(rt[1].min_rssi_enabled, false, "Minimum RSSI stays off beside it")
+			assert_eq(rt[2].loadbalance_maxsta, false, "radio1 has no stamgr block: explicitly off")
+			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
+			assert_eq(db.wireless.radio0.loadbalance_maxsta, "3", "push 1: cap stored")
+			assert_nil(db.wireless.radio1.loadbalance_maxsta, "push 1: radio1 has none")
+
+			rt, vt = inform._parse_wifi_system_cfg(off_blob)
+			assert_eq(rt[1].loadbalance_maxsta, false, "push 2: off")
+			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
+			assert_nil(db.wireless.radio0.loadbalance_maxsta, "push 2: cap removed")
+		end
+	},
+	{
+		name = "inform packet: Load balance is off unless status is true and maxsta is positive",
+		fn = function()
+			local function cap(lines)
+				return inform._parse_wifi_system_cfg("radio.1.phyname=radio0\n"
+					.. "stamgr.1.status=true\nstamgr.1.radio=ng\n" .. lines)[1].loadbalance_maxsta
+			end
+			assert_eq(cap("stamgr.1.loadbalance.status=false\nstamgr.1.loadbalance.maxsta=3\n"), false,
+				"status false: off, whatever maxsta says")
+			assert_eq(cap("stamgr.1.loadbalance.status=true\n"), false, "no maxsta: off")
+			assert_eq(cap("stamgr.1.loadbalance.status=true\nstamgr.1.loadbalance.maxsta=0\n"), false, "0: off")
+			assert_eq(cap("stamgr.1.loadbalance.status=true\nstamgr.1.loadbalance.maxsta=null\n"), false,
+				"not a number: off")
+			assert_eq(cap("stamgr.1.loadbalance.status=true\nstamgr.1.loadbalance.maxsta=1\n"), 1, "1: on")
 		end
 	},
 	{
@@ -1430,6 +1548,47 @@ return {
 			local _, vap_table = inform._parse_wifi_system_cfg(sys_cfg)
 			assert_eq(vap_table[1].iot, nil, "no iot key -> nil")
 			assert_eq(vap_table[1].qbssload, nil, "no qbssload key -> nil")
+		end
+	},
+	{
+		name = "inform packet: _parse_wifi_system_cfg parses wireless.<n>.uapsd both ways",
+		fn = function()
+			-- 10.x always emits it, from wlanconf uapsd_enabled (default false).
+			local base = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			local _, off = inform._parse_wifi_system_cfg(base .. "wireless.1.uapsd=disabled\n")
+			assert_eq(off[1].uapsd, false, "uapsd=disabled -> false")
+			local _, on = inform._parse_wifi_system_cfg(base .. "wireless.1.uapsd=enabled\n")
+			assert_eq(on[1].uapsd, true, "uapsd=enabled -> true")
+			local _, none = inform._parse_wifi_system_cfg(base)
+			assert_eq(none[1].uapsd, nil, "no uapsd key -> nil")
+		end
+	},
+	{
+		name = "inform packet: _parse_wifi_system_cfg parses aaa.<n>.wpa.group_rekey",
+		fn = function()
+			local base = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			for _, c in ipairs({{"3600", "3600"}, {"0", "0"}, {"0600", "600"},
+					{"-1", nil}, {"1h", nil}, {"9999999999", nil}}) do
+				local _, v = inform._parse_wifi_system_cfg(base .. "aaa.1.wpa.group_rekey=" .. c[1] .. "\n")
+				assert_eq(v[1].group_rekey, c[2], "group_rekey=" .. c[1])
+			end
+			local _, none = inform._parse_wifi_system_cfg(base)
+			assert_eq(none[1].group_rekey, nil, "no group_rekey key -> nil")
+		end
+	},
+	{
+		name = "inform packet: _parse_wifi_system_cfg parses aaa.<n>.11k.status",
+		fn = function()
+			local base = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			for _, c in ipairs({{"enabled", true}, {"disabled", false}}) do
+				local _, v = inform._parse_wifi_system_cfg(base .. "aaa.1.11k.status=" .. c[1] .. "\n")
+				assert_eq(v[1].rrm, c[2], "11k.status=" .. c[1])
+			end
+			local _, none = inform._parse_wifi_system_cfg(base)
+			assert_eq(none[1].rrm, nil, "no 11k.status key -> nil")
 		end
 	},
 	{
@@ -2092,6 +2251,49 @@ return {
 		end
 	},
 	{
+		-- aaa.<n>.iapp_key is the wlanconf's x_iapp_key, sent on every
+		-- radio's aaa block for the WLAN (seen live from a 10.x UCG Ultra and
+		-- the 10.4.57 lab). It is the 802.11r key-holder secret.
+		name = "inform packet: aaa.<n>.iapp_key reaches UCI as the r0kh/r1kh key",
+		fn = function()
+			local key = "00112233445566778899AABBCCDDEEFF"
+			local function cfg(k)
+				return table.concat({
+					"aaa.1.ft.status=enabled", "aaa.1.id=6ab8c7ecc18fc00c5f8f66ed",
+					k and ("aaa.1.iapp_key=" .. k) or "aaa.1.status=enabled",
+					"aaa.1.ssid=corp", "aaa.1.wpa.1.pairwise=CCMP",
+					"aaa.1.wpa.key.1.mgmt=WPA-PSK", "aaa.1.wpa.psk=hunter22",
+					"aaa.1.wpa3.support=enabled", "aaa.1.wpa3.transition=enabled",
+					"aaa.1.wpa=2",
+					"wireless.1.parent=radio0", "wireless.1.ssid=corp",
+					"wireless.1.usage=user",
+				}, "\n") .. "\n"
+			end
+
+			local _, vt = inform._parse_wifi_system_cfg(cfg(key))
+			assert_eq(vt[1].iapp_key, key:lower(), "key carried, lowercased")
+			for _, bad in ipairs({"0011", key .. "00", "zz" .. key:sub(3)}) do
+				local _, bvt = inform._parse_wifi_system_cfg(cfg(bad))
+				assert_nil(bvt[1].iapp_key, "malformed key dropped: " .. bad)
+			end
+			_, vt = inform._parse_wifi_system_cfg(cfg(nil))
+			assert_nil(vt[1].iapp_key, "absent key -> nil")
+
+			local ucihelper, db = new_apply_env()
+			local rt
+			rt, vt = inform._parse_wifi_system_cfg(cfg(key))
+			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
+			local s = db.wireless.openuf_radio0_corp
+			assert_true(s ~= nil, "vap section created")
+			assert_eq(s.ieee80211r, "1", "FT on")
+			assert_eq(s.r0kh and s.r0kh[1], "ff:ff:ff:ff:ff:ff,*," .. key:lower(),
+				"r0kh carries the controller's key")
+			assert_eq(s.r1kh and s.r1kh[1],
+				"00:00:00:00:00:00,00:00:00:00:00:00," .. key:lower(),
+				"r1kh carries the controller's key")
+		end
+	},
+	{
 		name = "inform packet: wpa3.support without transition is WPA3-only",
 		fn = function()
 			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
@@ -2451,6 +2653,18 @@ return {
 		end
 	},
 	{
+		name = "inform packet: setdefault keeps the inform URL that reached the controller",
+		fn = function()
+			-- The default names the controller by host name, and an L3
+			-- re-adoption over it fails (HTTP 400, "invalid inform_ip").
+			local st = sample_state({adopted = true, inform_url = "http://192.0.2.1:8080/inform"})
+			inform.handle_response('{"_type":"setdefault"}', st)
+			assert_false(st.adopted, "reset")
+			assert_eq(st.inform_url, "http://192.0.2.1:8080/inform", "kept in memory")
+			assert_eq(inform._state.load().inform_url, "http://192.0.2.1:8080/inform", "and on disk")
+		end
+	},
+	{
 		name = "inform packet: handle_response setdefault unlocks bootstrap account when configured",
 		fn = function()
 			local st = sample_state({adopted = true})
@@ -2571,19 +2785,20 @@ return {
 		name = "inform packet: handle_response cmd block-sta adds the MAC, persists, reconciles, and deauths",
 		fn = function()
 			local st = sample_state()
-			local reconciled, deauthed
+			local reconciled, deauthed, denied
+			local order = {}
 			inform._firewall = {
 				reconcile = function(macs) reconciled = macs end,
-				deauth = function(mac, ifnames) deauthed = {mac = mac, ifnames = ifnames} end,
-			}
-			inform._ucihelper = {
-				get_radio_table = function() return {{name = "radio0"}, {name = "radio1"}} end,
-				get_ifname_for_radio = function(name)
-					if name == "radio0" then return "wlan0" end
-					if name == "radio1" then return "wlan1" end
-					return nil
+				deauth = function(mac, ifnames)
+					deauthed = {mac = mac, ifnames = ifnames}; order[#order + 1] = "deauth"
+				end,
+				hostapd_sockets = function() return "" end, deny_sync = function(macs, bsses)
+					denied = {macs = macs, bsses = bsses}; order[#order + 1] = "deny"
+					return false
 				end,
 			}
+			inform._ucihelper = bss_mock()
+			inform._deny_pending = false
 			local result = inform.handle_response(
 				'{"_type":"cmd","cmd":"block-sta","mac":"aa:bb:cc:dd:ee:01"}', st)
 			inform._firewall = { reconcile = function() end, deauth = function() end }
@@ -2593,7 +2808,15 @@ return {
 			assert_eq(#reconciled, 1, "reconcile called with the updated list")
 			assert_eq(reconciled[1], "aa:bb:cc:dd:ee:01", "reconcile sees the newly blocked MAC")
 			assert_eq(deauthed.mac, "aa:bb:cc:dd:ee:01", "deauth targets the blocked MAC")
-			assert_eq(#deauthed.ifnames, 2, "deauth issued across every configured radio")
+			-- Every BSS, not one per radio: the IoT SSID shares radio0 with
+			-- the home SSID, and its VLAN netdev folds into its own BSS.
+			assert_eq(table.concat(deauthed.ifnames, ","), "phy0-ap0,phy0-ap1,phy1-ap0",
+				"deauth issued on every BSS, VLAN netdevs folded into theirs")
+			-- The refusal goes into hostapd before the deauth, so the client
+			-- has no gap to reassociate in.
+			assert_eq(table.concat(denied.macs, ","), "aa:bb:cc:dd:ee:01", "hostapd's deny list gets the MAC")
+			assert_eq(table.concat(denied.bsses, ","), "phy0-ap0,phy0-ap1,phy1-ap0", "on every BSS")
+			assert_eq(table.concat(order, ","), "deny,deauth", "refused before it is kicked")
 			assert_true(result, "re-inform immediately after executing a command")
 		end
 	},
@@ -2611,18 +2834,63 @@ return {
 		name = "inform packet: handle_response cmd unblock-sta removes the MAC and reconciles",
 		fn = function()
 			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"}})
-			local reconciled
+			local reconciled, denied
 			inform._firewall = {
 				reconcile = function(macs) reconciled = macs end,
 				deauth = function() end,
+				hostapd_sockets = function() return "" end, deny_sync = function(macs) denied = macs; return true end,
 			}
+			inform._deny_pending = false
 			local result = inform.handle_response(
 				'{"_type":"cmd","cmd":"unblock-sta","mac":"aa:bb:cc:dd:ee:01"}', st)
 			inform._firewall = { reconcile = function() end, deauth = function() end }
+			assert_eq(table.concat(denied or {}, ","), "aa:bb:cc:dd:ee:02",
+				"hostapd's deny list is synced to what is still blocked")
+			assert_true(inform._deny_pending, "and looked at again next tick, as deny_sync asked")
+			inform._deny_pending = false
 			assert_eq(#st.blocked_stas, 1, "one MAC remains")
 			assert_eq(st.blocked_stas[1], "aa:bb:cc:dd:ee:02", "the other MAC is untouched")
 			assert_eq(#reconciled, 1, "reconcile called with the updated (shorter) list")
 			assert_true(result, "re-inform immediately after executing a command")
+		end
+	},
+	{
+		name = "inform packet: handle_response cmd kick-sta deauths on every BSS and blocks nothing",
+		fn = function()
+			-- Client -> Reconnect. A one-shot deauth: the client may come
+			-- straight back, so no ledger entry and no nft reconcile.
+			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:02"}})
+			local deauthed, reconciled
+			inform._firewall = {
+				reconcile = function() reconciled = true end,
+				deauth = function(mac, ifnames) deauthed = {mac = mac, ifnames = ifnames} end,
+			}
+			inform._ucihelper = bss_mock()
+			local result = inform.handle_response(
+				'{"_type":"cmd","cmd":"kick-sta","mac":"aa:bb:cc:dd:ee:01"}', st)
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			inform._ucihelper = nil
+			assert_true(deauthed ~= nil, "kick-sta deauthenticates")
+			assert_eq(deauthed.mac, "aa:bb:cc:dd:ee:01", "deauth targets the kicked MAC")
+			assert_eq(table.concat(deauthed.ifnames, ","), "phy0-ap0,phy0-ap1,phy1-ap0",
+				"deauth issued on every BSS")
+			assert_eq(reconciled, nil, "a kick does not touch the block table")
+			assert_eq(#st.blocked_stas, 1, "a kick adds nothing to the block ledger")
+			assert_true(result, "re-inform immediately after executing a command")
+		end
+	},
+	{
+		name = "inform packet: handle_response cmd kick-sta without a mac is a safe no-op",
+		fn = function()
+			local st = sample_state()
+			local deauthed = false
+			inform._firewall = { reconcile = function() end, deauth = function() deauthed = true end }
+			inform._ucihelper = bss_mock()
+			local result = inform.handle_response('{"_type":"cmd","cmd":"kick-sta"}', st)
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			inform._ucihelper = nil
+			assert_eq(deauthed, false, "nothing to deauth without a mac")
+			assert_true(result, "still re-informs")
 		end
 	},
 	{
@@ -2638,6 +2906,245 @@ return {
 			inform._firewall = { reconcile = function() end, deauth = function() end }
 			assert_true(st.blocked_stas == nil, "state untouched without a mac field in the command")
 			assert_false(called, "firewall not touched without a mac field")
+		end
+	},
+	{
+		name = "inform packet: setparam blocked_sta replaces the ledger, reconciles, deauths only new MACs",
+		fn = function()
+			-- The wire form captured from 10.4.57: the site's blocked
+			-- clients joined with "\n", beside system_cfg/mgmt_cfg.
+			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:09"}})
+			local reconciled, deauthed, denied = nil, {}, nil
+			inform._firewall = {
+				reconcile = function(macs) reconciled = macs end,
+				deauth = function(mac, ifnames) deauthed[#deauthed + 1] = mac .. "@" .. table.concat(ifnames, ",") end,
+				hostapd_sockets = function() return "" end, deny_sync = function(macs) denied = table.concat(macs, ","); return false end,
+			}
+			inform._ucihelper = bss_mock()
+			inform._deny_pending = false
+			local result = inform.handle_response(cjson.encode({_type = "setparam",
+				blocked_sta = "aa:bb:cc:dd:ee:01\nAA:BB:CC:DD:EE:02"}), st)
+			assert_eq(denied, "aa:bb:cc:dd:ee:01,aa:bb:cc:dd:ee:02", "hostapd's deny list follows the new list")
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			inform._ucihelper = nil
+			assert_eq(table.concat(st.blocked_stas, ","), "aa:bb:cc:dd:ee:01,aa:bb:cc:dd:ee:02",
+				"ledger is the controller's list, lowercased; a MAC it dropped is gone")
+			assert_eq(table.concat(reconciled, ","), "aa:bb:cc:dd:ee:01,aa:bb:cc:dd:ee:02",
+				"nft rebuilt from the new list")
+			assert_eq(table.concat(deauthed, " "), "aa:bb:cc:dd:ee:02@phy0-ap0,phy0-ap1,phy1-ap0",
+				"only the newly blocked MAC is deauthed, on every BSS")
+			assert_false(result, "a plain setparam does not re-inform")
+		end
+	},
+	{
+		name = "inform packet: a fresh start looks at hostapd's deny lists once even with nothing blocked",
+		fn = function()
+			-- An unblock that happened while openUF was down (state.json
+			-- edited, a reset) leaves hostapd refusing the MAC: the first
+			-- tick cleans it up.
+			local fresh = dofile("openuf/inform.lua")
+			assert_true(fresh._deny_pending, "pending from the start")
+		end
+	},
+	{
+		name = "inform packet: _block_resync syncs hostapd every tick only while a sync is pending",
+		fn = function()
+			-- hostapd's deny list is runtime-only. While a sync has not
+			-- settled (a BSS that did not answer, a change to read back) it
+			-- runs every tick, also once the ledger is empty, until a pass
+			-- finds nothing left to clean.
+			local calls, answer, now = {}, true, 1000
+			local real_time = inform._time
+			inform._time = function() return now end
+			inform._firewall = {reconcile = function() end, deauth = function() end,
+				hostapd_sockets = function() return "s" end,
+				deny_sync = function(macs, bsses)
+					calls[#calls + 1] = table.concat(macs, ",") .. "@" .. table.concat(bsses, ",")
+					return answer
+				end}
+			inform._ucihelper = bss_mock()
+			inform._deny_at, inform._deny_socks, inform._deny_settle = nil, nil, nil
+			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			inform._deny_pending = false
+			assert_true(inform._block_resync(st), "first look: synced")
+			assert_eq(calls[1], "aa:bb:cc:dd:ee:01@phy0-ap0,phy0-ap1,phy1-ap0", "on every BSS")
+			assert_true(inform._block_resync(st), "that pass asked for another: synced the same second")
+			st.blocked_stas = {}
+			assert_true(inform._block_resync(st), "empty but pending from the last pass: synced")
+			answer = false
+			assert_true(inform._block_resync(st), "still pending (that pass changed something): synced")
+			assert_false(inform._block_resync(st), "a clean pass: nothing more to do")
+			now = now + 3600
+			assert_false(inform._block_resync(st), "nothing blocked, nothing pending: never")
+			assert_eq(#calls, 4, "no call once clean")
+			inform._time = real_time
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			inform._ucihelper = nil
+		end
+	},
+	{
+		name = "inform packet: a settled block is re-checked once a minute, or at once when a hostapd socket is replaced",
+		fn = function()
+			local n, now, socks = 0, 1000, "/var/run/hostapd/phy0-ap0=11"
+			local real_time = inform._time
+			inform._time = function() return now end
+			inform._firewall = {reconcile = function() end, deauth = function() end,
+				hostapd_sockets = function() return socks end,
+				deny_sync = function() n = n + 1; return false end}
+			inform._ucihelper = bss_mock()
+			inform._deny_at, inform._deny_socks, inform._deny_settle = nil, nil, nil
+			inform._deny_pending = false
+			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			assert_true(inform._block_resync(st), "first look")
+			for _, dt in ipairs({15, 30, 59}) do
+				now = 1000 + dt
+				assert_false(inform._block_resync(st), "settled: not at +" .. dt .. " s")
+			end
+			now = 1060
+			assert_true(inform._block_resync(st), "DENY_INTERVAL later: again")
+			assert_eq(n, 2, "two syncs in a minute of ticks")
+			-- A hostapd restart, or a BSS torn down and rebuilt, threw the
+			-- runtime list away; its control socket is a new one.
+			now = 1075
+			socks = "/var/run/hostapd/phy0-ap0=12"
+			assert_true(inform._block_resync(st), "a replaced socket: at once")
+			now = 1090
+			assert_false(inform._block_resync(st), "and settled again after")
+			now = 1000
+			assert_true(inform._block_resync(st), "a clock stepped back: looked at, not skipped for an hour")
+			assert_eq(n, 4, "no other syncs")
+			inform._time = real_time
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			inform._ucihelper = nil
+		end
+	},
+	{
+		name = "inform packet: after openUF's own wifi reload the deny list is checked every tick for DENY_SETTLE",
+		fn = function()
+			-- `wifi reload` lands asynchronously and can reload a BSS in
+			-- place, keeping its socket: a clean sync the tick after the push
+			-- may have read the list before hostapd dropped it.
+			local n, now = 0, 2000
+			local real_time = inform._time
+			inform._time = function() return now end
+			inform._firewall = {reconcile = function() end, deauth = function() end,
+				hostapd_sockets = function() return "s" end,
+				deny_sync = function() n = n + 1; return false end}
+			inform._ucihelper = bss_mock()
+			inform._deny_at, inform._deny_socks, inform._deny_settle = nil, nil, nil
+			inform._deny_pending = false
+			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			assert_true(inform._block_resync(st), "first look")
+			inform._deny_reloaded()
+			for _, dt in ipairs({0, 15, 30, 59}) do
+				now = 2000 + dt
+				assert_true(inform._block_resync(st), "within the settle window: +" .. dt .. " s")
+			end
+			now = 2060
+			assert_false(inform._block_resync(st), "window over, and the last sync was 1 s ago")
+			now = 2119
+			assert_true(inform._block_resync(st), "back to once a minute")
+			inform._deny_reloaded()          -- settle until 2179
+			now = 1000                       -- a clock stepped back 1119 s
+			assert_true(inform._block_resync(st), "stepped back: one look")
+			now = 1010
+			assert_false(inform._block_resync(st), "but the window is not stretched over the step")
+			inform._time = real_time
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			inform._ucihelper = nil
+		end
+	},
+	{
+		name = "inform packet: a WiFi push and a Forget open the deny-sync settle window",
+		fn = function()
+			local real_time = inform._time
+			inform._time = function() return 5000 end
+			inform._deny_settle = nil
+			local orig = inform._usteer.set_enabled
+			inform._usteer.set_enabled = function() end
+			inform._ucihelper = {apply_config = function() end}
+			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			inform.handle_response(('{"_type":"setparam","system_cfg":"%s"}'):format(sys_cfg),
+				sample_state(), {net = {lan_cpueth = "eth0"}})
+			assert_eq(inform._deny_settle, 5000 + inform.DENY_SETTLE, "the push ran wifi reload")
+			inform._deny_settle = nil
+			inform._ucihelper = {forget = function() end}
+			inform._forget_controller()
+			assert_eq(inform._deny_settle, 5000 + inform.DENY_SETTLE, "so did the Forget")
+			inform._usteer.set_enabled = orig
+			inform._deny_settle = nil
+			inform._ucihelper = nil
+			inform._time = real_time
+		end
+	},
+	{
+		name = "inform packet: setparam blocked_sta \"\" clears every block",
+		fn = function()
+			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			local reconciled, deauthed = nil, false
+			inform._firewall = {
+				reconcile = function(macs) reconciled = macs end,
+				deauth = function() deauthed = true end,
+			}
+			inform.handle_response('{"_type":"setparam","blocked_sta":""}', st)
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			assert_eq(#st.blocked_stas, 0, "present-but-empty means nothing is blocked")
+			assert_eq(#reconciled, 0, "nft set emptied")
+			assert_false(deauthed, "unblocking deauths nobody")
+		end
+	},
+	{
+		name = "inform packet: setparam without blocked_sta leaves the ledger alone",
+		fn = function()
+			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			local called = false
+			inform._firewall = {
+				reconcile = function() called = true end,
+				deauth = function() called = true end,
+			}
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"cfgversion=abc"}', st)
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			assert_eq(table.concat(st.blocked_stas, ","), "aa:bb:cc:dd:ee:01", "absent is not empty")
+			assert_false(called, "firewall untouched")
+		end
+	},
+	{
+		name = "inform packet: setparam blocked_sta with the same set does not rebuild nft",
+		fn = function()
+			-- Every config push carries the list: reconcile drops and
+			-- recreates the table, so an unchanged list must not touch it.
+			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:02", "aa:bb:cc:dd:ee:01"}})
+			local called = false
+			inform._firewall = {
+				reconcile = function() called = true end,
+				deauth = function() called = true end,
+			}
+			inform.handle_response(cjson.encode({_type = "setparam",
+				blocked_sta = "aa:bb:cc:dd:ee:01\naa:bb:cc:dd:ee:02\naa:bb:cc:dd:ee:01"}), st)
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			assert_false(called, "same set in another order (with a duplicate) is a no-op")
+			assert_eq(#st.blocked_stas, 2, "ledger kept")
+		end
+	},
+	{
+		name = "inform packet: setparam blocked_sta skips malformed entries",
+		fn = function()
+			local st = sample_state()
+			local reconciled
+			inform._firewall = {
+				reconcile = function(macs) reconciled = macs end,
+				deauth = function() end,
+			}
+			inform._ucihelper = bss_mock()
+			inform.handle_response(cjson.encode({_type = "setparam",
+				blocked_sta = "aa:bb:cc:dd:ee:01\n\nnot-a-mac\naa:bb:cc:dd:ee:0;reboot\n aa:bb:cc:dd:ee:03 \n"}), st)
+			inform._firewall = { reconcile = function() end, deauth = function() end }
+			inform._ucihelper = nil
+			assert_eq(table.concat(st.blocked_stas, ","), "aa:bb:cc:dd:ee:01,aa:bb:cc:dd:ee:03",
+				"only well-formed MACs kept (surrounding whitespace trimmed)")
+			assert_eq(table.concat(reconciled, ","), "aa:bb:cc:dd:ee:01,aa:bb:cc:dd:ee:03",
+				"nft sees the same list")
 		end
 	},
 	{
@@ -2761,6 +3268,42 @@ return {
 			assert_true(cached ~= nil and #cached.table == 2, "the operating channel is still reported, at both widths")
 			assert_eq(cached.table[1].utilization, 10, "from the counters it has")
 			assert_nil(cached.table[1].interference, "no rx/tx counters: no interference figure rather than a guess")
+		end
+	},
+	{
+		name = "inform packet: the scan cmd sweeps the named radio, a frequency's band, or everything",
+		fn = function()
+			local st = sample_state()
+			local orig_uci, orig_scan, orig_stderr = inform._ucihelper, inform._spectrum_scan, io.stderr
+			local swept, logged = {}, {}
+			io.stderr = {write = function(_, ...)
+				for _, v in ipairs({...}) do logged[#logged + 1] = tostring(v) end
+			end}
+			inform._ucihelper = {
+				get_radio_table = function()
+					return {{name = "radio0", radio = "ng"}, {name = "radio1", radio = "na"}}
+				end,
+			}
+			inform._spectrum_scan = function(_, band, who)
+				swept[#swept + 1] = tostring(band) .. "/" .. tostring(who)
+				return 1
+			end
+			local ok, err = pcall(function()
+				assert_true(inform.handle_response('{"_type":"cmd","cmd":"scan","type":"active","mode":"sync","radio_name":"radio0"}', st),
+					"re-inform right after the cmd")
+				assert_true(inform.handle_response('{"_type":"cmd","cmd":"scan","type":"passive","mode":"sync","freq":"5180"}', st),
+					"a frequency picks its band")
+				assert_true(inform.handle_response('{"_type":"cmd","cmd":"scan","type":"active","mode":"sync"}', st),
+					"nothing named: every radio")
+				assert_true(inform.handle_response('{"_type":"cmd","cmd":"scan","radio_name":"radio9"}', st),
+					"an unknown radio still re-informs")
+				assert_eq(table.concat(swept, " "), "ng/scan na/scan nil/scan",
+					"the named radio's band, the frequency's band, then all radios; the unknown radio swept nothing")
+				assert_true(table.concat(logged):find("unknown radio radio9", 1, true) ~= nil, "and said so")
+				assert_nil(inform._unhandled.entry("cmd", "scan"), "scan is handled, not ledgered")
+			end)
+			inform._ucihelper, inform._spectrum_scan, io.stderr = orig_uci, orig_scan, orig_stderr
+			if not ok then error(err, 0) end
 		end
 	},
 	{
@@ -3048,6 +3591,48 @@ return {
 		end
 	},
 	{
+		name = "inform packet: zlib is looked up and the inflater loaded once, not per packet",
+		fn = function()
+			-- A failed require is not remembered by Lua: asking for zlib per
+			-- packet walked every package.path/cpath entry on every inform and
+			-- notification, and the inflater was dofile'd per compressed reply.
+			-- A fresh inform instance, so an earlier test's lookup doesn't count.
+			local zlib_asks, inflate_loads = 0, 0
+			local orig_require, orig_dofile = require, dofile
+			require = function(name)
+				if name == "zlib" then zlib_asks = zlib_asks + 1 end
+				return orig_require(name)
+			end
+			dofile = function(path)
+				if tostring(path):find("inflate", 1, true) then inflate_loads = inflate_loads + 1 end
+				return orig_dofile(path)
+			end
+			local ok, err = pcall(function()
+				local fresh = dofile("openuf/inform.lua")
+				fresh._crypto = inform._crypto
+				local st = sample_state()
+				local ff = io.open("tests/fixtures/zlib_response.bin", "rb")
+				local compressed = ff:read("*a"); ff:close()
+				local ct = crypto.aes_cbc_encrypt(st.authkey, FIXED_IV, compressed)
+				local function u32(n)
+					return string.char(math.floor(n/16777216)%256, math.floor(n/65536)%256,
+						math.floor(n/256)%256, n%256)
+				end
+				local pkt = MAGIC .. u32(1) .. "\170\187\204\221\238\255"
+					.. string.char(0, 3) .. FIXED_IV .. u32(1) .. u32(#ct) .. ct
+				for _ = 1, 3 do
+					fresh.build_packet('{"x":1}', st)
+					assert_true(fresh.parse_packet(pkt, st):find("setparam", 1, true) ~= nil,
+						"the reply still inflates")
+				end
+			end)
+			require, dofile = orig_require, orig_dofile
+			if not ok then error(err, 0) end
+			assert_true(zlib_asks <= 1, "zlib asked for at most once, got " .. zlib_asks)
+			assert_true(inflate_loads <= 1, "inflater loaded at most once, got " .. inflate_loads)
+		end
+	},
+	{
 		name = "inform packet: parse_packet errors on snappy-compressed response",
 		fn = function()
 			-- Build a raw packet with FLAG_SNAPPY (0x04) set
@@ -3251,6 +3836,37 @@ return {
 			inform._state_mtime = orig_mtime
 			assert_eq(last, 42, "mtime unchanged")
 			assert_eq(st.mac, "aa:bb:cc:dd:ee:ff", "st left untouched")
+		end
+	},
+	{
+		name = "inform: _reload_if_changed ignores this process's own state.save, not an external write",
+		fn = function()
+			-- Real file, real token: the token is the file's contents.
+			local path = inform._state._state_file
+			inform._state.save(sample_state({adopted = true, cfgversion = "v1"}))
+			local token = inform._state_mtime(path)
+			local reconciles = 0
+			local orig_fw = inform._firewall
+			inform._firewall = {reconcile = function() reconciles = reconciles + 1 end,
+				deauth = function() end, hostapd_sockets = function() return "" end, deny_sync = function() return false end}
+			local ok, err = pcall(function()
+				-- A save from inside the daemon (a setparam, a guest cmd ...).
+				local st = sample_state({adopted = true, cfgversion = "v2"})
+				inform._state.save(st)
+				token = inform._reload_if_changed(st, {config = {}}, token)
+				assert_eq(reconciles, 0, "own save is not reloaded")
+				assert_eq(token, inform._state_mtime(path), "token follows the own write")
+				assert_eq(st.mac, "aa:bb:cc:dd:ee:ff", "st untouched")
+				-- syswrapper writing the file from another process.
+				local f = assert(io.open(path, "w"))
+				f:write('{"adopted":false,"cfgversion":"v3"}')
+				f:close()
+				inform._reload_if_changed(st, {config = {}}, token)
+				assert_eq(reconciles, 1, "an external write still reloads")
+				assert_eq(st.cfgversion, "v3", "external contents loaded")
+			end)
+			inform._firewall = orig_fw
+			if not ok then error(err, 0) end
 		end
 	},
 	{
@@ -3537,6 +4153,64 @@ return {
 				inform._sysinfo.radio_stats, inform._sysinfo.phy_frequencies = o_stats, o_freqs
 				inform._scan_jobs = {}
 			end)
+		end
+	},
+	{
+		name = "inform: _hairpin_resync checks once a minute, whether or not the ebtables block was pushed",
+		fn = function()
+			local orig = {l2 = inform._l2guard, time = inform._time}
+			local calls = 0
+			inform._l2guard = {reconcile_hairpin = function() calls = calls + 1; return 1 end}
+			local now = 5000
+			inform._time = function() return now end
+			inform._hairpin_next = 0
+			local first = inform._hairpin_resync()
+			now = now + 10
+			local too_soon = inform._hairpin_resync()
+			now = now + 60
+			inform._hairpin_resync()
+			inform._l2guard = {}
+			now = now + 60
+			local absent = inform._hairpin_resync()
+			inform._l2guard, inform._time = orig.l2, orig.time
+			inform._hairpin_next = 0
+			assert_eq(first, 1, "first tick checks")
+			assert_eq(too_soon, 0, "rate-limited")
+			assert_eq(calls, 2, "checked again after a minute")
+			assert_eq(absent, 0, "a module without it is tolerated")
+		end
+	},
+	{
+		name = "inform: _usteer_filter_resync rebuilds once a minute only when wanted-ness or the VAPs change",
+		fn = function()
+			local orig = {u = inform._usteer, time = inform._time, live = inform._l2guard_live_ifnames}
+			local builds, wanted, live = {}, true, {"phy0-ap0"}
+			inform._usteer = {
+				filter_wanted = function() return wanted end,
+				reconcile_filter = function(names) builds[#builds + 1] = table.concat(names, " ") end,
+			}
+			inform._l2guard_live_ifnames = function() return live end
+			local now = 9000
+			inform._time = function() return now end
+			inform._usteer_filter_next, inform._usteer_filter_built = 0, nil
+			local r = {}
+			local function step(dt) now = now + dt; r[#r + 1] = inform._usteer_filter_resync() end
+			step(0)                        -- 1 builds
+			step(10)                       -- 2 rate-limited
+			step(60)                       -- 3 unchanged: no rebuild
+			live = {"phy0-ap0", "phy1-ap0"}
+			step(60)                       -- 4 VAP added: rebuild
+			live = {}
+			step(60)                       -- 5 wireless not answering: leave it
+			live = {"phy0-ap0", "phy1-ap0"}
+			wanted = false
+			step(60)                       -- 6 usteer stopped: remove
+			step(60)                       -- 7 still stopped: nothing
+			inform._usteer, inform._time, inform._l2guard_live_ifnames = orig.u, orig.time, orig.live
+			inform._usteer_filter_next, inform._usteer_filter_built = 0, nil
+			assert_eq(table.concat(builds, "|"), "phy0-ap0|phy0-ap0 phy1-ap0|", "built, extended, removed")
+			assert_true(r[1] and not r[2] and not r[3] and r[4] and not r[5] and r[6] and not r[7],
+				"returns whether it rebuilt")
 		end
 	},
 	{
@@ -4128,6 +4802,52 @@ return {
 		end
 	},
 	{
+		name = "inform: a bodiless 802.11k copy keeps what the beacon body proved",
+		fn = function()
+			-- hostapd sends each report on its control socket (with the body)
+			-- and then over ubus (without). Landing in a later drain, the ubus
+			-- copy replaced the named record: live, every row of one office
+			-- report reached the controller unnamed, at 20 MHz on channel 42.
+			local orig = {rrm = inform._rrmscan, time = inform._time,
+				nxt = inform._rrm_next_request, cache = inform._rrm_cache}
+			local clock = 5000
+			inform._time = function() return clock end
+			inform._rrm_collector_next = math.huge
+			inform._rrm_next_request = math.huge
+			inform._rrm_cache = {}
+			local batch
+			inform._rrmscan = {harvest = function() return batch, {} end}
+			local cfg = {config = {rrm_enrichment = true}}
+
+			batch = {{bssid = "00:00:5e:00:53:01", band = "na", channel = 48, bw = 80,
+				essid = "Neighbour", security = "wpa2", signal = -70, seen_at = clock, body = true}}
+			inform._rrm_tick(cfg)
+			clock = clock + 10
+			batch = {{bssid = "00:00:5e:00:53:01", band = "na", channel = 42,
+				signal = -71, seen_at = clock}}
+			inform._rrm_tick(cfg)
+			local n = inform._rrm_neighbours[1]
+			assert_eq(n.essid, "Neighbour", "name kept")
+			assert_eq(n.security, "wpa2", "security kept")
+			assert_eq(n.bw, 80, "width kept")
+			assert_eq(n.channel, 48, "primary kept, not the centre channel")
+			assert_eq(n.signal, -71, "the fresher level is taken")
+			assert_eq(n.seen_at, clock, "and so is the fresher time")
+
+			-- With nothing proven before, a bodiless record stands as it is.
+			inform._rrm_cache = {}
+			batch = {{bssid = "00:00:5e:00:53:01", band = "na", channel = 42,
+				signal = -71, seen_at = clock}}
+			inform._rrm_tick(cfg)
+			assert_nil(inform._rrm_neighbours[1].essid, "no body, no name")
+			assert_eq(inform._rrm_neighbours[1].channel, 42, "fixed-field channel")
+
+			inform._rrmscan, inform._time = orig.rrm, orig.time
+			inform._rrm_next_request, inform._rrm_cache = orig.nxt, orig.cache
+			inform._rrm_collector_next = 0
+		end
+	},
+	{
 		name = "inform: a config push re-arms the RRM collector check immediately",
 		fn = function()
 			-- `wifi reload` takes every hostapd object the collector subscribed
@@ -4355,14 +5075,20 @@ return {
 			led._reset("/tmp/openuf_test_unhandled_inform.json")
 			local st = sample_state({adopted = true})
 			local resp = '{"_type":"setparam","mgmt_cfg":"cfgversion=abc\nstun_url=stun://192.0.2.4:3478/\n'
+				.. 'selfrun_guest_mode=pass\n'
 				.. 'capability=notif,notif-assoc-stat\nradius_secret=hunter2\nauthkey=00112233445566778899aabbccddeeff\nuse_aes_gcm=true\n"}'
 			inform.handle_response(resp, st)
-			local e = led.entry("mgmt_cfg", "stun_url")
-			assert_not_nil(e, "stun_url recorded")
-			assert_eq(e.payload.sample, "stun_url", "example key")
-			assert_eq(e.payload.value, "stun://192.0.2.4:3478/", "value kept -- it is the research target")
+			-- selfrun_guest_mode belongs to the guest portal, which this tree
+			-- does not implement: the honest state is "counted as ignored".
+			local e = led.entry("mgmt_cfg", "selfrun_guest_mode")
+			assert_not_nil(e, "selfrun_guest_mode recorded")
+			assert_eq(e.payload.sample, "selfrun_guest_mode", "example key")
+			assert_eq(e.payload.value, "pass", "value kept -- it is the research target")
 			assert_eq(e.payload.occurrences, 1, "occurrences in that blob")
-			assert_eq(led.entry("mgmt_cfg", "capability").payload.value, "notif,notif-assoc-stat", "capability too")
+			assert_nil(led.entry("mgmt_cfg", "stun_url"),
+				"stun_url is recognized since the STUN client (stun.lua) reads it")
+			assert_nil(led.entry("mgmt_cfg", "capability"),
+				"capability is recognized since the connection tracker reads notif-assoc-stat from it")
 			assert_eq(led.entry("mgmt_cfg", "radius_secret").payload.value, "<redacted>",
 				"an unknown key with a secret-looking name keeps its name and loses its value")
 			assert_nil(led.entry("mgmt_cfg", "authkey"), "authkey is recognized, never recorded")
@@ -4767,6 +5493,1138 @@ return {
 				assert_nil(inform._pending_notif, "and not kept")
 			end)
 			inform.build_packet, inform.http_post, inform._pending_notif = o_bp, o_post, o_pending
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- Every 10.x controller sends capability=notif,notif-assoc-stat in
+		-- mgmt_cfg (captured on 10.4.57, PROTOCOL-VALIDATION.md). It is the
+		-- only signal that the controller wants STA_ASSOC_TRACKER notifs.
+		name = "inform: mgmt_cfg capability notif-assoc-stat is recorded and persisted",
+		fn = function()
+			local st = sample_state()
+			inform._rrm_collector_next = 999
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"capability=notif,notif-assoc-stat\\ncfgversion=2\\n"}', st)
+			assert_eq(st.notif_assoc_stat, true, "asked")
+			assert_eq(inform._rrm_collector_next, 0, "the collector check is re-armed at once")
+			inform._rrm_collector_next = 999
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"capability=notif,notif-assoc-stat\\ncfgversion=2\\n"}', st)
+			assert_eq(inform._rrm_collector_next, 999, "but not by a setparam that changes nothing")
+			inform._rrm_collector_next = 0
+			assert_eq(state.FIELDS.notif_assoc_stat, "boolean", "survives a restart (setparam is not resent)")
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"capability=notif\\ncfgversion=3\\n"}', st)
+			assert_eq(st.notif_assoc_stat, false, "a capability list without it turns it off")
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"capability=notif,notif-assoc-stat-v2\\ncfgversion=4\\n"}', st)
+			assert_eq(st.notif_assoc_stat, false, "matched as a whole list item, not a prefix")
+		end
+	},
+	{
+		-- The controller builds mgmt_cfg whole and always appends stun_url
+		-- (com.ubnt.service.config mgmt builder, 10.6).
+		name = "inform: mgmt_cfg stun_url is recorded, persisted, and cleared by its absence",
+		fn = function()
+			local st = sample_state()
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"cfgversion=2\\nstun_url=stun://192.0.2.4:3478/\\ninform_url=http://192.0.2.4:8080/inform\\n"}', st)
+			assert_eq(st.stun_url, "stun://192.0.2.4:3478/", "recorded")
+			assert_eq(state.FIELDS.stun_url, "string", "survives a restart (setparam is not resent)")
+			inform.handle_response('{"_type":"noop","interval":10}', st)
+			assert_eq(st.stun_url, "stun://192.0.2.4:3478/", "a noop leaves it")
+			inform.handle_response('{"_type":"setparam","system_cfg":"netconf.1.ip=192.0.2.3\\n"}', st)
+			assert_eq(st.stun_url, "stun://192.0.2.4:3478/", "a setparam without mgmt_cfg leaves it")
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"cfgversion=3\\nstun_url=\\n"}', st)
+			assert_eq(st.stun_url, nil, "empty: no STUN")
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"cfgversion=4\\nstun_url=stun://192.0.2.4:3478/\\n"}', st)
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"cfgversion=5\\n"}', st)
+			assert_eq(st.stun_url, nil, "a mgmt_cfg without it: no STUN")
+		end
+	},
+	{
+		name = "inform: the STUN client runs only while managed and a server is named",
+		fn = function()
+			local sent, opened, closed = {}, 0, 0
+			local fake = {dns = {toip = function(h) return h end}}
+			fake.udp = function()
+				opened = opened + 1
+				return {
+					setsockname = function() return 1 end,
+					settimeout = function() end,
+					sendto = function(_, data, ip, port) sent[#sent + 1] = ip .. ":" .. port; return #data end,
+					receive = function() return nil, "timeout" end,
+					close = function() closed = closed + 1 end,
+				}
+			end
+			local rs, rt, rf = inform._socket, inform._time, inform._inform_fails
+			local now = 1000
+			inform._socket = function() return fake end
+			inform._time = function() return now end
+			inform._stun_c, inform._inform_fails = nil, 0
+			local ok, err = pcall(function()
+				local st = sample_state({adopted = false, stun_url = "stun://192.0.2.4:3478/"})
+				inform._stun_tick(st)
+				assert_eq(opened, 0, "not adopted: no socket")
+				st.adopted = true
+				st.stun_url = nil
+				inform._stun_tick(st)
+				assert_eq(opened, 0, "no stun_url: no socket")
+				st.stun_url = "stun://192.0.2.4:3478/"
+				inform._stun_tick(st)
+				assert_eq(opened, 1, "managed with a server: opened")
+				assert_eq(sent[1], "192.0.2.4:3478", "and a Binding Request sent")
+				now = now + 10
+				inform._stun_tick(st)
+				assert_eq(#sent, 1, "not again within 30 s")
+				now = now + 20
+				inform._stun_tick(st)
+				assert_eq(#sent, 2, "again at 30 s")
+				-- No longer managed (a Forget): the socket goes. (Upstream also
+				-- closes it during guest selfrun, which this tree has not adopted.)
+				st.adopted = false
+				inform._stun_tick(st)
+				assert_eq(closed, 1, "not adopted any more: closed")
+				st.adopted = true
+				inform._stun_tick(st)
+				assert_eq(opened, 2, "managed again: reopened")
+			end)
+			inform._socket, inform._time, inform._inform_fails = rs, rt, rf
+			inform._stun_c = nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: _idle ends early on a STUN connection request, not on other packets",
+		fn = function()
+			local t = 0
+			local queue = {}
+			local stun_sock = {receive = function()
+				local p = table.remove(queue, 1)
+				if p then return p end
+				return nil, "timeout"
+			end}
+			local selects = {}
+			local sock = {
+				gettime = function() return t end,
+				select = function(r, _, timeout)
+					selects[#selects + 1] = #(r or {}) .. "@" .. timeout
+					-- A packet arrives 2 s in.
+					if #queue > 0 then t = t + 2; return {stun_sock} end
+					t = t + timeout
+					return {}
+				end,
+			}
+			local wake = string.char(0x88, 0x88) .. string.rep(string.char(0), 18)
+			local junk = string.char(0x01, 0x11) .. string.rep(string.char(0), 18)
+			inform._guest_server = nil
+			inform._stun_c = {sock = stun_sock}
+			local ok, err = pcall(function()
+				queue = {wake}
+				inform._idle(sock, 10)
+				assert_eq(t, 2, "woke at the request")
+				assert_eq(table.concat(selects, ","), "1@10", "one wait on the STUN socket")
+				t, selects, queue = 0, {}, {junk}
+				inform._idle(sock, 10)
+				assert_eq(t, 10, "an error response does not wake it")
+				assert_eq(table.concat(selects, ","), "1@10,1@8", "it keeps waiting for the rest")
+			end)
+			inform._stun_c = nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: connection tracking needs the controller's ask and no conf.lua veto",
+		fn = function()
+			assert_false(inform._assoc_enabled({}, {config = {}}), "not asked")
+			assert_true(inform._assoc_enabled({notif_assoc_stat = true}, {config = {}}), "asked, conf silent")
+			assert_true(inform._assoc_enabled({notif_assoc_stat = true}, nil), "no cfg at all")
+			assert_false(inform._assoc_enabled({notif_assoc_stat = true}, {config = {assoc_tracker = false}}),
+				"conf.lua assoc_tracker = false wins")
+		end
+	},
+	{
+		-- The envelope proven in the lab against 10.4.57: inform_as_notif,
+		-- notif_reason "event", notif_payload, beside the device identity.
+		-- The controller's noop reply carries no interval and must not reach
+		-- handle_response.
+		name = "inform: queued notifs go out one POST each in the notif envelope",
+		fn = function()
+			local at = inform._assoctrack
+			local o_post, o_build, o_hr = inform.http_post, inform.build_packet, inform.handle_response
+			local o_queue, o_ident = at._queue, inform._notif_identity
+			local bodies, hr_calls = {}, 0
+			inform.build_packet = function(json) return json end
+			inform.http_post = function(url, pkt) bodies[#bodies + 1] = cjson.decode(pkt); return "noop" end
+			inform.handle_response = function() hr_calls = hr_calls + 1 end
+			inform._notif_identity = {mac = "00:00:5e:00:53:20", model = "U6IW", version = "6.8.2.15592"}
+			at._queue = {{message_type = "STA_ASSOC_TRACKER", n = 1}, {message_type = "STA_ASSOC_TRACKER", n = 2}}
+			local sent = inform._send_notifs({adopted = true, inform_url = "http://x/inform"})
+			local q_after = #at._queue
+			inform.http_post, inform.build_packet, inform.handle_response = o_post, o_build, o_hr
+			at._queue, inform._notif_identity = o_queue, o_ident
+			assert_eq(sent, 2, "both sent")
+			assert_eq(q_after, 0, "queue drained")
+			assert_eq(#bodies, 2, "one POST per notif")
+			local b = bodies[1]
+			assert_eq(b.inform_as_notif, true, "inform_as_notif")
+			assert_eq(b.notif_reason, "event", "notif_reason")
+			assert_eq(b.notif_payload.message_type, "STA_ASSOC_TRACKER", "payload")
+			assert_eq(b.notif_payload.n, 1, "in queue order")
+			assert_eq(b.mac, "00:00:5e:00:53:20", "device identity")
+			assert_eq(b.version, "6.8.2.15592", "firmware version")
+			assert_eq(type(b.time), "number", "time")
+			assert_eq(hr_calls, 0, "the noop reply never reaches handle_response")
+		end
+	},
+	{
+		name = "inform: a failed notif POST puts it and the rest back in order",
+		fn = function()
+			local at = inform._assoctrack
+			local o_post, o_build = inform.http_post, inform.build_packet
+			local o_queue, o_ident = at._queue, inform._notif_identity
+			local posts = 0
+			inform.build_packet = function(json) return json end
+			inform.http_post = function() posts = posts + 1; if posts == 2 then return nil, "timeout" end return "noop" end
+			inform._notif_identity = {mac = "00:00:5e:00:53:20"}
+			at._queue = {{n = 1}, {n = 2}, {n = 3}}
+			local sent = inform._send_notifs({adopted = true, inform_url = "http://x/inform"})
+			local q = at._queue
+			inform.http_post, inform.build_packet = o_post, o_build
+			at._queue, inform._notif_identity = o_queue, o_ident
+			assert_eq(sent, 1, "one got through")
+			assert_eq(#q, 2, "two kept")
+			assert_eq(q[1].n, 2, "the failed one first")
+			assert_eq(q[2].n, 3, "then the one never tried")
+		end
+	},
+	{
+		-- A roam report spoils with delay; a funnel event does not. Roams go
+		-- first, and a failed roam POST stops the funnel too (the controller
+		-- is not answering).
+		name = "inform: roam reports are sent before funnel notifs",
+		fn = function()
+			local at = inform._assoctrack
+			local o_post, o_build = inform.http_post, inform.build_packet
+			local o_queue, o_roams, o_ident = at._queue, at._roam_queue, inform._notif_identity
+			local sent, fail_on = {}, nil
+			inform.build_packet = function(json) return json end
+			inform.http_post = function(_, pkt)
+				local p = cjson.decode(pkt).notif_payload
+				if p.n == fail_on then return nil, "timeout" end
+				sent[#sent + 1] = p.n
+				return "noop"
+			end
+			inform._notif_identity = {mac = "00:00:5e:00:53:20"}
+			local ok, err = pcall(function()
+				at._queue = {{n = "f1"}}
+				at._roam_queue = {{n = "r1"}, {n = "r2"}}
+				assert_eq(inform._send_notifs({adopted = true, inform_url = "u"}), 3, "all three")
+				assert_eq(table.concat(sent, ","), "r1,r2,f1", "roams first")
+				sent, fail_on = {}, "r2"
+				at._queue = {{n = "f1"}}
+				at._roam_queue = {{n = "r1"}, {n = "r2"}}
+				assert_eq(inform._send_notifs({adopted = true, inform_url = "u"}), 1, "stopped at the failure")
+				assert_eq(#at._roam_queue, 1, "the failed roam kept")
+				assert_eq(at._roam_queue[1].n, "r2", "the failed roam kept")
+				assert_eq(#at._queue, 1, "the funnel event not tried")
+			end)
+			inform.http_post, inform.build_packet = o_post, o_build
+			at._queue, at._roam_queue, inform._notif_identity = o_queue, o_roams, o_ident
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: _idle looks at the collector every ROAM_POLL_S while roam reports are on",
+		fn = function()
+			local t = 0
+			local selects = {}
+			local sock = {
+				gettime = function() return t end,
+				select = function(r, _, timeout)
+					selects[#selects + 1] = timeout
+					t = t + timeout
+					return {}
+				end,
+			}
+			local o_poll, polls = inform._roam_poll, 0
+			inform._roam_poll = function() polls = polls + 1 end
+			inform._guest_server, inform._stun_c = nil, nil
+			inform._roam_fast = true
+			local ok, err = pcall(inform._idle, sock, 1)
+			inform._roam_fast = false
+			inform._roam_poll = o_poll
+			if not ok then error(err, 0) end
+			assert_eq(#selects, 4, "1 s in 0.25 s steps")
+			assert_eq(selects[1], inform.ROAM_POLL_S, "step")
+			assert_eq(polls, 4, "a look after each")
+			assert_eq(t, 1, "and still returns at the deadline")
+		end
+	},
+	{
+		-- Between heartbeats _idle drains the collector's file itself: the
+		-- roam report goes out at once, the funnel's notif waits for the
+		-- heartbeat, and the drained lines are kept for the beacon-report
+		-- harvest the heartbeat still runs.
+		name = "inform: _roam_poll sends roam reports at once and keeps the lines for the harvest",
+		fn = function()
+			local at = inform._assoctrack
+			local STA = "00:00:5e:00:53:01"
+			local file = os.tmpname()
+			local lines = table.concat({
+				'100.10 { "assoc": {"address":"' .. STA .. '","ifname":"phy1-ap0","signal":-61} }',
+				'100.22 { "sta-authorized": {"address":"' .. STA .. '","ifname":"phy1-ap0","auth-alg":"ft"} }',
+				'100.30 { "beacon-report": {"address":"' .. STA .. '"} }',
+			}, "\n") .. "\n"
+			local f = io.open(file, "w"); f:write(lines); f:close()
+			local o = {rrm = inform._rrmscan, post = inform.http_post, build = inform.build_packet,
+				ident = inform._notif_identity, map = inform._vap_by_ifname}
+			local posts = {}
+			inform._rrmscan = {EVENT_FILE = file, drain = function()
+				local h = io.open(file, "r"); local b = h:read("*a"); h:close()
+				h = io.open(file, "w"); h:close()
+				return b
+			end}
+			inform.build_packet = function(json) return json end
+			inform.http_post = function(_, pkt) posts[#posts + 1] = cjson.decode(pkt).notif_payload; return "noop" end
+			inform._notif_identity = {mac = "00:00:5e:00:53:20"}
+			inform._vap_by_ifname = {["phy1-ap0"] = "openuf_radio1_home"}
+			inform._roam_st = {adopted = true, inform_url = "u"}
+			at._stas, at._queue, at._here, at._roamed, at._roam_queue = {}, {}, {}, {}, {}
+			inform._pre_blob, inform._roam_keep = nil, true
+			local ok, err = pcall(function()
+				inform._roam_poll()
+				assert_eq(#posts, 1, "one POST")
+				assert_eq(posts[1].event_type, "association", "the roam report")
+				assert_eq(posts[1].auth_algo, "ft", "auth_algo")
+				assert_true(at._stas[STA] ~= nil, "the funnel's attempt is open, for the heartbeat")
+				assert_eq(table.concat(inform._pre_blob), lines, "lines kept for the harvest")
+				inform._roam_poll()
+				assert_eq(#posts, 1, "an empty file costs nothing more")
+				-- A second drain is appended as its own chunk, not recopied.
+				local h = io.open(file, "w"); h:write("101.00 tail0\n"); h:close()
+				inform._roam_poll()
+				assert_eq(#inform._pre_blob, 2, "one chunk per drain")
+			end)
+			-- The heartbeat folds those lines into what harvest sees.
+			local harvested
+			inform._rrmscan = {drain = function() return "200.0 tail\n" end,
+				harvest = function(b) harvested = b; return {}, {} end,
+				collector_ensure = function() end}
+			local o_time = inform._time
+			inform._time = function() return 1 end
+			inform._rrm_collector_next = 10
+			local ok2, err2 = pcall(inform._rrm_tick, {config = {rrm_enrichment = true}}, {notif_assoc_stat = true})
+			inform._time = o_time
+			inform._rrm_collector_next = 0
+			os.remove(file)
+			inform._rrmscan, inform.http_post, inform.build_packet = o.rrm, o.post, o.build
+			inform._notif_identity, inform._vap_by_ifname = o.ident, o.map
+			inform._roam_st, inform._roam_fast, inform._pre_blob, inform._roam_keep = nil, false, nil, false
+			at._stas, at._queue, at._here, at._roamed, at._roam_queue = {}, {}, {}, {}, {}
+			if not ok then error(err, 0) end
+			if not ok2 then error(err2, 0) end
+			assert_eq(harvested, lines .. "101.00 tail0\n200.0 tail\n", "pre-drained lines first, then the heartbeat's own")
+		end
+	},
+	{
+		-- With enrichment off nothing harvests beacon reports, so _idle's
+		-- drains are ingested for the roam reports and then let go.
+		name = "inform: _roam_poll keeps nothing for a harvest that will not run",
+		fn = function()
+			local at = inform._assoctrack
+			local file = os.tmpname()
+			local f = io.open(file, "w")
+			f:write('100.10 { "disassoc": {"address":"00:00:5e:00:53:01","ifname":"phy1-ap0"} }\n')
+			f:close()
+			local o_rrm = inform._rrmscan
+			inform._rrmscan = {EVENT_FILE = file, drain = function()
+				local h = io.open(file, "r"); local b = h:read("*a"); h:close()
+				h = io.open(file, "w"); h:close()
+				return b
+			end, collector_ensure = function() end}
+			at._stas, at._queue, at._here, at._roamed, at._roam_queue = {}, {}, {}, {}, {}
+			local o_time = inform._time
+			inform._time = function() return 1 end
+			inform._rrm_collector_next = 10
+			local ok, err = pcall(function()
+				inform._pre_blob = {"stale"}
+				inform._rrm_tick({config = {rrm_enrichment = false}}, {notif_assoc_stat = true})
+				assert_true(inform._roam_fast, "connection tracking still polls")
+				assert_eq(inform._pre_blob, nil, "a kept chunk list is dropped once enrichment is off")
+				f = io.open(file, "w"); f:write("101.00 x\n"); f:close()
+				inform._roam_poll()
+				assert_eq(inform._pre_blob, nil, "and nothing new is kept")
+			end)
+			inform._time = o_time
+			inform._rrm_collector_next = 0
+			os.remove(file)
+			inform._rrmscan = o_rrm
+			inform._roam_st, inform._roam_fast, inform._pre_blob, inform._roam_keep = nil, false, nil, false
+			at._stas, at._queue, at._here, at._roamed, at._roam_queue = {}, {}, {}, {}, {}
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: nothing is sent before adoption",
+		fn = function()
+			local at = inform._assoctrack
+			local o_post, o_queue, o_ident = inform.http_post, at._queue, inform._notif_identity
+			local posts = 0
+			inform.http_post = function() posts = posts + 1; return "noop" end
+			inform._notif_identity = {mac = "00:00:5e:00:53:20"}
+			at._queue = {{n = 1}}
+			inform._send_notifs({adopted = false, inform_url = "http://x/inform"})
+			local left = #at._queue
+			inform.http_post, at._queue, inform._notif_identity = o_post, o_queue, o_ident
+			assert_eq(posts, 0, "no POST")
+			assert_eq(left, 1, "kept for later")
+		end
+	},
+	{
+		-- With rrm_enrichment off, the collector used to be stopped. It is
+		-- now also connection tracking's source, so it must keep running --
+		-- with the table installed BEFORE the collector whose auth hook
+		-- writes into it -- while beacon-report harvesting stays off.
+		name = "inform: connection tracking keeps the collector alive with rrm_enrichment off",
+		fn = function()
+			local o_rrm, o_at, o_time = inform._rrmscan, inform._assoctrack, inform._time
+			local calls, ensure_opts = {}, nil
+			local at = setmetatable({
+				ensure_table = function() calls[#calls + 1] = "table"; return true end,
+				teardown = function() calls[#calls + 1] = "teardown" end,
+			}, {__index = o_at})
+			inform._assoctrack = at
+			inform._rrmscan = {
+				collector_running = function() return true end,
+				collector_stop    = function() calls[#calls + 1] = "stop" end,
+				collector_ensure  = function(opts) calls[#calls + 1] = "collector"; ensure_opts = opts end,
+				drain             = function() return "" end,
+				harvest           = function() calls[#calls + 1] = "harvest"; return {}, {} end,
+			}
+			inform._time = function() return 5000 end
+			inform._rrm_collector_next = 0
+			inform._assoc_installed = false
+			local st = {notif_assoc_stat = true}
+			inform._rrm_tick({config = {rrm_enrichment = false}}, st)
+			local seq = table.concat(calls, ",")
+
+			-- Then the controller stops asking: table and hook go away.
+			calls = {}
+			inform._rrm_collector_next = 0
+			inform._rrm_tick({config = {rrm_enrichment = false}}, {})
+			local seq2 = table.concat(calls, ",")
+
+			inform._rrmscan, inform._assoctrack, inform._time = o_rrm, o_at, o_time
+			inform._rrm_collector_next = 0
+			inform._assoc_installed = false
+			assert_eq(seq, "table,collector", "table first, then the collector; no stop, no harvest")
+			assert_true(ensure_opts and type(ensure_opts.on_auth) == "string"
+				and ensure_opts.on_auth:find("destroy element", 1, true) ~= nil,
+				"the collector carries the auth hook")
+			assert_eq(seq2, "stop,teardown", "neither consumer wants it: collector stopped, table removed")
+		end
+	},
+	{
+		-- Notifs ride on the heartbeat: after a state inform succeeded, and
+		-- only when the controller asked for them.
+		name = "inform: a heartbeat sends queued notifs after the state inform, when asked",
+		fn = function()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				handle_response = inform.handle_response, send = inform._send_notifs,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
+			}
+			local order = {}
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() order[#order + 1] = "state"; return "body" end
+			inform.parse_packet = function() return '{"_type":"noop"}' end
+			inform.handle_response = function() return false end
+			inform._send_notifs = function() order[#order + 1] = "notifs"; return 0 end
+
+			local ctx = {interval = 10, backoff = 10}
+			inform._tick({inform_url = "u", notif_assoc_stat = true}, {config = {}}, nil, ctx)
+			local asked = table.concat(order, ",")
+			order = {}
+			inform._tick({inform_url = "u"}, {config = {}}, nil, ctx)
+			local not_asked = table.concat(order, ",")
+
+			inform.build_json, inform.build_packet, inform.http_post,
+				inform.parse_packet, inform.handle_response, inform._send_notifs,
+				inform._reload_if_changed, inform._rrm_tick =
+				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet,
+				orig.handle_response, orig.send, orig.reload, orig.rrm
+			assert_eq(asked, "state,notifs", "state inform first, then the notifs")
+			assert_eq(not_asked, "state", "nothing when the controller did not ask")
+		end
+	},
+	{
+		name = "inform: each cycle collects the heartbeat's garbage before it waits",
+		fn = function()
+			local orig = {tick = inform._tick, idle = inform._idle, gc = inform._collectgarbage}
+			local seq = {}
+			local wait = 10
+			inform._tick = function() seq[#seq + 1] = "tick"; return wait end
+			inform._collectgarbage = function(opt) seq[#seq + 1] = "gc " .. tostring(opt) end
+			inform._idle = function(_, w) seq[#seq + 1] = "idle " .. w end
+			inform._cycle({}, nil, nil, {}, {})
+			wait = 0
+			inform._cycle({}, nil, nil, {}, {})
+			inform._tick, inform._idle, inform._collectgarbage = orig.tick, orig.idle, orig.gc
+			assert_eq(table.concat(seq, ", "),
+				"tick, gc collect, idle 10, tick, gc collect",
+				"a full collection after every tick, before the wait; none when there is no wait")
+			assert_true(inform._collectgarbage == collectgarbage, "the real collector by default")
+		end
+	},
+	{
+		name = "inform packet: a WiFi Blackout Schedule is parsed, stored on the wifi-iface and removed when off",
+		fn = function()
+			-- The lab push (10.4.57, fw_caps 0x1110, 2026-10-10): blackout 22:00
+			-- for 540 min Mon-Fri, 13:00 for 60 and 15:30 for 30 on Saturday.
+			-- Clearing schedule_with_duration left schedule_enabled=disabled
+			-- and no schedule_* key.
+			local ucihelper, db = new_apply_env()
+			local base = "aaa.1.ssid=net\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "wireless.1.ssid=net\nwireless.1.parent=radio0\n"
+			local on_blob = base .. "wireless.1.schedule_enabled=enabled\n"
+				.. "wireless.1.schedule_sun.0=0000-2359\n"
+				.. "wireless.1.schedule_mon.0=0000-2200\nwireless.1.schedule_mon.1=0000-2200\n"
+				.. "wireless.1.schedule_tue.0=0700-2200\nwireless.1.schedule_tue.1=0700-2200\n"
+				.. "wireless.1.schedule_wed.0=0700-2200\nwireless.1.schedule_wed.1=0700-2200\n"
+				.. "wireless.1.schedule_thu.0=0700-2200\nwireless.1.schedule_thu.1=0700-2200\n"
+				.. "wireless.1.schedule_fri.0=0700-2200\nwireless.1.schedule_fri.1=0700-2200\n"
+				.. "wireless.1.schedule_sat.0=0700-1300\nwireless.1.schedule_sat.1=1400-1530\n"
+				.. "wireless.1.schedule_sat.2=1600-2359\n"
+			local off_blob = base .. "wireless.1.schedule_enabled=disabled\n"
+			local function iface()
+				for _, sec in pairs(db.wireless or {}) do
+					if sec[".type"] == "wifi-iface" and sec.ssid == "net" then return sec end
+				end
+			end
+
+			local rt, vt = inform._parse_wifi_system_cfg(on_blob)
+			assert_eq(#vt[1].schedule_lines, 14, "seven days, fourteen lines")
+			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
+			assert_eq(iface().openuf_schedule, "0=00:00-23:59 1=00:00-22:00 1=00:00-22:00 "
+				.. "2=07:00-22:00 2=07:00-22:00 3=07:00-22:00 3=07:00-22:00 4=07:00-22:00 "
+				.. "4=07:00-22:00 5=07:00-22:00 5=07:00-22:00 6=07:00-13:00 6=14:00-15:30 "
+				.. "6=16:00-23:59", "push 1: stored")
+
+			rt, vt = inform._parse_wifi_system_cfg(off_blob)
+			assert_eq(vt[1].schedule_lines, false, "push 2: no schedule")
+			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
+			assert_nil(iface().openuf_schedule, "push 2: removed")
+		end
+	},
+	{
+		name = "inform packet: _sched_resync follows the schedule once the clock is trusted, with a ledger",
+		fn = function()
+			local ws = inform._wlansched
+			local orig = {uci = inform._ucihelper, time = inform._time, save = inform._state.save,
+				ct = inform._clock_trusted, exec = ws._exec, read = ws._read_file, popen = ws._popen}
+			ws._popen = function() return "OK\n" end
+			local links = {["phy0-ap1"] = true}
+			ws._read_file = function(p)
+				local n = p:match("^/sys/class/net/(.-)/flags$")
+				if links[n] == nil then return nil end
+				return links[n] and "0x1003\n" or "0x1002\n"
+			end
+			ws._exec = function(c)
+				local n, how = c:match("^ip link set dev (%S+) (%a+)")
+				links[n] = (how == "up")
+				return 0
+			end
+			local lines = {"0=00:00-23:59", "1=00:00-22:00", "2=07:00-22:00", "3=07:00-22:00",
+				"4=07:00-22:00", "5=07:00-22:00", "6=07:00-23:59"}
+			local vaps = {{ifnames = {"phy0-ap1"}, lines = lines}}
+			inform._ucihelper = {schedule_vaps = function() return vaps end}
+			local trusted = false
+			inform._clock_trusted = function() return trusted end
+			local saves = 0
+			inform._state.save = function() saves = saves + 1 end
+			-- 2026-10-12 is a Monday; os.time and os.date both use local time.
+			local now
+			inform._time = function() return now end
+			local mon_2300 = os.time({year = 2026, month = 10, day = 12, hour = 23, min = 0})
+			local tue_0700 = os.time({year = 2026, month = 10, day = 13, hour = 7, min = 0})
+			local ok, err = pcall(function()
+				local st = {}
+				now = mon_2300
+				local log = with_stderr(function() assert_false(inform._sched_resync(st), "clock unknown") end)
+				assert_true(links["phy0-ap1"], "unknown clock: left up")
+				assert_eq(log, "", "quiet")
+				trusted = true
+				-- Monday 06:00 is inside Monday's 00:00-22:00 but outside
+				-- Tuesday's 07:00-22:00: pins the weekday (os.date's wday is 1-based).
+				now = os.time({year = 2026, month = 10, day = 12, hour = 6, min = 0})
+				assert_false(inform._sched_resync(st), "Monday 06:00: on-time, nothing to do")
+				assert_true(links["phy0-ap1"], "still up")
+				now = mon_2300
+				log = with_stderr(function() assert_true(inform._sched_resync(st), "changed") end)
+				assert_false(links["phy0-ap1"], "Monday 23:00: down")
+				assert_eq(table.concat(st.sched_vaps_down, " "), "phy0-ap1", "ledger")
+				assert_eq(saves, 1, "saved")
+				assert_true(log:find("down: phy0-ap1", 1, true) ~= nil, "said so")
+				assert_false(inform._sched_resync(st), "again: nothing")
+				assert_eq(saves, 1, "nothing saved")
+				now = tue_0700
+				log = with_stderr(function() assert_true(inform._sched_resync(st), "changed") end)
+				assert_true(links["phy0-ap1"], "Tuesday 07:00: up")
+				assert_nil(st.sched_vaps_down, "ledger cleared")
+				assert_eq(saves, 2, "saved")
+				assert_true(log:find("up: phy0-ap1", 1, true) ~= nil, "said so")
+
+				-- (Upstream also checks that a guest WLAN selfrun holds down stays
+				-- down when its schedule ends; the guest portal is not adopted here.)
+
+				-- The schedule removed while it held a WLAN down: brought back up.
+				now = mon_2300
+				links["phy0-ap1"] = true
+				with_stderr(function() inform._sched_resync(st) end)
+				assert_false(links["phy0-ap1"], "down")
+				vaps = {}
+				with_stderr(function() inform._sched_resync(st) end)
+				assert_true(links["phy0-ap1"], "no schedule any more: up")
+				assert_nil(st.sched_vaps_down, "ledger cleared")
+				local n = saves
+				assert_false(inform._sched_resync(st), "no schedule, no ledger: nothing")
+				assert_eq(saves, n, "nothing saved")
+			end)
+			inform._ucihelper, inform._time, inform._state.save, inform._clock_trusted =
+				orig.uci, orig.time, orig.save, orig.ct
+			ws._exec, ws._read_file, ws._popen = orig.exec, orig.read, orig.popen
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: the clock is trusted once the controller's time agrees, via a /var/run mark",
+		fn = function()
+			local orig = {time = inform._time, read = inform._read_file, touch = inform._touch}
+			local files = {}
+			inform._read_file = function(p) return files[p] end
+			inform._touch = function(p) files[p] = "" end
+			inform._time = function() return 1791664111 end
+			inform._clock_ok = false
+			local ok, err = pcall(function()
+				assert_false(inform._clock_trusted(), "no mark yet")
+				inform._note_server_time({server_time_in_utc = "1791660000000"})
+				assert_false(inform._clock_trusted(), "68 minutes apart: not trusted")
+				inform._note_server_time({})
+				assert_false(inform._clock_trusted(), "no server time: not trusted")
+				inform._note_server_time({server_time_in_utc = "1791664106669"})
+				assert_true(inform._clock_trusted(), "5 s apart: trusted")
+				assert_eq(files[inform.CLOCK_OK_FILE], "", "marked")
+				-- A restart of openUF (not a reboot) finds the mark.
+				inform._clock_ok = false
+				assert_true(inform._clock_trusted(), "after a restart")
+				files = {}
+				inform._clock_ok = false
+				assert_false(inform._clock_trusted(), "after a reboot: unknown again")
+			end)
+			inform._time, inform._read_file, inform._touch = orig.time, orig.read, orig.touch
+			inform._clock_ok = false
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: handle_response notes the controller's clock",
+		fn = function()
+			local orig = inform._note_server_time
+			local seen
+			inform._note_server_time = function(resp) seen = resp.server_time_in_utc end
+			local ok, err = pcall(function()
+				inform.handle_response('{"_type":"noop","interval":10,"server_time_in_utc":"1791664106669"}',
+					sample_state(), nil)
+			end)
+			inform._note_server_time = orig
+			if not ok then error(err, 0) end
+			assert_eq(seen, "1791664106669", "passed on")
+		end
+	},
+	{
+		name = "inform packet: every heartbeat runs the schedule check",
+		fn = function()
+			local orig = {sr = inform._sched_resync, rl = inform._reload_if_changed, rrm = inform._rrm_tick,
+				bj = inform.build_json}
+			local ran = 0
+			inform._sched_resync = function() ran = ran + 1 end
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() error("stop here") end
+			local ok, err = pcall(function()
+				with_stderr(function() inform._tick({}, nil, nil, {interval = 10}) end)
+			end)
+			inform._sched_resync, inform._reload_if_changed, inform._rrm_tick, inform.build_json =
+				orig.sr, orig.rl, orig.rrm, orig.bj
+			if not ok then error(err, 0) end
+			assert_eq(ran, 1, "before build_json")
+		end
+	},
+	{
+		name = "inform packet: every heartbeat applies the speed limits after build_json, not without it",
+		fn = function()
+			local orig = {sh = inform._shaper_resync, rl = inform._reload_if_changed, rrm = inform._rrm_tick,
+				bj = inform.build_json, bp = inform.build_packet}
+			local order = {}
+			inform._shaper_resync = function() order[#order + 1] = "shaper" end
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() order[#order + 1] = "build_json"; return "{}" end
+			inform.build_packet = function() error("stop here") end
+			local ok, err = pcall(function()
+				with_stderr(function() inform._tick({}, nil, nil, {interval = 10}) end)
+				assert_eq(table.concat(order, ","), "build_json,shaper", "on the stations it just listed")
+				order = {}
+				inform.build_json = function() error("no payload") end
+				with_stderr(function() inform._tick({}, nil, nil, {interval = 10}) end)
+				assert_eq(#order, 0, "no fresh listing: nothing applied")
+			end)
+			inform._shaper_resync, inform._reload_if_changed, inform._rrm_tick, inform.build_json,
+				inform.build_packet = orig.sh, orig.rl, orig.rrm, orig.bj, orig.bp
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- The controller sends rate-update for any client with a WiFi Speed
+		-- Limit profile of its own, not only portal guests: each time it
+		-- connects, roams or reconnects (the qos_policy_applied latch) and
+		-- when the profile changes. update_sta_qosrate takes it for any
+		-- associated station, and -1 lifts that station's cap.
+		name = "inform packet: rate-update keeps a per-client limit for any associated client",
+		fn = function()
+			local save, saves = inform._state.save, 0
+			inform._state.save = function() saves = saves + 1 end
+			local real_sh, synced = inform._shaper, {}
+			inform._shaper = {sync = function(d) synced[#synced + 1] = d end}
+			local ok, err = pcall(function()
+				local st = sample_state({})
+				inform._shape_obs = {complete = true,
+					by_ifname = {wlan0 = {down = 5000, macs = {"de:ad:be:ef:00:02"}}},
+					where = {["de:ad:be:ef:00:02"] = "wlan0"}, conn = {["de:ad:be:ef:00:02"] = 30}}
+				local function upd(mac, ul, dl)
+					inform.handle_response(cjson.encode({_type = "cmd", cmd = "rate-update", mac = mac,
+						ul_max = ul, ul_min = 64, dl_max = dl, dl_min = 64}), st)
+				end
+				upd("DE:AD:BE:EF:00:02", 2048, 4096)
+				assert_eq(st.sta_rates["de:ad:be:ef:00:02"].up, 2048, "upload kbps")
+				assert_eq(st.sta_rates["de:ad:be:ef:00:02"].down, 4096, "download kbps")
+				assert_eq(saves, 1, "persisted")
+				assert_eq(#synced, 1, "applied at once")
+				assert_eq(synced[1].wlan0.down.stas["de:ad:be:ef:00:02"], 4096, "replacing the WLAN's 5000")
+				upd("de:ad:be:ef:00:02", 2048, 4096)
+				assert_eq(saves, 1, "a repeat changes nothing")
+				assert_eq(#synced, 1, "and applies nothing")
+				upd("de:ad:be:ef:00:02", -1, 4096)
+				assert_eq(st.sta_rates["de:ad:be:ef:00:02"].up, -1, "-1 is kept: it lifts the cap")
+				upd("de:ad:be:ef:00:02", nil, 0)
+				assert_eq(st.sta_rates["de:ad:be:ef:00:02"].down, -1, "missing or 0 is -1 too")
+				assert_eq(synced[#synced].wlan0.down.stas["de:ad:be:ef:00:02"], 0, "uncapped under the WLAN limit")
+				local before = saves
+				upd("de:ad:be:ef:00:03", 2048, 4096)
+				assert_nil(st.sta_rates["de:ad:be:ef:00:03"], "not associated here: ignored, as the firmware does")
+				assert_eq(saves, before, "not even stored")
+				upd("x;reboot", 1, 1)
+				assert_nil(st.sta_rates["x;reboot"])
+				inform._shape_obs = nil
+				upd("de:ad:be:ef:00:04", 512, 512)
+				assert_eq(st.sta_rates["de:ad:be:ef:00:04"].down, 512, "before the first heartbeat: kept")
+			end)
+			inform._state.save, inform._shaper, inform._shape_obs = save, real_sh, nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: _shaper_resync shapes each listed client at its WLAN's limit or its own",
+		fn = function()
+			local save = inform._state.save
+			inform._state.save = function() end
+			local real_sh, got = inform._shaper, nil
+			inform._shaper = {sync = function(d) got = d end}
+			local ok, err = pcall(function()
+				local A, B, C = "de:ad:be:ef:00:0a", "de:ad:be:ef:00:0b", "de:ad:be:ef:00:0c"
+				local st = sample_state({sta_rates = {[B] = {up = 300, down = -1}, [C] = {up = -1, down = 200}}})
+				inform._sta_conn = {}
+				inform._shape_obs = {complete = true,
+					by_ifname = {
+						wlan0 = {down = 5000, up = 1000, macs = {A, B}},
+						wlan1 = {macs = {C}},
+						wlan2 = {macs = {"de:ad:be:ef:00:0d"}},
+					},
+					where = {[A] = "wlan0", [B] = "wlan0", [C] = "wlan1", ["de:ad:be:ef:00:0d"] = "wlan2"},
+					conn = {[A] = 10, [B] = 10, [C] = 10}}
+				assert_true(inform._shaper_resync(st))
+				assert_eq(got.wlan0.down.default, 5000, "the WLAN's limit for new clients")
+				assert_eq(got.wlan0.down.stas[A], 5000, "A at the WLAN's limit, in its own class")
+				assert_eq(got.wlan0.up.stas[A], 1000)
+				assert_eq(got.wlan0.down.stas[B], 0, "B's own -1: uncapped")
+				assert_eq(got.wlan0.up.stas[B], 300, "B's own upload limit")
+				assert_eq(got.wlan1.down.stas[C], 200, "a client's download limit alone, on an unlimited WLAN")
+				assert_nil(got.wlan1.down.default)
+				assert_nil(got.wlan2, "no limit anywhere: not shaped")
+			end)
+			inform._state.save, inform._shaper, inform._shape_obs = save, real_sh, nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: a client's own limit lasts one association",
+		fn = function()
+			local save, saves = inform._state.save, 0
+			inform._state.save = function() saves = saves + 1 end
+			local real_sh = inform._shaper
+			inform._shaper = {sync = function() end}
+			local ok, err = pcall(function()
+				local A, B = "de:ad:be:ef:00:0a", "de:ad:be:ef:00:0b"
+				local st = sample_state({sta_rates = {[A] = {up = 300, down = 300}, [B] = {up = 1, down = 1}}})
+				inform._sta_conn = {}
+				local function obs(complete, conn)
+					local where, macs = {}, {}
+					for m in pairs(conn) do where[m] = "wlan0"; macs[#macs + 1] = m end
+					inform._shape_obs = {complete = complete, by_ifname = {wlan0 = {macs = macs}},
+						where = where, conn = conn}
+				end
+				obs(true, {[A] = 100, [B] = 100})
+				inform._shaper_resync(st)
+				assert_true(st.sta_rates[A] and st.sta_rates[B], "both still connected")
+				assert_eq(saves, 0, "nothing changed")
+				obs(true, {[A] = 110})
+				inform._shaper_resync(st)
+				assert_nil(st.sta_rates[B], "B left: its limit goes")
+				assert_eq(saves, 1, "persisted")
+				obs(false, {})
+				inform._shaper_resync(st)
+				assert_true(st.sta_rates[A] ~= nil, "a listing that failed proves nothing: A's kept")
+				obs(true, {[A] = 5})
+				inform._shaper_resync(st)
+				assert_nil(st.sta_rates, "A's connected time dropped: a new association, the limit goes")
+			end)
+			inform._state.save, inform._shaper, inform._shape_obs = save, real_sh, nil
+			inform._sta_conn = {}
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: build_json hands each netdev's stations and limits to the shaper",
+		fn = function()
+			local orig_si, orig_uci = inform._sysinfo, inform._ucihelper
+			local ok, err = pcall(function()
+				inform._sysinfo = setmetatable({sta_table = function(ifname)
+					if ifname == "wlan0" then return {{mac = "DE:AD:BE:EF:00:0A", connected_sec = 42}} end
+					if ifname == "wlan0.10" then return {{mac = "de:ad:be:ef:00:0b", connected_sec = 7}} end
+					error("iw failed")
+				end}, {__index = orig_si})
+				inform._ucihelper = setmetatable({
+					get_vap_table = function()
+						return {
+							{name = "a", essid = "corp", radio_name = "radio0", radio = "ng", usage = "user",
+							 ratelimit_down = 5000, ratelimit_up = 1000},
+							{name = "b", essid = "iot", radio_name = "radio0", radio = "ng", usage = "user"},
+						}
+					end,
+					get_ifnames_for_vap = function(_, essid)
+						if essid == "corp" then return {"wlan0", "wlan0.10"} end
+						return {"wlan1"}
+					end,
+				}, {__index = orig_uci})
+				local out = cjson.decode(inform.build_json(sample_state({adopted = true}), {}, nil))
+				local o = inform._shape_obs
+				assert_eq(o.by_ifname.wlan0.down, 5000, "the WLAN's limits on each of its netdevs")
+				assert_eq(o.by_ifname["wlan0.10"].up, 1000, "a VLAN netdev's too")
+				assert_eq(o.by_ifname.wlan0.macs[1], "de:ad:be:ef:00:0a", "lower-cased")
+				assert_eq(o.where["de:ad:be:ef:00:0b"], "wlan0.10", "shaped where it is listed")
+				assert_eq(o.conn["de:ad:be:ef:00:0a"], 42)
+				assert_false(o.complete, "wlan1's listing failed")
+				for _, v in ipairs(out.vap_table or {}) do
+					assert_nil(v.ratelimit_down, "internal: never sent")
+					assert_nil(v.ratelimit_up)
+				end
+			end)
+			inform._sysinfo, inform._ucihelper, inform._shape_obs = orig_si, orig_uci, nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: Forget puts UCI back the way it was before the controller's push",
+		fn = function()
+			-- UniFi firmware answers setdefault with a factory reset (no SSID,
+			-- no VLAN); openUF undoes its own writes instead of rebooting.
+			local ucihelper, db = new_apply_env()
+			local c = ucihelper._uci.cursor()
+			c:set("wireless", "radio0", "channel", "6")
+			-- The user's own SSID, which use_only_unifi_wlan switches off.
+			c:set("wireless", "default_radio0", "wifi-iface")
+			c:set("wireless", "default_radio0", "device", "radio0")
+			c:set("wireless", "default_radio0", "ssid", "Mine")
+			-- A hand-tuned rate on a radio openUF never rate-managed.
+			c:set("wireless", "radio1", "basic_rate", {"6000"})
+			c:set("network", "lan", "interface")
+			c:set("network", "lan", "device", "br-lan")
+			local function dump(t)
+				local out = {}
+				for cfgname, secs in pairs(t) do
+					for name, sec in pairs(secs) do
+						for k, v in pairs(sec) do
+							if type(v) == "table" then v = table.concat(v, ",") end
+							out[#out + 1] = cfgname .. "." .. name .. "." .. k .. "=" .. tostring(v)
+						end
+					end
+				end
+				table.sort(out)
+				return table.concat(out, "\n")
+			end
+			local before = dump(db)
+
+			local cmds = {}
+			ucihelper._run_cmd = function(cmd) cmds[#cmds + 1] = cmd; return true end
+			local rt, vt = inform._parse_wifi_system_cfg(
+				"radio.1.phyname=radio0\nradio.1.channel=6\n"
+				.. "stamgr.1.status=true\nstamgr.1.radio=ng\n"
+				.. "stamgr.1.minrssi.status=true\nstamgr.1.minrssi.rssi=15\n"
+				.. "stamgr.1.loadbalance.status=true\nstamgr.1.loadbalance.maxsta=3\n"
+				.. "aaa.1.ssid=IoT\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "aaa.1.br.devname=br0.20\n"
+				.. "wireless.1.ssid=IoT\nwireless.1.parent=radio0\n"
+				.. "wireless.1.minrate_data=12000\nwireless.1.minrate_cck_rates.status=false\n")
+			ucihelper.apply_config({radio_table = rt, vap_table = vt},
+				{net = {lan_cpueth = "eth0"}, config = {use_only_unifi_wlan = true}})
+			assert_eq(db.wireless.default_radio0.disabled, "1", "push: the user's SSID is off")
+			assert_eq(db.wireless.radio0.openuf_rates, "1", "push: rates managed")
+			assert_eq(db.wireless.radio0.loadbalance_maxsta, "3", "push: load balance cap")
+			assert_not_nil(db.network.openuf_vlan20, "push: the VLAN 20 network")
+
+			cmds = {}
+			ucihelper.forget()
+			-- set_wlan_exclusive leaves its stamp at "0", which is how it
+			-- marks a section it switched back on.
+			assert_eq(db.wireless.default_radio0.disabled, "0", "the user's SSID is back on")
+			db.wireless.default_radio0.disabled = nil
+			db.wireless.default_radio0.openuf_autodisabled = nil
+			assert_eq(dump(db), before, "every other write is undone, hand-made options kept")
+			assert_eq(table.concat(cmds, "|"),
+				"/etc/init.d/network reload 2>/dev/null|wifi reload", "network, then wireless")
+		end
+	},
+	{
+		name = "inform: Forget tears down per-port VLANs, steering and the LED from the pre-reset state",
+		fn = function()
+			local orig = {sv = inform._switchvlan, us = inform._usteer, uh = inform._ucihelper,
+				led = inform._led, fw = inform._firewall, mtime = inform._state_mtime,
+				load = inform._state.load, stderr = io.stderr}
+			io.stderr = {write = function() end}
+			local restored, steer, forgot, leds = {}, {}, 0, {}
+			inform._switchvlan = {restore = function(st) restored[#restored + 1] = st.dsa_brlan_ports end}
+			inform._usteer = {set_enabled = function(on, _, ra) steer[#steer + 1] = tostring(on) .. tostring(ra) end}
+			inform._ucihelper = {forget = function() forgot = forgot + 1 end}
+			inform._led = {set_enabled = function(_, on) leds[#leds + 1] = on end}
+			inform._firewall = {reconcile = function() end}
+			local ledger = {lan = "lan1 lan2"}
+			local ok, err = pcall(inform.handle_response, '{"_type":"setdefault"}',
+				sample_state({adopted = true, dsa_brlan_ports = ledger, led_enabled = false}),
+				{config = {}})
+			inform._state_mtime = function() return "reset" end
+			inform._state.load = function() return {adopted = false} end
+			local ok2, err2 = pcall(inform._reload_if_changed,
+				sample_state({adopted = true, dsa_brlan_ports = ledger, led_enabled = true}),
+				{config = {}}, "before")
+			inform._switchvlan, inform._usteer, inform._ucihelper, inform._led, inform._firewall,
+				inform._state_mtime, inform._state.load, io.stderr =
+				orig.sv, orig.us, orig.uh, orig.led, orig.fw, orig.mtime, orig.load, orig.stderr
+			inform._controller_interval = nil
+			assert_true(ok, tostring(err))
+			assert_true(ok2, tostring(err2))
+			assert_eq(#restored, 2, "per-port VLAN restored on both paths")
+			assert_eq(restored[1], ledger, "from the ledger the reset cleared (setdefault)")
+			assert_eq(restored[2], ledger, "and on reset-inform")
+			assert_eq(table.concat(steer, ","), "falsefalse,falsefalse", "band steering and roaming assistant off")
+			assert_eq(forgot, 2, "the WLANs are torn down on both paths")
+			assert_eq(#leds, 1, "only the LED the controller switched off comes back on")
+			assert_true(leds[1], "on")
+		end
+	},
+	{
+		name = "inform: an 11k-scan request with two due times fires each once when it falls due",
+		fn = function()
+			local FILE = "/tmp/openuf_test_scan_request2"
+			local orig = {file = inform.SCAN_REQUEST_FILE, time = inform._time,
+				scan = inform._scan_all_radios, stderr = io.stderr}
+			io.stderr = {write = function() end}
+			local scans = 0
+			inform._scan_all_radios = function() scans = scans + 1; return 2 end
+			inform.SCAN_REQUEST_FILE = FILE
+			local now = 1000000
+			inform._time = function() return now end
+			local function request(...)
+				local f = io.open(FILE, "w"); f:write(table.concat({...}, "\n"), "\n"); f:close()
+			end
+			local function left()
+				local f = io.open(FILE, "r")
+				if not f then return nil end
+				local b = f:read("*a"); f:close(); return b
+			end
+
+			-- Due at +100 s and +2000 s.
+			os.remove(FILE)
+			request(now + 100, now + 2000)
+			local early = inform._maybe_scan_neighbours({}, {last_scan = 0})
+			local early_left = left()
+			now = now + 100
+			local first = inform._maybe_scan_neighbours({}, {last_scan = 0})
+			local first_left = left()
+			now = now + 10
+			local between = inform._maybe_scan_neighbours({}, {last_scan = 0})
+			now = now + 1890 + 5
+			local second = inform._maybe_scan_neighbours({}, {last_scan = 0})
+			local second_gone = left() == nil
+			local scans_two = scans
+
+			-- Both overdue on one heartbeat (a long blocking cycle): one scan.
+			scans = 0
+			request(now - 30, now - 5)
+			local both = inform._maybe_scan_neighbours({}, {last_scan = 0})
+			local both_gone = left() == nil
+			local scans_both = scans
+
+			-- One stale, one pending: the stale one is dropped, the other kept.
+			scans = 0
+			request(now - 3600, now + 50)
+			local mixed = inform._maybe_scan_neighbours({}, {last_scan = 0})
+			local mixed_left = left()
+
+			-- Beyond the window (clock stepped back): dropped, not kept for hours.
+			request(now + 7200)
+			local ahead = inform._maybe_scan_neighbours({}, {last_scan = 0})
+			local ahead_gone = left() == nil
+
+			os.remove(FILE)
+			inform.SCAN_REQUEST_FILE, inform._time, inform._scan_all_radios, io.stderr =
+				orig.file, orig.time, orig.scan, orig.stderr
+
+			assert_false(early, "nothing before the first due time")
+			assert_eq(early_left, (1000000 + 100) .. "\n" .. (1000000 + 2000) .. "\n",
+				"and the file is left untouched")
+			assert_true(first, "the first due time scans")
+			assert_eq(first_left, (1000000 + 2000) .. "\n", "and only the second is kept")
+			assert_false(between, "nothing between the two")
+			assert_true(second, "the second due time scans")
+			assert_true(second_gone, "then the request is gone")
+			assert_eq(scans_two, 2, "two scans in all")
+			assert_true(both, "two overdue times scan")
+			assert_eq(scans_both, 1, "once")
+			assert_true(both_gone, "and both are consumed")
+			assert_false(mixed, "a stale time does not scan")
+			assert_eq(mixed_left, tostring(now + 50) .. "\n", "the pending one survives")
+			assert_false(ahead, "a time beyond the window does not scan")
+			assert_true(ahead_gone, "and is dropped")
+		end
+	},
+	{
+		name = "inform: with no rrm_request_interval set, beacon requests go out every ten minutes",
+		fn = function()
+			-- Ten minutes, by decision: the Environment view follows the air
+			-- as closely as a client can tell us. (Upstream went hourly because
+			-- hostapd logs every report as ~15 hex lines; the log cost is
+			-- accepted here and rrm_request_interval is the knob.)
+			local orig_rrm, orig_sysinfo, orig_time =
+				inform._rrmscan, inform._sysinfo, inform._time
+			local asked, t = 0, 1000
+			inform._time = function() return t end
+			inform._rrmscan = {
+				collector_ensure = function() end,
+				harvest          = function() return {}, {aa = true} end,
+				hostapd_objects  = function() return {"hostapd.wlan0"} end,
+				capable_stations = function() return {"aa:bb:cc:dd:ee:01"} end,
+				request          = function() asked = asked + 1 end,
+			}
+			inform._sysinfo = setmetatable({
+				radio_caps = function() return {channel = 36} end,
+			}, {__index = orig_sysinfo})
+
+			local cfg = {config = {rrm_enrichment = true}}
+			inform._rrm_asked = {}
+			inform._rrm_next_request = 0
+			inform._rrm_rr = 0
+
+			inform._rrm_tick(cfg)
+			t = 1000 + 300;  inform._rrm_tick(cfg)
+			t = 1000 + 599;  inform._rrm_tick(cfg)
+			local before_ten = asked
+			t = 1000 + 600;  inform._rrm_tick(cfg)
+
+			inform._rrmscan, inform._sysinfo, inform._time = orig_rrm, orig_sysinfo, orig_time
+			inform._rrm_asked = {}
+			inform._rrm_next_request = 0
+
+			assert_eq(before_ten, 1, "one request in the first ten minutes")
+			assert_eq(asked, 2, "the next one ten minutes later")
+		end
+	},
+	{
+		name = "inform: a tick's resyncs and payload share one netifd answer",
+		fn = function()
+			-- Once a minute the l2guard and usteer resyncs each asked netifd
+			-- for the VAP list, and the payload asked again: three
+			-- `ubus call network.wireless status` on the same tick.
+			local u = dofile("openuf/ucihelper.lua")
+			local orig = {
+				ucihelper = inform._ucihelper,
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
+				l2guard = inform._l2guard, usteer = inform._usteer, popen = u._popen,
+				l2_next = inform._l2guard_next, us_next = inform._usteer_filter_next,
+				us_built = inform._usteer_filter_built,
+			}
+			local asks = 0
+			u._popen = function(cmd)
+				if cmd:find("network.wireless status", 1, true) then
+					asks = asks + 1
+					return '{"radio0":{"interfaces":[{"ifname":"phy0-ap0","config":{"ssid":"a"}}]}}'
+				end
+				return ""
+			end
+			inform._ucihelper = u
+			local in_payload
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function()
+				in_payload = u.get_ifname_for_radio("radio0")
+				return "{}"
+			end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() return "body" end
+			inform.parse_packet = function() return '{"_type":"noop"}' end
+			inform._l2guard = {reconcile = function() end}
+			inform._usteer = {reconcile_filter = function() end, filter_wanted = function() return true end}
+			local st = {inform_url = "http://unifi:8080/inform",
+				l2guard = {bpdu = true, ifnames = {"phy0-ap0"}}}
+			local ctx = {interval = 10, backoff = 10}
+			local ok, err = pcall(function()
+				inform._l2guard_next, inform._usteer_filter_next = 0, 0
+				inform._usteer_filter_built = nil
+				inform._tick(st, nil, nil, ctx)
+				assert_eq(in_payload, "phy0-ap0", "the payload resolved its VAP")
+				assert_eq(inform._usteer_filter_built, "phy0-ap0", "the usteer resync ran")
+				assert_eq(asks, 1, "one ubus call for the resyncs and the payload")
+				assert_false(u._ws_pass, "the pass ends with the payload")
+
+				inform._tick(st, nil, nil, ctx)
+				assert_eq(asks, 2, "the next tick asks again")
+
+				-- A pass a throw left open holds the last cycle's answer.
+				u.begin_pass()
+				u.get_ifname_for_radio("radio0")
+				asks = 0
+				inform._tick(st, nil, nil, ctx)
+				assert_eq(asks, 1, "a tick never joins a pass left open")
+			end)
+			inform.build_json, inform.build_packet, inform.http_post, inform.parse_packet =
+				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet
+			inform._reload_if_changed, inform._rrm_tick = orig.reload, orig.rrm
+			inform._l2guard, inform._usteer, u._popen = orig.l2guard, orig.usteer, orig.popen
+			inform._l2guard_next, inform._usteer_filter_next = orig.l2_next, orig.us_next
+			inform._usteer_filter_built = orig.us_built
+			inform._ucihelper = orig.ucihelper
 			if not ok then error(err, 0) end
 		end
 	},

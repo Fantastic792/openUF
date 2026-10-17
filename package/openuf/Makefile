@@ -34,7 +34,7 @@ define Package/openuf
   URL:=https://github.com/yesrab/openUF
   DEPENDS:=+lua +luabitop +lua-cjson +luasocket +lua-openssl +libuci-lua +iw \
 	+lldpd +ip-bridge +hostapd-utils +usteer +nftables +kmod-nft-bridge \
-	+tc-tiny +kmod-sched-act-police
+	+tc-tiny +kmod-ifb +kmod-sched-act-police
   PKGARCH:=all
 endef
 
@@ -62,7 +62,7 @@ endef
 # Sourced by default_postinst on the device (never at image build time):
 # the one dependency the package cannot pull in is named, with the fix.
 define Package/openuf/postinst-pkg
-if [ -z "$${IPKG_INSTROOT}" ] && ! grep -q bss_transition /usr/sbin/hostapd 2>/dev/null; then
+if [ -z "$${IPKG_INSTROOT}" ] && ! grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/dev/null; then
 	echo "openuf: hostapd is a basic build (no 802.11v): openUF will not start until a full wpad is installed." >&2
 	echo "openuf: run 'openuf deps --install', or use the button on LuCI's openUF overview." >&2
 fi

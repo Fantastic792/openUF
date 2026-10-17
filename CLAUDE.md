@@ -65,7 +65,9 @@ tag.
 operators (`luabitop` provides `bit.*`), `break` must be the last statement in its block,
 no `\xNN` string escapes (5.1 silently emits the letters `x07`; use `string.char`), no `\z`,
 `\u{}` or `table.unpack`. `os.execute` returns a number on 5.1, and both 0 and 1 are truthy,
-so normalise before branching. A newer local Lua will happily accept code the device rejects —
+so normalise before branching. OpenWrt's Lua carries the LNUM patch: `string.format("%d", x)`
+**raises** for |x| > 2^31 on the APs (reproduced on AP2's 5.1.5, 2026-10-18) and not on CI or a
+dev machine -- format epochs in ms and other large values with `%.0f`. A newer local Lua will happily accept code the device rejects —
 CI is the check, and AP2's own `lua` (`loadfile` on each module) is the quickest local one.
 `openuf/lib/lib.lua` is what lets one source tree run on both: it resolves `bit` from
 luabitop, bit32, or native 5.3+ operators built with `load()` so 5.1 never parses the
@@ -535,14 +537,24 @@ factory reset.
   at the very TOP of `build_json` (before the uptime read) and closed on return and in
   `_tick`; inside it `/proc/net/arp`, `/tmp/dhcp.leases`, `/proc/uptime`, each `bridge fdb
   show br` dump and the bucketed ARL/FDB (`hosts_by_port`) are read once per payload.
-  `bridge_of` and the default gateway's IP are cached for `UPLINK_TTL` (300 s) -- **a nil
-  answer is never cached**, boot is full of them -- and `forget_uplink_cache` runs after a
-  switch push because openUF moving a socket is the one change the TTL cannot see. The
-  parsed phy caps live in the same cache entry as the dump's text. `lldp.neighbors` is
-  cached 60 s, empty answers never. `ucihelper.get_radio_table` reads the wifi-device rows
-  once per pass and hands each caller a COPY. Outside a pass everything reads every time,
-  which is what keeps per-test stubs independent; harnesses reset `_uplink_cache`,
-  `_phy_info_cache`, the lldp caches and call `end_pass()` on the way in and out.
+  The default gateway's IP is cached for `UPLINK_TTL` (300 s) -- **a nil answer is never
+  cached**, boot is full of them -- and `forget_uplink_cache` still runs after a switch
+  push. `bridge_of` is a live sysfs read since 2026-10-18 (`util.master_of` on
+  `/sys/class/net/<if>/master/uevent`, no `readlink` fork, no memo); `lan_bridge` resolves
+  `lan_cpueth` whether it names the bridge or a socket, and is what inform's DSA paths
+  call. The parsed phy caps live in the same cache entry as the dump's text.
+  `lldp.neighbors` is **not cached at all** (the user's rule, 2026-10-18: anything the
+  controller shows follows reality on the next heartbeat; upstream's 60 s cache, empty
+  answers included, was taken out again -- one lldpctl fork per 10 s is the accepted
+  price, and the same rule applies to any future "report it a bit later to save a fork"
+  trade -- the sibling-tag cache and the hourly beacon requests went the same way; the
+  goal is the most accurate emulation, so what a real AP does by design, like spreading
+  the nightly 11k-scan over the hour, is kept). `ucihelper.get_radio_table` reads the wifi-device rows once
+  per pass and hands each caller a COPY. `ucihelper.begin_pass` is nest-safe: `_tick`
+  opens ONE pass from its first resync to the payload and `build_json` only closes a pass
+  it opened itself. Outside a pass everything reads every time, which is what keeps
+  per-test stubs independent; harnesses reset `_uplink_cache`, `_phy_info_cache`, the lldp
+  caches and call `end_pass()` on the way in and out.
 - **Kernel state is rebuilt at startup, because the controller never re-pushes it.** After
   a reboot `cfgversion` matches and the reply is `noop` with no `system_cfg`, so anything
   applied only from `apply_config`/`handle_response` is gone for good. `M.run` therefore
@@ -557,6 +569,50 @@ factory reset.
   reboot bug.
   The IP branch of `handle_response` saves state the moment the interface changes, not at
   the tail: anything after it can raise, and the startup reapply reads what was saved.
+- **Every openUF nft table is rebuilt in ONE `nft -f` transaction** (`util.nft_apply`):
+  `add table` + `delete table` + the new statements in one commit, so a blocked client
+  never slips through between the delete and the rebuild. When the batch is rejected the
+  statements are re-run one at a time so the warning can name the rule (the
+  `kmod-nft-bridge` case). Tests capture the script through the runner's `fake_nft`,
+  which expands `nft -f <file>` into its statements; a module's `_exec` seam gets the
+  `nft -f` line, never the statements.
+- **The controller's wake-up is STUN, and openUF is the client** (`stun.lua`): a Binding
+  Request with CHANGE-REQUEST every 30 s to `mgmt_cfg stun_url`, the mapped address out as
+  `connect_request_ip`/`port`, and a type `0x8888` datagram back is "inform now". `_idle`
+  is the one place that sleeps: it selects on the STUN socket, and while roam reports are
+  on it also wakes every 250 ms for `_roam_poll`. Keep every wait inside `_idle`.
+- **AirView needs two things the heartbeat cannot give.** Connection stages
+  (`assoctrack.lua`) ride in `notif` informs, one POST each, sent only after the state
+  inform and only while `st.notif_assoc_stat` (from `mgmt_cfg capability`) is true; roam
+  reports must reach the controller within a second of the event, which is what the
+  250 ms poll is for. `wifi_caps2` `0x2000` is claimed ONLY while those reports are sent --
+  with it and no reports every roam vanishes from the controller. `_post_notif` (a finished
+  RF sweep) is the other notif path; the two share nothing but the envelope.
+- **WiFi Speed Limit is per client and lives in `_shaper_resync`, not in the UCI reapply.**
+  `build_json` records which netdev lists which station (`M._shape_obs`), the heartbeat
+  hands that plus `st.sta_rates` (the `rate-update` ledger, one association each) to
+  `shaper.sync`, which diffs per station. `reapply_runtime_rules` rebuilds the blocker
+  only. Upload is queued on an IFB device (`kmod-ifb`); without it the police fallback
+  needs `kmod-sched-act-police`, and both are listed in every installer.
+- **Minimum RSSI and Load balance are per radio and decided after the station loop.**
+  The loop only collects observations (`minrssi_obs`, `lb_obs`); `minrssi.tick` kicks
+  after HOLD (30 s) below, `loadbalance.kicks` the most idle above the cap, and
+  `rf_config` writes hostapd's refusal (`rssi_reject_assoc_rssi`, stamped
+  `openuf_minrssi`). A backhaul VAP's stations are never observed.
+- **A WLAN Schedule waits for a trusted clock.** `_sched_resync` does nothing until a
+  controller answer's `server_time_in_utc` agrees with the local clock within 60 s, which
+  touches `/var/run/openuf.clock-ok` (survives a restart, not a reboot). The firmware
+  keeps every VAP up until NTP has set the time; so does this. Down is the netdev; up is
+  the netdev plus hostapd `STOP_AP` + `update_beacon`, or the BSS stays silent.
+- **A `setdefault` or `reset-inform` now tears the controller's config DOWN**
+  (`_forget_controller(prev, cfg)` → `ucihelper.forget`, `switchvlan.restore`, usteer
+  off, LED back). It needs the state from BEFORE the reset (`prev`): the per-port VLAN
+  ledgers live only there. Anything new a controller leaves in UCI or the kernel belongs
+  in `ucihelper.forget` or that function.
+- **`_sta_stats_cache` holds the Experience window only** (`satisfaction.lua`): the
+  firmware's retry term moves once a minute from the `_mov` deltas, so a station scores
+  100 on retries until its first full minute. Capacity, throughput, linkscore and
+  multicast are not sent any more; a test that expects them is wrong.
 - **AES-GCM is mandatory for adoption.** UniFi 10.4.57 will not finish provisioning a
   device that has never sent a genuine GCM inform; a CBC-only device sticks at "Adopting"
   forever. Needs a GCM-capable `lua-openssl`; the `openssl` CLI fallback is CBC-only.
@@ -612,7 +668,8 @@ factory reset.
   radio off — provisioning "succeeds" and not one SSID is on the air. `setup.sh` clears it.
 - **`wpad-basic-*` has no `bss_transition` at all** and errors the radio down, and every
   controller-pushed WLAN carries it. A full build is therefore **not negotiable**: the init
-  script refuses to start without one (`grep bss_transition /usr/sbin/hostapd`), the
+  script refuses to start without one (`grep wnm_sleep_mode /usr/sbin/hostapd` -- not
+  `bss_transition`, which a basic build also carries as event names; upstream's correction), the
   package's postinst-pkg says so, and `hook/openuf-deps.sh` (`openuf deps --install`,
   `/usr/sbin/openuf-deps`, the LuCI overview's button) does the swap -- `del` the basic
   build, `add` the full one of the same crypto library, put the basic one back if that
@@ -723,16 +780,25 @@ C5; this tree's lab is a JioRouter AX6000, DSA, `lan_cpueth = "br-lan"`). Upstre
 work from here (their 2026-09-25 commits were our 09-15 sysconf/l2guard/interval work,
 credited to this repo), so diff before assuming a commit is new.
 
-- **Last review point: `08d0003` (upstream v0.9.3), sync 3 on 2026-09-28.** Earlier: the
-  fork point `677f732`; sync 1 (2026-09-06) to `d7d7e21`; sync 2 (2026-09-13) to `12b4db0`.
+- **Last review point: `2f263f3` (upstream v0.11.0), sync 4 on 2026-10-18.** Earlier: the
+  fork point `677f732`; sync 1 (2026-09-06) to `d7d7e21`; sync 2 (2026-09-13) to `12b4db0`;
+  sync 3 (2026-09-28) to `08d0003` (v0.9.3). Not adopted from sync 4 and still waiting:
+  the guest portal (REVERSE-ENGINEERING.md backlog row 24).
   Each sync is a row in REVERSE-ENGINEERING.md's session log and an "Adopted from upstream,
   <date>" section in PROTOCOL-VALIDATION.md -- update both, and move this line.
-- **Mechanics that worked in sync 3:** `git add -A` first, then per commit
-  `git show --format= <c> -- openuf/ tests/ | git apply --3way` (the fetch puts their blobs
-  in our object store, so most hunks apply and conflicts are small); copy wholesale any file
-  that is byte-identical to the last sync point; run `eval $(luarocks path --local)` before
-  both the suite and `sh tools/dist.sh --verify`; use `sh -c` for word-split loops (zsh does
-  not split an unquoted variable -- the same trap bites `jadx $list`, hand it `$(cat list)`).
+- **Mechanics that worked in syncs 3 and 4:** `git add -A` first, then per commit **in
+  upstream's order** `git show --format= <c> -- openuf/ tests/ ':!openuf/guestportal.lua'
+  ':!tests/test_guestportal.lua' | git apply --3way` (the fetch puts their blobs in our
+  object store; applying out of order makes later hunks miss their context). `inform.lua`
+  has diverged enough that a hunk often lands as a "displaced block" (ours N lines, theirs
+  a whole unrelated region): resolve those as ours and port the change by hand. Test files:
+  resolve displaced blocks as ours, then port upstream's NEW tests by name (an entry is a
+  one-tab `\t{` ... `\t},` block; a modified test is removed and re-added from their file).
+  Copy wholesale any module byte-identical to the last sync point. Gate on the suite's
+  final `Results:` line -- every per-file summary also says `0 failed`. Run `eval $(luarocks
+  path --local)` before both the suite and `sh tools/dist.sh --verify`; use `sh -c` for
+  word-split loops (zsh does not split an unquoted variable). A compile check on AP2 is
+  `lua -e 'assert(loadfile("<f>"))'` per file -- `lua -e ... <f>` runs `<f>` as a script.
 - **Fixtures** in both trees use RFC 7042 MACs (`00:00:5e:00:53:xx`) and RFC 5737 addresses
   (`192.0.2.x`). Pre-commit scan: `git diff --cached -U0 | grep "^+" | grep -nE
   "192\.168\.|([0-9a-f]{2}:){5}[0-9a-f]{2}"` -- `192.168.1.100` "testap" and `11:22:33`-style
@@ -758,9 +824,23 @@ openuf/
   netconfig.lua     controller-pushed IP settings   led.lua  Locate / LED toggle
   firewall.lua      client block/unblock (nft `bridge openuf`)
   bcfilter.lua      multicast/broadcast blocker (nft `bridge openuf_bcfilt`)
-  shaper.lua        WiFi speed limit (tc)       usteer.lua  band steering
-  lldp.lua          neighbour table via lldpctl (cached 60 s; an empty answer never is)
-  rrmscan.lua       802.11k beacon-report neighbour enrichment (from upstream)
+  shaper.lua        WiFi speed limit: per-client HTB classes on the VAP (download) and an
+                    IFB device (upload), synced every heartbeat from what build_json listed
+  usteer.lua        band steering + the nft filter keeping usteerd's sync off the VAPs
+  lldp.lua          neighbour table via lldpctl, read fresh every heartbeat (no cache, by
+                    decision -- see the lookup-pass landmine)
+  rrmscan.lua       802.11k beacon-report neighbour enrichment; the hostapd event collector
+                    (ubus subscribe + control-socket monitors + `bridge monitor fdb`) that
+                    assoctrack reads too
+  satisfaction.lua  WiFi Experience: the UniFi firmware's formula (libubnt 4.0.15)
+  assoctrack.lua    AirView Connectivity stages and Roaming reports as notif informs
+  minrssi.lua       Minimum RSSI: refusal margin, 30 s hold before the kick
+  loadbalance.lua   Load balance: the most idle stations above a radio's cap
+  wlansched.lua     WiFi Blackout Schedule: the firmware's schedule lines, netdev down/up
+  stun.lua          the STUN client whose mapped address the controller wakes
+  rrbguard.lua      repairs hostapd's stale 802.11r key-exchange socket (wpad restart)
+  util.lua          shared helpers: file/command reads, exec_ok, is_mac, bit shim, sysfs
+                    master_of/driver_of, nft_apply (one `nft -f` transaction per table)
   unhandled.lua     /etc/openuf/unhandled.json: every _type, cmd, mgmt_cfg key and
                     system_cfg key shape the controller sent that nothing here acted on,
                     with counts and a redacted body -- always on, bounded

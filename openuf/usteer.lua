@@ -33,10 +33,12 @@
 ]]--
 
 local M = {}
+local util = package.loaded["openuf.util"]
+	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable: UCI module and command runner, for tests.
 M._uci     = nil
-M._run_cmd = function(cmd) return os.execute(cmd) end
+M._run_cmd = os.execute
 
 -- Options in usteer.local that openUF owns. Each is written when set_enabled
 -- wants a value for it and deleted when it wants none, so the daemon falls
@@ -110,6 +112,81 @@ function M.set_enabled(enabled, cfg, roam_assist)
 	end
 
 	return true
+end
+
+-- ─── Keep usteer's AP-to-AP sync off the air ────────────────────────────────
+--
+-- usteerd tells the other APs what it sees by broadcasting its whole station
+-- table every remote_update_interval (1 s) to 255.255.255.255:16720 -- or
+-- ff02::4150 with `ipv6` set -- plus a short update for every MAC it has not
+-- seen before (usteer remote.c/sta.c). The table holds every device heard in
+-- a probe request in the last local_sta_timeout (120 s), so passing phones
+-- dominate it: live on 2026-10-07, 119 entries for 16 associated clients,
+-- 7024 bytes per message, five IP fragments. The bridge floods each fragment
+-- out of every VAP too, where Multicast Enhancement (multicast_to_unicast)
+-- turns it into one unicast copy per station: ~16 KB and 10-15 frames a
+-- second to every client of both APs, waking dozing phones and costing a weak
+-- client ~1.5 % of the radio's airtime, for traffic only the other AP reads.
+-- The peer AP is reached over the wired uplink, so dropping the sync where it
+-- leaves through a VAP loses nothing.
+--
+-- Bridge postrouting sees both what this AP's usteerd sends and what the
+-- peer's sends in over the uplink. The bridge does not reassemble, so only a
+-- datagram's first fragment carries the UDP port; the later fragments are
+-- matched as non-first fragments of a UDP broadcast. Nothing else sends a
+-- fragmented UDP broadcast to clients (DHCP fits one frame, and a client that
+-- missed the first fragment could not reassemble the rest anyway).
+--
+-- Own table, rebuilt from scratch like l2guard's; oifname, not oif, so a VAP
+-- that a `wifi reload` is recreating does not fail the add. iifname/oifname in
+-- the bridge family need kmod-nft-bridge.
+
+M.NFT_TABLE = "bridge openuf_usteer"
+
+M._exec = os.execute
+
+local valid_ifname = util.valid_ifname
+
+-- Whether openUF runs usteerd, i.e. whether the filter has anything to do.
+function M.filter_wanted()
+	local ok, v = pcall(function()
+		return get_uci().cursor():get("usteer", "local", "openuf_active")
+	end)
+	return ok and v == "1"
+end
+
+-- Rebuild the table to drop usteer's sync on exactly these VAP netdevs; an
+-- empty or nil list removes it. Returns the number of rules installed.
+function M.reconcile_filter(ifnames)
+	local T = M.NFT_TABLE
+	local names = {}
+	for _, n in ipairs(ifnames or {}) do
+		if valid_ifname(n) then names[#names + 1] = '"' .. n .. '"' end
+	end
+	if #names == 0 then
+		util.nft_apply(T, nil, M._exec)
+		return 0
+	end
+	local set = "{ " .. table.concat(names, ", ") .. " }"
+	local post = "add rule " .. T .. " post oifname " .. set
+	local stmts = {
+		"add chain " .. T .. " post { type filter hook postrouting priority 0; policy accept; }",
+		post .. " ip daddr 255.255.255.255 udp dport 16720 drop",
+		post .. " ip daddr 255.255.255.255 ip protocol udp ip frag-off & 0x1fff != 0 drop",
+		-- usteer's own group: every fragment carries it, nothing else uses it.
+		post .. " ip6 daddr ff02::4150 drop",
+	}
+	local _, failed = util.nft_apply(T, stmts, M._exec)
+	local n = 0
+	for i = 2, #stmts do
+		if failed[i] then
+			io.stderr:write("openuf: usteer: nft rejected a sync filter rule (needs "
+				.. "kmod-nft-bridge); usteer's broadcasts still reach every client.\n")
+		else
+			n = n + 1
+		end
+	end
+	return n
 end
 
 return M

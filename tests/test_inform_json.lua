@@ -34,10 +34,26 @@ local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_ca
 	-- the same, on the way in and out.)
 	inform._sysinfo._phy_info_cache = {}
 	inform._sysinfo._uplink_cache   = {}
+	inform._sysinfo._ps_phy_cache   = {}
+	inform._sysinfo._peer_cache     = {}
+	inform._sysinfo._akm_cache      = {}
 	inform._sysinfo.end_pass()
 	inform._sysinfo._read_file = function(path)
 		if path:find("uptime")  then return fixture("proc_uptime.txt")  end
+		-- mac80211 debugfs: a radio that tracks power save itself (no
+		-- AP_LINK_PS), the first client dozing.
+		if with_clients and path == "/sys/class/net/wlan0/phy80211/name" then return "phy0\n" end
+		if with_clients and path == "/sys/kernel/debug/ieee80211/phy0/hwflags" then
+			return "SIGNAL_DBM\nAMPDU_AGGREGATION\nMFP_CAPABLE\n"
+		end
+		if with_clients and path == "/sys/kernel/debug/ieee80211/phy0/netdev:wlan0/stations/aa:bb:cc:dd:ee:ff/flags" then
+			return "AUTH\nASSOC\nPS_STA\nAUTHORIZED\n"
+		end
+		if with_clients and path == "/sys/kernel/debug/ieee80211/phy0/netdev:wlan0/stations/11:22:33:44:55:66/flags" then
+			return "AUTH\nASSOC\nAUTHORIZED\n"
+		end
 		if path:find("meminfo") then return fixture("proc_meminfo.txt") end
+		if path == "/proc/loadavg" then return "0.42 0.17 0.05 1/63 1234\n" end
 		if path:find("net/dev") then return fixture("proc_net_dev.txt") end
 		if with_wired and path:find("net/arp")     then return fixture("proc_net_arp.txt") end
 		if with_wired and path:find("dhcp.leases") then return fixture("dhcp_leases.txt")  end
@@ -53,6 +69,11 @@ local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_ca
 			return fixture("iw_station_dump.txt")
 		end
 		if cmd:find("station dump") then return "" end
+		-- hostapd: the first client on FT-SAE, the second on plain PSK.
+		if with_clients and cmd:find("hostapd_cli -i $b all_sta", 1, true) and cmd:find(" wlan0", 1, true) then
+			return "aa:bb:cc:dd:ee:ff\nflags=[AUTH][ASSOC][AUTHORIZED]\nAKMSuiteSelector=00-0f-ac-9\n"
+				.. "11:22:33:44:55:66\nflags=[AUTH][ASSOC][AUTHORIZED]\nAKMSuiteSelector=00-0f-ac-2\n"
+		end
 		if with_clients and cmd:find("survey dump") then
 			return fixture("iw_survey_dump.txt")
 		end
@@ -142,6 +163,24 @@ local function build(opts)
 	inject_sysinfo(opts and opts.with_clients, opts and opts.with_wired, opts and opts.with_scan,
 		opts and opts.with_radio_caps)
 	if opts and opts.with_uci then inject_ucihelper() end
+	-- vap_id: the wlanconf id the fixture vap echoes (get_vap_table's `id`).
+	if opts and opts.vap_id then
+		local get = inform._ucihelper.get_vap_table
+		inform._ucihelper.get_vap_table = function()
+			local vaps = get()
+			for _, v in ipairs(vaps) do v.id, v.wlanconf_id = opts.vap_id, opts.vap_id end
+			return vaps
+		end
+	end
+	-- vap_patch: edit the fixture vaps in place (bssid, essid, ...).
+	if opts and opts.vap_patch then
+		local get = inform._ucihelper.get_vap_table
+		inform._ucihelper.get_vap_table = function()
+			local vaps = get()
+			opts.vap_patch(vaps)
+			return vaps
+		end
+	end
 	local st = {
 		authkey    = state.DEFAULT_KEY,
 		adopted    = opts and opts.adopted or false,
@@ -324,20 +363,16 @@ local function build_ax3000t(opts)
 		if path:find("net/arp") then return fixture("proc_net_arp_dsa.txt") end
 		if path:find("/bridge/bridge_id") then return nil end   -- a socket is not a bridge
 		if path == "/proc/uptime" then dsa_forks.uptime = dsa_forks.uptime + 1 end
+		local m = path:match("^/sys/class/net/([^/]+)/master/uevent$")
+		if m then
+			return "INTERFACE=" .. ((opts.master or {})[m] or "br-lan") .. "\n"
+		end
 		return base_read(path)
 	end
 	inform._sysinfo._run_cmd = function(cmd)
 		if cmd:find("swconfig") then return "" end   -- no such binary on DSA
 		if cmd:find("ip route") then
 			return "default via 192.0.2.1 dev br-lan \n"
-		end
-		local rl = cmd:match("readlink /sys/class/net/(%S+)/master")
-		if rl then
-			local br = (opts.master or {})[rl] or "br-lan"
-			return "../../../../../../../../virtual/net/" .. br .. "\n"
-		end
-		if cmd:find("readlink") then
-			return "../../../../../../../../virtual/net/br-lan\n"
 		end
 		local fdb = opts.fdb or fixture("bridge_fdb_br_dsa.txt")
 		local br = cmd:match("bridge fdb show br (%S+)")
@@ -574,13 +609,54 @@ return {
 		fn = function()
 			local d = build()
 			-- Real devices report this under the hyphenated key "system-stats"
-			-- (verified against a real captured USG payload) -- not "sys_stats".
+			-- (verified against a real captured USG payload).
 			local stats = d["system-stats"]
 			assert_not_nil(stats, "system-stats present")
 			assert_not_nil(stats.cpu, "cpu field present")
 			assert_not_nil(stats.uptime, "uptime field present")
 			-- meminfo fixture: total=131072kB, free=65536kB -> 50% used
 			assert_eq(stats.mem, "50", "mem percent computed from meminfo fixture")
+		end
+	},
+	{
+		name = "inform json: sys_stats carries load averages and memory bytes as the firmware sends them",
+		fn = function()
+			local d = build()
+			local ss = d.sys_stats
+			assert_not_nil(ss, "sys_stats present beside system-stats")
+			-- /proc/loadavg's own strings: the UI parses and rounds them.
+			assert_eq(ss.loadavg_1, "0.42", "1 min")
+			assert_eq(ss.loadavg_5, "0.17", "5 min")
+			assert_eq(ss.loadavg_15, "0.05", "15 min")
+			-- meminfo fixture, in bytes: total 131072 kB, free 65536 kB,
+			-- buffers 2048 kB. Used is total - free, as sysinfo() gives it.
+			assert_eq(ss.mem_total, 134217728, "mem_total")
+			assert_eq(ss.mem_used, 67108864, "mem_used")
+			assert_eq(ss.mem_buffer, 2097152, "mem_buffer")
+		end
+	},
+	{
+		name = "inform json: connect_request_ip/port are the STUN mapping, as strings, only while it runs",
+		fn = function()
+			local real = inform._stun_c
+			inform._stun_c = nil
+			local d = build()
+			assert_eq(d.connect_request_ip, nil, "no STUN client: no ip")
+			assert_eq(d.connect_request_port, nil, "no STUN client: no port")
+			-- A running client without a response yet.
+			inform._stun_c = {sock = {}}
+			d = build()
+			assert_eq(d.connect_request_port, nil, "no mapping yet")
+			inform._stun_c = {sock = {}, mapped_ip = "192.0.2.3", mapped_port = 41234}
+			local ok, err = pcall(function()
+				d = build()
+				assert_eq(d.connect_request_ip, "192.0.2.3", "ip")
+				-- The firmware sends both as JSON strings; the controller
+				-- parses either (getInt).
+				assert_eq(d.connect_request_port, "41234", "port, a string")
+			end)
+			inform._stun_c = real
+			if not ok then error(err, 0) end
 		end
 	},
 	{
@@ -686,9 +762,9 @@ return {
 			-- the permanent "TX Retries: High (100%)" on the Devices view.
 			local d = build({with_uci = true, with_clients = true})
 			local vap, rs = d.vap_table[1], d.radio_table_stats[1]
-			assert_eq(vap.wifi_tx_attempts, vap.tx_packets + vap.tx_retries,
-				"attempts are successful + retried, as sta_table defines them")
-			assert_eq(vap.wifi_tx_dropped, vap.tx_dropped, "dropped is the driver's tx_failed")
+			assert_eq(vap.wifi_tx_attempts, vap.tx_packets,
+				"attempts are the frames sent, retries not included, as sta_table defines them")
+			assert_eq(vap.wifi_tx_dropped, vap.tx_dropped, "dropped is the driver's drop count")
 			assert_eq(rs.wifi_tx_attempts, vap.wifi_tx_attempts,
 				"radio sums its VAPs' attempts")
 			assert_eq(rs.wifi_tx_dropped, vap.wifi_tx_dropped, "and their drops")
@@ -752,39 +828,6 @@ return {
 		end
 	},
 	{
-		name = "inform json: satisfaction is aggregated to the vap and the device",
-		fn = function()
-			-- The controller does not derive these from the per-client scores
-			-- it already holds: without them the Devices list showed
-			-- "No Clients" in the Experience column on an AP with eight
-			-- connected clients, each individually scored in the Clients view.
-			local d = build({with_uci = true, with_clients = true})
-			local vap = d.vap_table[1]
-			assert_not_nil(vap.satisfaction, "vap carries a satisfaction score")
-			assert_true(vap.satisfaction >= 0 and vap.satisfaction <= 100,
-				"and it is a percentage")
-			assert_not_nil(d.satisfaction, "device carries one too")
-			-- Both are means of the same per-client scores, and this fixture
-			-- has a single vap, so they must agree.
-			assert_eq(d.satisfaction, vap.satisfaction,
-				"device mean matches the only vap's mean")
-			local sum, n = 0, 0
-			for _, s in ipairs(vap.sta_table) do sum, n = sum + s.satisfaction, n + 1 end
-			assert_eq(vap.satisfaction, math.floor(sum / n + 0.5),
-				"and equals the mean of the clients actually reported")
-		end
-	},
-	{
-		name = "inform json: satisfaction is omitted, not zero, when nothing is connected",
-		fn = function()
-			-- 0 would read as "terrible experience"; absent lets the UI say
-			-- "No Clients", which is what is actually true.
-			local d = build({with_uci = true, with_clients = false})
-			assert_true(d.vap_table[1].satisfaction == nil, "no vap score without clients")
-			assert_true(d.satisfaction == nil, "no device score either")
-		end
-	},
-	{
 		name = "inform json: vap_table carries cu_total/cu_self_rx/cu_self_tx/cu_interf from its radio",
 		fn = function()
 			local d = build({with_uci = true, with_clients = true})
@@ -812,16 +855,25 @@ return {
 			assert_eq(sta_table[1].radio, "ng", "radio from vap (the band, matching vap.radio)")
 			assert_true(sta_table[1].active, "active true for a station iw actually lists")
 			assert_eq(sta_table[1].signal, -62, "signal from station dump")
-			assert_eq(sta_table[1].rssi, -62, "rssi aliases signal (iw doesn't distinguish them)")
-			assert_eq(sta_table[1].capacity, 144, "capacity from tx_bitrate floor(144.4)")
-			assert_eq(sta_table[1].throughput, 0, "throughput 0 on first sample (no prior delta)")
-			assert_eq(sta_table[1].linkscore, 0, "linkscore has no local source -- placeholder")
-			assert_eq(sta_table[1].multicast, 0, "multicast has no local source -- placeholder")
+			-- rssi is the SNR over the in-use survey noise, as the firmware
+			-- sends it; noise is that floor.
+			assert_eq(sta_table[1].rssi, 33, "rssi = signal - noise (-62 - -95)")
+			assert_eq(sta_table[1].noise, -95, "noise from the in-use survey entry")
+			assert_eq(sta_table[1].state, 0x10, "dozing station: state bit 0x10")
+			assert_eq(sta_table[2].state, 0, "awake station: state 0")
+			assert_eq(sta_table[1].is_11r, true, "FT-SAE AKM: is_11r")
+			assert_eq(sta_table[2].is_11r, nil, "PSK AKM: is_11r absent, as the firmware omits it")
+			-- capacity/throughput/linkscore/multicast: not sent. UniFi firmware
+			-- sends none of them (fill_stainfo_json, 3.9.27 to 4.0.15), and the
+			-- 10.x controller reads them only off a mesh uplink's entry.
+			assert_nil(sta_table[1].capacity, "no invented capacity")
+			assert_nil(sta_table[1].throughput, "no invented throughput")
+			assert_nil(sta_table[1].linkscore, "no linkscore placeholder")
+			assert_nil(sta_table[1].multicast, "no multicast placeholder")
 			-- Cumulative per-client counters -- confirmed real field names via
 			-- the decompiled vapInformProcessor (com.ubnt.service.devmgr.c.
 			-- KHUkYjHujLgFBD), which copies these straight off each incoming
-			-- sta_table entry and computes its own deltas between informs
-			-- (unlike throughput, which openUF pre-computes).
+			-- sta_table entry and computes its own deltas between informs.
 			assert_eq(sta_table[1].rx_bytes, 45678, "rx_bytes from station dump")
 			assert_eq(sta_table[1].tx_bytes, 98765, "tx_bytes from station dump")
 			assert_eq(sta_table[1].rx_packets, 312, "rx_packets from station dump")
@@ -854,18 +906,96 @@ return {
 			assert_false(sta_table[1].is_11ac, "not VHT")
 			assert_false(sta_table[1].is_11ax, "not HE")
 			assert_false(sta_table[1].is_11be, "not EHT")
-			-- wifi_tx_attempts/wifi_tx_retries_percentage: tx_packets(287) +
-			-- tx_retries(4) = 291 attempts, 4 of them retried.
-			assert_eq(sta_table[1].wifi_tx_attempts, 291, "wifi_tx_attempts = tx_packets + tx_retries")
+			-- The client panel's "TX Retries" is the controller's delta of
+			-- tx_retries over retries + wifi_tx_attempts + dropped (devmgr
+			-- TtZhv): without tx_retries per station it read 0.0 % for
+			-- every client. Attempts are the 287 frames sent; 4 retries.
+			local st = sta_table[1]
+			assert_eq(st.tx_retries, 4, "tx_retries is sent per station")
+			assert_eq(st.wifi_tx_attempts, 287, "wifi_tx_attempts = tx_packets, retries not included")
+			assert_not_nil(st.wifi_tx_dropped, "wifi_tx_dropped is sent per station")
 			-- exact value round-trips through cjson's %.14g float encoding,
 			-- so compare with a tolerance rather than bit-for-bit equality
-			assert_true(math.abs(sta_table[1].wifi_tx_retries_percentage - 4 * 100 / 291) < 1e-10,
-				"wifi_tx_retries_percentage = retries as % of attempts")
-			-- satisfaction/satisfaction_now: no hostapd caps in this fixture,
-			-- so the rate term is skipped and -62 dBm is inside the coverage
-			-- edge: the signal floor alone gives 100.
-			assert_eq(sta_table[1].satisfaction, 100, "satisfaction from the signal floor alone")
-			assert_eq(sta_table[1].satisfaction_now, 100, "satisfaction_now matches satisfaction")
+			assert_true(math.abs(st.wifi_tx_retries_percentage
+				- 4 * 100 / (287 + 4 + st.wifi_tx_dropped)) < 1e-10,
+				"wifi_tx_retries_percentage = retries / (retries + attempts + dropped)")
+			-- satisfaction (satisfaction.lua): signal avg -63 dBm is far
+			-- above the noise floor (100), the mean of 144.4 and 72.2
+			-- Mbit/s is 108300 kbps (90), and the retry window has no
+			-- minute yet (100).
+			assert_eq(sta_table[1].satisfaction, 90, "the phy rate binds")
+			assert_eq(sta_table[1].satisfaction_now, 90, "satisfaction_now matches satisfaction")
+			assert_eq(sta_table[1].satisfaction_reason, 2, "reason: phy_rate")
+			assert_eq(sta_table[1].anomalies, 0, "no anomalies")
+		end
+	},
+	{
+		name = "inform json: build_json closes a ucihelper pass it opened, never one it joined",
+		fn = function()
+			-- _tick holds one pass from its first resync to the payload; the
+			-- payload closing it would leave the rest of the cycle uncached.
+			local open, ends = false, 0
+			local function pass_mock()
+				inject_ucihelper()
+				inform._ucihelper.begin_pass = function()
+					if open then return false end
+					open = true
+					return true
+				end
+				inform._ucihelper.end_pass = function() open = false; ends = ends + 1 end
+			end
+			pass_mock()
+			open = true
+			build({})
+			assert_true(open, "a joined pass is still open after the payload")
+			assert_eq(ends, 0, "and build_json never ended it")
+			open = false
+			pass_mock()
+			build({})
+			assert_false(open, "called on its own, it closes the pass it opened")
+			assert_eq(ends, 1, "once")
+		end
+	},
+	{
+		name = "inform json: a steady station's AKM is asked of hostapd once, not every heartbeat",
+		fn = function()
+			inform._sta_stats_cache = {}
+			local d, st = build({with_uci = true, with_clients = true})
+			local runs = 0
+			local base = inform._sysinfo._run_cmd
+			inform._sysinfo._run_cmd = function(cmd)
+				if cmd:find("hostapd_cli", 1, true) then runs = runs + 1 end
+				return base(cmd)
+			end
+			inform._sysinfo.end_pass()
+			local d2 = cjson.decode(inform.build_json(st, nil, ufhw))
+			inform._sysinfo._run_cmd = base
+			assert_eq(runs, 0, "second heartbeat: no hostapd_cli")
+			local t1, t2 = d.vap_table[1].sta_table, d2.vap_table[1].sta_table
+			assert_eq(t2[1].is_11r, true, "FT-SAE still reported from the cache")
+			assert_eq(t2[2].is_11r, t1[2].is_11r, "PSK unchanged")
+		end
+	},
+	{
+		name = "inform json: sta state, is_11r and noise are left out when nothing can say",
+		fn = function()
+			inform._sta_stats_cache = {}
+			local si = inform._sysinfo
+			local orig_ps, orig_akms, orig_rs = si.sta_powersave, si.sta_akms, si.radio_stats
+			-- A radio that tracks power save in the driver (AP_LINK_PS), no
+			-- hostapd_cli, and no survey reading.
+			si.sta_powersave = function() return nil end
+			si.sta_akms      = function() return {} end
+			si.radio_stats   = function() return {} end
+			local ok, err = pcall(function()
+				local s = build({with_uci = true, with_clients = true}).vap_table[1].sta_table[1]
+				assert_eq(s.state, nil, "no power-save reading: state absent, not 0")
+				assert_eq(s.is_11r, nil, "no AKM: is_11r absent")
+				assert_eq(s.noise, nil, "no survey: noise absent")
+				assert_eq(s.rssi, 34, "rssi over the -96 floor the firmware clamps to (-62 - -96)")
+			end)
+			si.sta_powersave, si.sta_akms, si.radio_stats = orig_ps, orig_akms, orig_rs
+			if not ok then error(err, 0) end
 		end
 	},
 	{
@@ -897,401 +1027,6 @@ return {
 			assert_eq(vap.rx_bytes, 0, "no clients -> zero rx_bytes")
 			assert_eq(vap.tx_bytes, 0, "no clients -> zero tx_bytes")
 			assert_eq(vap.tx_retries, 0, "no clients -> zero tx_retries")
-		end
-	},
-	{
-		name = "inform json: sta_table throughput delta-samples between calls",
-		fn = function()
-			inform._sta_stats_cache = {}
-			local orig_time = inform._time
-			inform._time = function() return 1000 end
-			build({with_uci = true, with_clients = true})  -- first sample, seeds the cache
-
-			-- Bypass build()'s inject_sysinfo() (it would reset _run_cmd to
-			-- the standard fixture) so this call can use a custom fixture
-			-- with advanced byte counters for the same client.
-			inject_ucihelper()
-			inform._sysinfo._run_cmd = function(cmd)
-				if cmd:find("station dump") then
-					return "Station aa:bb:cc:dd:ee:ff (on wlan0)\n" ..
-						"\trx bytes:\t55678\n\ttx bytes:\t108765\n" ..
-						"\tsignal:  \t-62 dBm\n\ttx bitrate:\t144.4 MBit/s MCS 15 short GI\n"
-				end
-				return ""
-			end
-			inform._time = function() return 1010 end  -- 10s later
-			local st = {
-				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
-			}
-			local d = cjson.decode(inform.build_json(st, nil, ufhw))
-			-- delta = (55678-45678) + (108765-98765) = 20000 bytes over 10s = 2000 B/s
-			assert_eq(d.vap_table[1].sta_table[1].throughput, 2000,
-				"throughput = byte delta / elapsed seconds")
-
-			inform._time = orig_time
-			inform._sta_stats_cache = {}
-		end
-	},
-	{
-		name = "inform json: satisfaction scores the tx rate against the client's ceiling",
-		fn = function()
-			-- Seen on hardware: a 1SS HT20 client at MCS 7 of 7 with no
-			-- retries read Poor at -61 dBm, because signal was the score.
-			inform._sta_stats_cache = {}
-			local orig_time = inform._time
-			local t = 1000
-			inform._time = function() return t end
-			local st = {
-				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
-			}
-			-- signal, the iw tx bitrate line, hostapd's all_sta record (nil:
-			-- hostapd knows nothing), the AP's live channel width and its
-			-- spatial streams.
-			local function score(signal, bitrate, sta_rec, ap_width, ap_nss)
-				inject_ucihelper()
-				inform._sysinfo._phy_info_cache = {}
-				inform._sysinfo._run_cmd = function(cmd)
-					if cmd:find("station dump") then
-						return "Station 00:00:5e:00:53:01 (on wlan0)\n" ..
-							"\tsignal:  \t" .. signal .. " dBm\n" ..
-							"\ttx bitrate:\t" .. bitrate .. "\n"
-					end
-					if cmd:find("all_sta", 1, true) then
-						return sta_rec and ("00:00:5e:00:53:01\n" .. sta_rec) or ""
-					end
-					if cmd:find("dev wlan0 info") then
-						return fixture("iw_dev_info.txt"):gsub("width: 20", "width: " .. (ap_width or 20))
-					end
-					if cmd:find("phy phy0 info") then
-						return (fixture("iw_phy_info_5g.txt"):gsub("Max spatial streams: 2",
-							"Max spatial streams: " .. (ap_nss or 2)))
-					end
-					return ""
-				end
-				t = t + 10
-				local d = cjson.decode(inform.build_json(st, nil, ufhw))
-				assert_true(d.radio_table[1].width == nil, "the live width is not a wire field")
-				return d.vap_table[1].sta_table[1].satisfaction
-			end
-			-- hostapd all_sta records, as captured on both APs.
-			local HT20_1SS = "flags=[AUTH][ASSOC][AUTHORIZED][WMM][HT]\n" ..
-				"ht_mcs_bitmask=ff000000000000000000\nht_caps_info=0x0020\n"
-			local HT40_2SS = "flags=[AUTH][ASSOC][AUTHORIZED][WMM][HT]\n" ..
-				"ht_mcs_bitmask=ffff0000000000000000\nht_caps_info=0x006e\n"
-			local VHT80_1SS = "flags=[AUTH][ASSOC][AUTHORIZED][WMM][HT][VHT]\n" ..
-				"rx_vht_mcs_map=fffe\nht_mcs_bitmask=ff000000010000000000\n" ..
-				"vht_caps_info=0x33c07030\nht_caps_info=0x006e\n"
-			local function fresh() inform._sta_stats_cache = {} end
-
-			fresh()
-			assert_eq(score(-61, "65.0 MBit/s MCS 7", HT20_1SS), 100,
-				"a client at its own ceiling is Excellent at -61 dBm")
-			fresh()
-			assert_eq(score(-61, "58.5 MBit/s MCS 6", HT20_1SS), 100,
-				"one MCS below the top counts as the ceiling: rate control probes the top")
-			fresh()
-			assert_eq(score(-36, "52.0 MBit/s MCS 5", HT20_1SS), 88,
-				"MCS 5 against the MCS 6 ceiling: 52/58.5")
-			fresh()
-			assert_true(score(-65, "19.5 MBit/s MCS 2", HT20_1SS) < 70,
-				"a slow client at -65 dBm reads Poor")
-			fresh()
-			assert_eq(score(-80, "65.0 MBit/s MCS 7", HT20_1SS), 60,
-				"near the coverage edge SNR wins: 15 dB over the assumed -95 floor")
-			fresh()
-			assert_eq(score(-80, "54.0 MBit/s", HT20_1SS), 60,
-				"a legacy rate has no MCS to compare: SNR only")
-			fresh()
-			assert_eq(score(-50, "65.0 MBit/s MCS 7", nil), 100,
-				"no hostapd record: rate term skipped")
-			fresh()
-			assert_eq(score(-50, "390.0 MBit/s VHT-MCS 8 80MHz short GI VHT-NSS 1", VHT80_1SS, 80), 100,
-				"VHT MCS 8 of 9 on 80 MHz is at the ceiling")
-			fresh()
-			assert_eq(score(-61, "292.5 MBit/s VHT-MCS 6 80MHz short GI VHT-NSS 1", VHT80_1SS, 80), 75,
-				"VHT MCS 6 on 80 MHz: 58.5/78")
-			fresh()
-			assert_eq(score(-50, "200.0 MBit/s VHT-MCS 9 40MHz short GI VHT-NSS 1", VHT80_1SS, 40), 100,
-				"an 80 MHz client on a 40 MHz channel is at its ceiling at 40 MHz")
-			fresh()
-			assert_eq(score(-50, "86.7 MBit/s VHT-MCS 9 short GI VHT-NSS 1", VHT80_1SS, 80), 24,
-				"the same client at 20 MHz on an 80 MHz channel is not")
-			fresh()
-			assert_eq(score(-50, "65.0 MBit/s MCS 7", HT40_2SS, 20), 55,
-				"one stream of two, the 40 MHz client capped by the 20 MHz channel")
-			fresh()
-			assert_eq(score(-50, "130.0 MBit/s MCS 15", HT40_2SS, 20), 100,
-				"HT MCS 15 is MCS 7 on two streams")
-			fresh()
-			assert_eq(score(-50, "78.0 MBit/s MCS 12", HT40_2SS, 20), 66,
-				"HT MCS 12 is MCS 4 on two streams: 39/58.5")
-			fresh()
-			assert_eq(score(-50, "65.0 MBit/s MCS 7", HT40_2SS, 20, 1), 100,
-				"a two-stream client on a one-stream AP is at its ceiling on one")
-
-			-- Smoothing: one rate-control step moves the score a fifth of the
-			-- way, and a sample without a rate keeps the last value.
-			fresh()
-			assert_eq(score(-50, "65.0 MBit/s MCS 7", HT20_1SS), 100, "first sample is taken as is")
-			assert_eq(score(-50, "19.5 MBit/s MCS 2", HT20_1SS), 86, "100 + 0.2*(33.3-100) = 86.7")
-			assert_eq(score(-50, "54.0 MBit/s", HT20_1SS), 86, "a legacy-rate sample keeps it")
-
-			inform._time = orig_time
-			inform._sta_stats_cache = {}
-		end
-	},
-	{
-		name = "inform json: on 5 GHz an unaggregated frame costs 250 us, so a clean HE80 client is not Poor",
-		fn = function()
-			-- AP1, 2026-10-03: a MacBook at -43 dBm, HE80 2x2, MCS 11 down /
-			-- MCS 8 up, 2.6 % retries, 782 bytes and 266 us per frame (small
-			-- interactive frames, one PPDU each) scored 49 "Poor" under the
-			-- 2.4 GHz per-frame figure, next to an iPhone aggregating ~30
-			-- frames a PPDU (38 us each) at 97. Replayed here against both
-			-- figures.
-			inform._sta_stats_cache = {}
-			local orig_time, orig_5g = inform._time, inform.SAT_FRAME_OVERHEAD_US_5G
-			local t = 1000
-			inform._time = function() return t end
-			local st = {
-				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
-			}
-			-- hostapd's words for that MacBook, verbatim.
-			local HE80_2SS = "66:76:5b:ed:8c:a2\nflags=[AUTH][ASSOC][AUTHORIZED][WMM][MFP][HT][VHT][HE]\n" ..
-				"rx_vht_mcs_map=fffa\ntx_vht_mcs_map=fffa\n" ..
-				"he_capab=010808000080443002801d039f08000c00fafffaff391cc7711c07\n" ..
-				"vht_caps_info=0x0f817832\nht_caps_info=0x006f\n"
-			local c = {tx_packets = 5000, tx_bytes = 5000 * 782, tx_duration = 5000 * 266, rx_packets = 100}
-			local function inform_once()
-				inform._ucihelper = {
-					get_radio_table = function()
-						return {{ name = "radio0", radio = "na", channel = 52, ht = "HE80", tx_power = "23",
-							disabled = false, builtin_antenna = true, builtin_ant_gain = 3, max_txpower = 23 }}
-					end,
-					get_vap_table = function()
-						return {{ name = "openuf_test", essid = "test", radio = "na", radio_name = "radio0",
-							encryption = "psk2", disabled = false, bssid = "aa:bb:cc:00:00:01",
-							channel = 52, tx_power = "23", usage = "user" }}
-					end,
-					get_ifname_for_radio = function(radio) if radio == "radio0" then return "wlan0" end return nil end,
-					get_ifnames_for_vap = function(radio, ssid)
-						if radio == "radio0" and ssid == "test" then return {"wlan0"} end
-						return {}
-					end,
-				}
-				inform._sysinfo._phy_info_cache = {}
-				inform._sysinfo._run_cmd = function(cmd)
-					if cmd:find("station dump") then
-						return "Station 66:76:5b:ed:8c:a2 (on wlan0)\n" ..
-							"\tsignal:  \t-43 [-48, -51, -45, -52] dBm\n" ..
-							"\ttx packets:\t" .. c.tx_packets .. "\n" ..
-							"\ttx bytes:\t" .. c.tx_bytes .. "\n" ..
-							"\trx packets:\t" .. c.rx_packets .. "\n" ..
-							"\ttx bitrate:\t1200.9 MBit/s 80MHz HE-MCS 11 HE-NSS 2 HE-GI 0 HE-DCM 0\n" ..
-							"\ttx duration:\t" .. c.tx_duration .. " us\n" ..
-							"\trx bitrate:\t864.8 MBit/s 80MHz HE-MCS 8 HE-NSS 2 HE-GI 0 HE-DCM 0\n"
-					end
-					if cmd:find("all_sta", 1, true) then return HE80_2SS end
-					if cmd:find("survey dump") then
-						return "Survey data from wlan0\n\tfrequency:\t5260 MHz [in use]\n\tnoise:\t-91 dBm\n"
-					end
-					if cmd:find("dev wlan0 info") then return fixture("iw_dev_info_5g.txt") end
-					if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
-					return ""
-				end
-				t = t + 10
-				local d = cjson.decode(inform.build_json(st, nil, ufhw))
-				local s = d.vap_table[1].sta_table[1]
-				c.tx_packets, c.tx_bytes = c.tx_packets + 34, c.tx_bytes + 34 * 782
-				c.tx_duration, c.rx_packets = c.tx_duration + 34 * 266, c.rx_packets + 25
-				return s.satisfaction, s
-			end
-			local ok, err = pcall(function()
-				local first, s = inform_once()
-				assert_eq(s.tx_mcs, 11, "HE rate parsed")
-				assert_eq(s.radio, "na", "a 5 GHz station")
-				assert_eq(first, 100, "first inform: no airtime window and no uplink sample yet; SNR 48 dB and MCS 11 of 11")
-				assert_eq(inform_once(), 90, "second: airtime (250 + 782*8/1161) / 266 = 96 %, uplink MCS 8 of 11 at half weight = 90 -> Excellent, not Poor")
-				-- The same frames judged by the 2.4 GHz figure: the live bug.
-				inform._sta_stats_cache = {}
-				inform.SAT_FRAME_OVERHEAD_US_5G = inform.SAT_FRAME_OVERHEAD_US
-				inform_once()
-				assert_eq(inform_once(), 43, "with 110 us a frame the same client is 43: Poor for the price of its PHY's preamble")
-			end)
-			inform._time, inform.SAT_FRAME_OVERHEAD_US_5G = orig_time, orig_5g
-			inform._sta_stats_cache = {}
-			inject_ucihelper()
-			if not ok then error(err, 0) end
-		end
-	},
-	{
-		name = "inform json: satisfaction takes the worst of downlink airtime, uplink rate and SNR",
-		fn = function()
-			-- Per-frame figures measured on hardware 2026-09-27 (office 2.4 GHz,
-			-- noise -83 dBm), replayed inform by inform through the counters.
-			inform._sta_stats_cache = {}
-			local orig_time = inform._time
-			local t = 1000
-			inform._time = function() return t end
-			local st = {
-				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
-			}
-			local HT20_1SS = "00:00:5e:00:53:01\nflags=[AUTH][ASSOC][AUTHORIZED][WMM][HT]\n" ..
-				"ht_mcs_bitmask=ff000000000000000000\nht_caps_info=0x0020\n"
-			-- One inform: s = {signal, noise, tx/rx bitrate lines and the
-			-- lifetime counters (duration nil: the driver reports none)}.
-			local function inform_once(s)
-				inject_ucihelper()
-				inform._sysinfo._phy_info_cache = {}
-				inform._sysinfo._run_cmd = function(cmd)
-					if cmd:find("station dump") then
-						local out = "Station 00:00:5e:00:53:01 (on wlan0)\n" ..
-							"\tsignal:  \t" .. s.signal .. " dBm\n" ..
-							"\ttx packets:\t" .. s.tx_packets .. "\n" ..
-							"\ttx bytes:\t" .. s.tx_bytes .. "\n" ..
-							"\trx packets:\t" .. s.rx_packets .. "\n" ..
-							"\ttx bitrate:\t" .. (s.tx_rate or "65.0 MBit/s MCS 7") .. "\n"
-						if s.tx_duration then
-							out = out .. "\ttx duration:\t" .. s.tx_duration .. " us\n"
-						end
-						return out .. "\trx bitrate:\t" .. s.rx_rate .. "\n"
-					end
-					if cmd:find("all_sta", 1, true) then return HT20_1SS end
-					if cmd:find("survey dump") and s.noise then
-						return "Survey data from wlan0\n\tfrequency:\t2462 MHz [in use]\n" ..
-							"\tnoise:\t" .. s.noise .. " dBm\n"
-					end
-					if cmd:find("dev wlan0 info") then return fixture("iw_dev_info.txt") end
-					if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
-					return ""
-				end
-				t = t + 10
-				local d = cjson.decode(inform.build_json(st, nil, ufhw))
-				return d.vap_table[1].sta_table[1].satisfaction
-			end
-			-- A client sending pkts frames of bytes_per each costing us_per of
-			-- airtime per inform, answering at rx_rate; signal/noise fixed.
-			local function client(o)
-				local c = {signal = o.signal, noise = o.noise, rx_rate = o.rx_rate,
-					tx_packets = o.start or 5000, tx_bytes = (o.start or 5000) * o.bytes_per,
-					tx_duration = (o.start or 5000) * o.us_per, rx_packets = 100}
-				return function(pkts)
-					local r = inform_once(c)
-					pkts = pkts or 34
-					c.tx_packets = c.tx_packets + pkts
-					c.tx_bytes = c.tx_bytes + pkts * o.bytes_per
-					c.tx_duration = c.tx_duration + pkts * o.us_per
-					c.rx_packets = c.rx_packets + (o.rx_per or 25)
-					return r, c
-				end
-			end
-			local function fresh() inform._sta_stats_cache = {} end
-			local MCS3, MCS7 = "26.0 MBit/s MCS 3", "65.0 MBit/s MCS 7"
-
-			-- The dishwasher: MCS 7 on tx, but 503 us per 97-byte frame (4x
-			-- its neighbours) and 8-18 % ping loss. a73aa3b scored it 93.
-			fresh()
-			local dishwasher = client{signal = -71, noise = -83, rx_rate = MCS3,
-				bytes_per = 97, us_per = 503}
-			assert_eq(dishwasher(), 42, "first inform: no window yet, SNR 12 dB -> 42")
-			assert_eq(dishwasher(), 24, "airtime (110 + 97*8/58.5) / 503 = 24 %: Poor")
-
-			fresh()
-			local roomba = client{signal = -62, noise = -83, rx_rate = MCS3,
-				bytes_per = 97, us_per = 127}
-			roomba()
-			assert_eq(roomba(), 72, "the Roomba: clean airtime, SNR 21; uplink MCS 3 of 6 binds: 50 + 44/2")
-
-			fresh()
-			local clean = client{signal = -61, noise = -83, rx_rate = MCS7,
-				bytes_per = 953, us_per = 222}
-			clean()
-			assert_eq(clean(), 94, "a clean client at -61 dBm: only SNR 22 dB costs anything")
-
-			fresh()
-			local mini = client{signal = -36, noise = -83, rx_rate = MCS7,
-				bytes_per = 129, us_per = 171}
-			mini()
-			assert_eq(mini(), 74, "power-save re-sends cost airtime: (110 + 17.6) / 171")
-
-			-- Each sample is its own window: a link that degrades shows at once.
-			fresh()
-			local o = {signal = -61, noise = -83, rx_rate = MCS7, bytes_per = 953, us_per = 222}
-			local degrading = client(o)
-			degrading()
-			assert_eq(degrading(), 94, "clean")
-			o.us_per = 503
-			degrading()
-			assert_eq(degrading(), 89, "one bad window: 100 + 0.2*(240.3/503*100 - 100)")
-
-			-- A quiet client's window carries over until it holds 20 frames.
-			fresh()
-			dishwasher = client{signal = -71, noise = -83, rx_rate = MCS7,
-				bytes_per = 97, us_per = 503}
-			dishwasher(10)
-			assert_eq(dishwasher(10), 42, "10 frames: no airtime sample yet")
-			assert_eq(dishwasher(10), 24, "20 frames: sampled")
-
-			-- A new association restarts the window from the new counters.
-			fresh()
-			local c = client{signal = -61, noise = -83, rx_rate = MCS7,
-				bytes_per = 953, us_per = 222, start = 100000}
-			c()
-			assert_eq(c(), 94, "clean before the reassociation")
-			local bad = client{signal = -61, noise = -83, rx_rate = MCS7,
-				bytes_per = 97, us_per = 503, start = 1}
-			bad()
-			assert_eq(bad(), 84, "the reset window samples at once: 100 + 0.2*(24.5-100)")
-
-			-- No airtime from the driver: the tx rate against the ceiling stands in.
-			fresh()
-			local noair = {signal = -50, noise = -83, rx_rate = MCS7, tx_packets = 10,
-				tx_bytes = 1000, rx_packets = 10, tx_rate = "19.5 MBit/s MCS 2"}
-			assert_eq(inform_once(noair), 33, "no tx duration: MCS 2 of 6 = 19.5/58.5")
-
-			-- Noise: implausible floors are raised to -95, a missing one assumed.
-			fresh()
-			local n = {signal = -80, noise = -106, rx_rate = MCS7, tx_packets = 10,
-				tx_bytes = 1000, rx_packets = 10}
-			assert_eq(inform_once(n), 60, "-106 dBm noise is taken as -95: SNR 15")
-			fresh()
-			n.noise = nil
-			assert_eq(inform_once(n), 60, "no survey: -95 assumed")
-
-			-- A near-idle uplink isn't judged: iw's rx rate is the last frame's.
-			fresh()
-			local idle = client{signal = -61, noise = -83, rx_rate = "19.5 MBit/s MCS 2",
-				bytes_per = 953, us_per = 222, rx_per = 19}
-			idle()
-			idle()
-			assert_eq(idle(), 94, "19 frames per inform: uplink term skipped")
-
-			-- A legacy uplink rate (a null frame at 1 Mbit/s) is not a verdict.
-			fresh()
-			local legacy = client{signal = -50, noise = -83, rx_rate = "1.0 MBit/s",
-				bytes_per = 953, us_per = 222}
-			legacy()
-			legacy()
-			assert_eq(legacy(), 100, "legacy rx rate: uplink term skipped")
-
-			-- SNR is smoothed: one 2 dB dip doesn't drop an Excellent client.
-			fresh()
-			local jitter = {signal = -62, noise = -83, rx_rate = MCS7, tx_packets = 10,
-				tx_bytes = 1000, rx_packets = 10}
-			assert_eq(inform_once(jitter), 92, "SNR 21")
-			jitter.signal = -64
-			assert_eq(inform_once(jitter), 91, "one reading at 19 dB: smoothed to 20.6")
-
-			inform._time = orig_time
-			inform._sta_stats_cache = {}
 		end
 	},
 	{
@@ -1398,19 +1133,20 @@ return {
 		end
 	},
 	{
-		-- Enforcement: a station below the radio's minrssi threshold gets a
-		-- single deauth via ucihelper.kick_station -- confirmed via web
-		-- research this is a one-shot roaming-assist kick, not a persistent
-		-- block, so it's deliberately separate from firewall.lua's
-		-- block-sta feature (no nftables, no state.json).
-		name = "inform json: stations below the radio's minrssi threshold get kicked, others don't",
+		-- Enforcement: a station below the radio's minrssi threshold for 30 s
+		-- gets a single deauth via ucihelper.kick_station (stamgr's 30
+		-- consecutive 1 s samples, openuf/minrssi.lua) -- a one-shot kick,
+		-- not a persistent block, so it's deliberately separate from
+		-- firewall.lua's block-sta feature (no nftables, no state.json).
+		name = "inform json: stations below the radio's minrssi threshold for 30 s get kicked, others don't",
 		fn = function()
 			inject_sysinfo(true)  -- fixture: aa:bb:cc:dd:ee:ff at -62 dBm, 11:22:33:44:55:66 at -75 dBm
 			inject_ucihelper()
+			inform._minrssi._low_since = {}
 			inform._ucihelper.get_radio_table = function()
 				return {
 					{ name = "radio0", radio = "ng", channel = "6",
-					  min_rssi_enabled = true, min_rssi_raw = 25 },  -- threshold: 25 + (-95) = -70 dBm
+					  min_rssi_enabled = true, min_rssi_raw = 25 },  -- threshold: 25 - 95 = -70 dBm
 				}
 			end
 			local kicked = {}
@@ -1422,10 +1158,110 @@ return {
 				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
 				ip = "192.168.1.100", hostname = "testap",
 			}
-			inform.build_json(st, nil, ufhw)
-			assert_eq(#kicked, 1, "exactly one station kicked")
-			assert_eq(kicked[1].mac, "11:22:33:44:55:66", "the -75 dBm station (below -70 threshold) is kicked")
-			assert_eq(kicked[1].ifname, "wlan0", "kicked on the resolved live ifname")
+			local orig_time = inform._time
+			local ok, err = pcall(function()
+				for _, t in ipairs({1000, 1010, 1020}) do
+					inform._time = function() return t end
+					inform.build_json(st, nil, ufhw)
+				end
+				assert_eq(#kicked, 0, "20 s below: not yet")
+				inform._time = function() return 1030 end
+				inform.build_json(st, nil, ufhw)
+				assert_eq(#kicked, 1, "30 s below: exactly one station kicked")
+				assert_eq(kicked[1].mac, "11:22:33:44:55:66", "the -75 dBm station (below -70 threshold) is kicked")
+				assert_eq(kicked[1].ifname, "wlan0", "kicked on the resolved live ifname")
+				local k = inform._assoctrack._kicks["11:22:33:44:55:66"]
+				assert_true(k ~= nil and k.bits == 16, "its departure will carry assoc_status 16 (Minimum RSSI)")
+				assert_nil(inform._assoctrack._kicks["aa:bb:cc:dd:ee:ff"], "not the station left alone")
+			end)
+			inform._time = orig_time
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- A station reported as roamed away (sta_roam) is left out of the
+		-- heartbeat while hostapd still lists it: listed, the controller sees
+		-- it move back and away again, and 10.6 writes that as a second,
+		-- tag-less roam (seen live, 2026-10-14).
+		name = "inform json: a station that roamed away is not reported while hostapd still lists it",
+		fn = function()
+			local at = inform._assoctrack
+			local o_roamed = at._roamed
+			local ok, err = pcall(function()
+				-- Marked later than any frame the fixture reports: not heard since.
+				at._roamed = {["11:22:33:44:55:66"] = 1e12}
+				local d = build({with_clients = true, with_uci = true})
+				local macs = {}
+				for _, v in ipairs(d.vap_table) do
+					for _, sta in ipairs(v.sta_table or {}) do macs[sta.mac] = true end
+				end
+				assert_nil(macs["11:22:33:44:55:66"], "the roamed station is left out")
+				assert_true(macs["aa:bb:cc:dd:ee:ff"], "the other one is reported")
+				assert_true(at._roamed["11:22:33:44:55:66"] ~= nil, "still marked: hostapd still lists it")
+			end)
+			at._roamed = o_roamed
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- Load balance (openuf/loadbalance.lua): above the radio's cap the most
+		-- idle stations get the one-shot deauth, not counting one Minimum RSSI
+		-- kicks in the same pass; the cap never reaches the payload.
+		name = "inform json: Load balance kicks the most idle stations above the radio's cap",
+		fn = function()
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local orig_sta = inform._sysinfo.sta_table
+			inform._sysinfo.sta_table = function(ifname)
+				if ifname ~= "wlan0" then return {} end
+				return {
+					{mac = "00:00:5e:00:53:01", signal = -50, inactive_ms = 100, tx_packets = 1},
+					{mac = "00:00:5e:00:53:02", signal = -55, inactive_ms = 9000, tx_packets = 1},
+					{mac = "00:00:5e:00:53:03", signal = -60, inactive_ms = 4000, tx_packets = 1},
+					{mac = "00:00:5e:00:53:04", signal = -85, inactive_ms = 20000, tx_packets = 1},
+				}
+			end
+			local radio = {name = "radio0", radio = "ng", channel = "6", loadbalance_maxsta = 2}
+			inform._ucihelper.get_radio_table = function()
+				local r = {}
+				for k, v in pairs(radio) do r[k] = v end
+				return {r}
+			end
+			local kicked = {}
+			inform._ucihelper.kick_station = function(ifname, mac)
+				kicked[#kicked + 1] = mac
+			end
+			inform._minrssi._low_since = {}
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			local ok, err = pcall(function()
+				local d = cjson.decode(inform.build_json(st, nil, ufhw))
+				table.sort(kicked)
+				assert_eq(table.concat(kicked, ","), "00:00:5e:00:53:02,00:00:5e:00:53:04",
+					"four on a cap of two: the two most idle")
+				assert_nil(d.radio_table[1].loadbalance_maxsta, "internal cap stripped from the payload")
+
+				-- Minimum RSSI (-70 dBm) has had .04 below for a minute: it is
+				-- kicked for that, and the three left are one over the cap.
+				kicked = {}
+				radio.min_rssi_enabled, radio.min_rssi_raw = true, 25
+				inform._minrssi._low_since = {["00:00:5e:00:53:04"] = os.time() - 60}
+				inform.build_json(st, nil, ufhw)
+				table.sort(kicked)
+				assert_eq(table.concat(kicked, ","), "00:00:5e:00:53:02,00:00:5e:00:53:04",
+					"Minimum RSSI's kick, then the most idle of the three left")
+
+				kicked = {}
+				radio.min_rssi_enabled, radio.min_rssi_raw = nil, nil
+				radio.loadbalance_maxsta = nil
+				inform.build_json(st, nil, ufhw)
+				assert_eq(#kicked, 0, "off: no kicks")
+			end)
+			inform._sysinfo.sta_table = orig_sta
+			if not ok then error(err, 0) end
 		end
 	},
 	{
@@ -1441,7 +1277,8 @@ return {
 					return {{mac = "aa:bb:cc:dd:ee:01", signal = -50, tx_packets = 1}}
 				end
 				if ifname == "wlan0-20" then
-					return {{mac = "aa:bb:cc:dd:ee:02", signal = -80, tx_packets = 1}}
+					-- Its last frame was loud; its average is what counts.
+					return {{mac = "aa:bb:cc:dd:ee:02", signal = -65, signal_avg = -80, tx_packets = 1}}
 				end
 				return {}
 			end
@@ -1460,6 +1297,7 @@ return {
 			inform._ucihelper.kick_station = function(ifname, mac)
 				kicked[#kicked + 1] = {ifname = ifname, mac = mac}
 			end
+			inform._minrssi._low_since = {["aa:bb:cc:dd:ee:02"] = os.time() - 60}  -- below for a minute
 			local ok, err = pcall(function()
 				local st = {
 					authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
@@ -1470,7 +1308,7 @@ return {
 				local vap
 				for _, v in ipairs(d.vap_table) do if v.essid == "test" then vap = v end end
 				assert_eq(vap.num_sta, 2, "the VLAN client is counted")
-				assert_eq(#kicked, 1, "the -80 dBm VLAN client is below -70")
+				assert_eq(#kicked, 1, "the VLAN client's -80 dBm average is below -70")
 				assert_eq(kicked[1].mac, "aa:bb:cc:dd:ee:02", "that one")
 				assert_eq(kicked[1].ifname, "wlan0", "through the VAP's hostapd, not wlan0-20")
 			end)
@@ -1511,6 +1349,39 @@ return {
 			assert_true(type(seen_now) == "number", "a clock")
 			assert_eq(seen_opts.diff_db, 6, "conf override passed through")
 			assert_nil(d.vap_table[1].roam_assist_rssi, "internal threshold stripped from the payload")
+		end
+	},
+	{
+		name = "inform json: a station below Minimum RSSI is not also handed to Roaming Assistant",
+		fn = function()
+			inject_sysinfo(true)  -- aa:bb:cc:dd:ee:ff at -62 dBm, 11:22:33:44:55:66 at -75 dBm
+			inject_ucihelper()
+			inform._minrssi._low_since = {}
+			local base = inform._ucihelper.get_vap_table
+			inform._ucihelper.get_vap_table = function()
+				local v = base()
+				v[1].roam_assist_rssi = -60
+				return v
+			end
+			inform._ucihelper.get_radio_table = function()
+				return {{name = "radio0", radio = "ng", channel = "6",
+					min_rssi_enabled = true, min_rssi_raw = 25}}  -- -70 dBm
+			end
+			local seen
+			local orig = inform._roamassist
+			inform._roamassist = {tick = function(o) seen = o end}
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			local ok, err = pcall(inform.build_json, st, nil, ufhw)
+			inform._roamassist = orig
+			if not ok then error(err, 0) end
+			assert_eq(#seen, 1, "only the station above Minimum RSSI")
+			assert_eq(seen[1].mac, "aa:bb:cc:dd:ee:ff", "the -62 dBm one")
+			assert_eq(inform._minrssi._low_since["11:22:33:44:55:66"] ~= nil, true,
+				"the -75 dBm one is Minimum RSSI's")
 		end
 	},
 	{
@@ -1595,6 +1466,22 @@ return {
 			assert_eq(inform._fix_empty_arrays(hostile),
 				'{"ssid":"evil\\"sta_table\\":{}","sta_table":[]}',
 				"escaped quotes inside string values never match")
+			assert_eq(inform._fix_empty_arrays(
+				'{"other":{},"my_sta_table":{},"sta_tables":{},"sta_table":{"a":{}}}'),
+				'{"other":{},"my_sta_table":{},"sta_tables":{},"sta_table":{"a":{}}}',
+				"other empty objects and look-alike keys keep their braces")
+			local long = '{"a_very_long_field_name_ending_in_sta_table":{},"radio_table_stats":{}}'
+			assert_eq(inform._fix_empty_arrays(long),
+				'{"a_very_long_field_name_ending_in_sta_table":{},"radio_table_stats":[]}',
+				"a long look-alike keeps its braces, the longest listed name is rewritten")
+			local same = '{"x":{},"y":1}'
+			assert_eq(inform._fix_empty_arrays(same), same, "nothing to rewrite")
+			for _, f in ipairs({"if_table", "radio_table", "radio_table_stats",
+					"vap_table", "scan_radio_table", "port_table", "lldp_table",
+					"sta_table", "mac_table", "scan_table"}) do
+				assert_eq(inform._fix_empty_arrays('{"' .. f .. '":{}}'),
+					'{"' .. f .. '":[]}', f .. " is a list")
+			end
 		end
 	},
 	{
@@ -1677,10 +1564,69 @@ return {
 			-- the literal string "auto" here, and used to go out as-is.
 			assert_eq(d.vap_table[1].channel, 6, "vap channel overridden with the live value")
 			assert_eq(d.vap_table[1].radio, "ng", "vap band matches the corrected radio band")
+			-- 20 MHz: no secondary channel, and the firmware leaves it out.
+			assert_nil(d.vap_table[1].extchannel, "no extchannel at 20 MHz")
+			assert_nil(d.radio_table[1].extchannel, "extchannel is a vap field only")
 			-- tx_power has the same UCI-echo problem: the option is absent
 			-- while Transmit Power is Auto, so both copies stayed nil.
 			assert_eq(d.radio_table[1].tx_power, 20, "radio reports the live driver TX power")
 			assert_eq(d.vap_table[1].tx_power, 20, "and the vap inherits the same correction")
+		end
+	},
+	{
+		name = "inform json: a 40 MHz 2.4GHz vap reports its secondary channel side as extchannel",
+		fn = function()
+			-- HT40- on channel 11: the secondary 20 MHz is channel 7, below.
+			-- The UI centres the channel at channel + 2 * extchannel = 9.
+			inject_sysinfo(false, false, false, true)
+			inform._sysinfo._run_cmd = function(cmd)
+				if cmd:find("dev wlan0 info") then
+					return (fixture("iw_dev_info.txt"):gsub(
+						"channel 6 %(2437 MHz%), width: 20 MHz, center1: 2437 MHz",
+						"channel 11 (2462 MHz), width: 40 MHz, center1: 2452 MHz"))
+				end
+				if cmd:find("phy phy0 info") then return fixture("iw_phy_info_2g.txt") end
+				return ""
+			end
+			local real_uci = dofile("openuf/ucihelper.lua")
+			local sections = {
+				{[".name"] = "radio0", [".type"] = "wifi-device", channel = "11"},
+				{[".name"] = "openuf_radio0_test", [".type"] = "wifi-iface",
+				 device = "radio0", ssid = "test", encryption = "psk2"},
+			}
+			real_uci._uci = {cursor = function() return {
+				foreach = function(_, config, stype, fn)
+					if config ~= "wireless" then return end
+					for _, s in ipairs(sections) do
+						if s[".type"] == stype then fn(s) end
+					end
+				end,
+				get = function() return nil end,
+				set = function() end,
+				delete = function() end,
+				commit = function() end,
+			} end}
+			real_uci._popen = function(cmd)
+				if cmd:find("network.wireless", 1, true) then
+					return '{"radio0":{"interfaces":[{"ifname":"wlan0"}]}}'
+				end
+				return ""
+			end
+			real_uci._read_file = function() return nil end
+			real_uci._run_cmd = function() return true end
+
+			local orig = inform._ucihelper
+			inform._ucihelper = real_uci
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			local d = cjson.decode(inform.build_json(st, nil, ufhw))
+			inform._ucihelper = orig
+			assert_eq(d.vap_table[1].channel, 11, "live channel")
+			assert_eq(d.vap_table[1].extchannel, -1, "secondary below the primary")
+			assert_nil(d.radio_table[1].extchannel, "not a radio_table field")
 		end
 	},
 	{
@@ -1978,7 +1924,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: fw_caps sets the QCA-switch and OWRT-switch bits (0x110)",
+		name = "inform json: fw_caps sets the QCA-switch, OWRT-switch and multi-block schedule bits (0x1110)",
 		fn = function()
 			-- Confirmed via decompiled controller 10.4.57: Device.hasQCASwitch()
 			-- is hasFirmwareCapability(16) (gates the Ports view's projection
@@ -1986,9 +1932,12 @@ return {
 			-- hasFirmwareCapability(256) (without it, the REST API's per-port
 			-- VLAN validator rejects any port assignment with
 			-- api.err.VlanTaggingUnsupportedByDevice -- see PROTOCOL-VALIDATION.md
-			-- section 18).
+			-- section 18). supportMultiBlockWlanSchedule() is
+			-- hasFirmwareCapability(4096): a day's schedule blocks as
+			-- schedule_<day>.<i> (wlansched.lua); schedule_invert (0x400000)
+			-- stays unclaimed.
 			local d = build()
-			assert_eq(d.fw_caps, 0x110, "fw_caps bits 0x10 | 0x100 set")
+			assert_eq(d.fw_caps, 0x1110, "fw_caps bits 0x10 | 0x100 | 0x1000 set")
 		end
 	},
 	{
@@ -2519,44 +2468,6 @@ return {
 		end
 	},
 	{
-		name = "inform json: 802.11k beacon reports enrich scan_radio_table",
-		fn = function()
-			-- The whole point of rrmscan.lua: the passive `iw scan dump` cache
-			-- only ever holds neighbours on the channel the radio is already
-			-- serving, so BSSes a CLIENT saw off-channel have to reach the
-			-- payload through here or they reach it not at all.
-			local prev = inform._rrm_neighbours
-			inform._rrm_neighbours = {
-				{bssid = "aa:bb:cc:dd:ee:01", channel = 6, band = "ng",
-				 signal = -70, seen_at = os.time()},          -- already scanned: not duplicated
-				{bssid = "00:00:5e:00:53:11", channel = 1, band = "ng",
-				 signal = -73, seen_at = os.time()},          -- only the client could see it
-				{bssid = "00:00:5e:00:53:17", channel = 48, band = "na",
-				 signal = -80, seen_at = os.time()},          -- other band: not this radio's
-			}
-			local ok, d = pcall(build, {with_uci = true, with_scan = true})
-			inform._rrm_neighbours = prev
-			assert_true(ok, "build_json survives the merge")
-			local srt = d.scan_radio_table[1]
-			assert_eq(srt.radio, "ng", "the 2.4 GHz radio")
-			local seen = {}
-			for _, e in ipairs(srt.scan_table) do
-				assert_nil(seen[e.bssid], "no BSSID appears twice: " .. tostring(e.bssid))
-				seen[e.bssid] = e
-			end
-			assert_eq(#srt.scan_table, 3, "two scanned + one client-only neighbour")
-			assert_eq(seen["aa:bb:cc:dd:ee:01"].essid, "NeighborNet",
-				"the scanned record wins over the beacon report")
-			assert_eq(seen["aa:bb:cc:dd:ee:01"].signal, -55, "and keeps its own signal")
-			local added = seen["00:00:5e:00:53:11"]
-			assert_not_nil(added, "the client-only neighbour reached the payload")
-			assert_eq(added.channel, 1, "on the channel the client reported")
-			assert_eq(added.signal, -73, "with the RCPI-derived signal")
-			assert_eq(added.band, "ng", "band set or the row silently vanishes")
-			assert_nil(seen["00:00:5e:00:53:17"], "a 5 GHz sighting is not filed under 2.4 GHz")
-		end
-	},
-	{
 		name = "inform json: stale beacon reports never reach the payload",
 		fn = function()
 			local prev = inform._rrm_neighbours
@@ -2648,13 +2559,13 @@ return {
 				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
 				ip = "192.168.1.100", hostname = "testap"}
 			local d = cjson.decode(inform.build_json(st, {config = {}}, ufhw))
-			assert_eq(d.fw_caps, 0x110, "shipped fw_caps without an override")
+			assert_eq(d.fw_caps, 0x1110, "shipped fw_caps without an override (0x1000: multi-block WLAN schedule)")
 			assert_eq(d.wifi_caps2, 0xE2, "shipped wifi_caps2 without an override")
 			assert_eq(d.wifi_caps, 0x1C + 0x801, "shipped wifi_caps without an override (mesh bits by default on a DSA board)")
 			d = cjson.decode(inform.build_json(st,
 				{config = {debug_caps = {wifi_caps = 0x2, wifi_caps2 = 0x41}}}, ufhw))
 			inform._airtime.supported = o
-			assert_eq(d.fw_caps, 0x110, "an unlisted mask keeps its shipped value")
+			assert_eq(d.fw_caps, 0x1110, "an unlisted mask keeps its shipped value")
 			assert_eq(d.wifi_caps, 0x2, "wifi_caps override replaces the shipped bits")
 			assert_eq(d.wifi_caps2, 0x41, "wifi_caps2 override applied")
 		end
@@ -2685,7 +2596,8 @@ return {
 			local orig = inform._ucihelper
 			local log = {}
 			inform._ucihelper = {
-				begin_pass      = function() log[#log + 1] = "begin" end,
+				-- true: this stub's pass is build_json's own, so it closes it.
+				begin_pass      = function() log[#log + 1] = "begin"; return true end,
 				end_pass        = function() log[#log + 1] = "end" end,
 				get_vap_table   = function() log[#log + 1] = "vaps"; return {} end,
 				get_radio_table = function() log[#log + 1] = "radios"; return {} end,
@@ -2702,32 +2614,6 @@ return {
 		end
 	},
 
-	{
-		name = "inform json: the throughput cache forgets a station that left",
-		fn = function()
-			-- _sta_stats_cache is keyed by CLIENT MAC and was never emptied,
-			-- so on a daemon that runs for months in a place with transient
-			-- clients it only ever grew. A station back after the window is a
-			-- fresh association, and its 0-throughput first sample is honest.
-			inform._sta_stats_cache = {}
-			local orig_time = inform._time
-			inform._time = function() return 1000 end
-			build({with_uci = true, with_clients = true})   -- seeds the stations
-			local seeded = 0
-			for _ in pairs(inform._sta_stats_cache) do seeded = seeded + 1 end
-			assert_eq(seeded, 2, "both connected stations are cached")
-
-			-- A later payload on which that station no longer appears.
-			inform._time = function() return 1000 + inform.STA_STATS_FORGET_AFTER + 1 end
-			build({with_uci = true})                        -- no clients this time
-			local left = 0
-			for _ in pairs(inform._sta_stats_cache) do left = left + 1 end
-			assert_eq(left, 0, "and dropped once it has been gone for the whole window")
-
-			inform._time = orig_time
-			inform._sta_stats_cache = {}
-		end
-	},
 
 	-- ── Adopted from upstream 2026-09-13: per-socket bridge, VLAN label, one FDB
 	--    dump per payload (AX3000T-shaped harness) ─────────────────────────────
@@ -2842,6 +2728,365 @@ return {
 				"and it is bare M.m.p.build: " .. tostring(d.version))
 			assert_eq(d.required_version, uap.required_version, "required_version passes through")
 			assert_eq(d.bootrom_version, "", "bootrom_version is the identity's empty bootver")
+		end
+	},
+	{
+		-- A connection event names its BSS by the hostapd netdev; the
+		-- controller resolves it against vap_table `name`. build_json is the
+		-- one place that knows both, so it records the mapping -- and the
+		-- device identity every notif inform repeats.
+		name = "build_json: records the BSS -> vap name map and the notif identity",
+		fn = function()
+			inform._vap_by_ifname, inform._notif_identity = {}, nil
+			local p = build({with_uci = true, with_clients = true, adopted = true})
+			assert_eq(inform._vap_by_ifname["wlan0"], "openuf_test", "wlan0 is the vap named openuf_test")
+			local id = inform._notif_identity
+			assert_true(type(id) == "table", "identity captured")
+			assert_eq(id.mac, p.mac, "same mac as the state inform")
+			assert_eq(id.model, p.model, "model")
+			assert_eq(id.version, p.version, "firmware version")
+			assert_eq(id.cfgversion, p.cfgversion, "cfgversion")
+			assert_eq(id.serial, p.serial, "serial")
+		end
+	},
+	{
+		name = "inform json: satisfaction is rolled up to the vap, its radio and the device",
+		fn = function()
+			-- The controller does not derive these from the per-client scores
+			-- it already holds: without them the Devices list showed
+			-- "No Clients" in the Experience column on an AP with eight
+			-- connected clients, each individually scored in the Clients view.
+			local d = build({with_uci = true, with_clients = true})
+			local vap = d.vap_table[1]
+			local sum, n = 0, 0
+			for _, s in ipairs(vap.sta_table) do sum, n = sum + s.satisfaction, n + 1 end
+			assert_eq(n, 2, "two clients scored")
+			assert_eq(vap.satisfaction, math.floor(sum / n),
+				"the vap's score is the clients' mean, truncated as the firmware does")
+			assert_eq(d.satisfaction, vap.satisfaction,
+				"one vap: the device's score is the vap's")
+			local radio
+			for _, r in ipairs(d.radio_table) do
+				if r.name == d.vap_table[1].radio_name then radio = r end
+			end
+			assert_not_nil(radio, "the vap's radio is reported")
+			assert_eq(radio.athstats.satisfaction, vap.satisfaction,
+				"its radio carries the same score in athstats")
+			local reasons, anomalies = 0, 0
+			for _, v in pairs(vap.reasons_bar_chart) do reasons = reasons + v end
+			for _, v in pairs(vap.anomalies_bar_chart) do anomalies = anomalies + v end
+			assert_eq(reasons, 2, "each client limited by one term is counted once")
+			assert_eq(vap.reasons_bar_chart.phy_rate, 2, "both by their phy rate")
+			assert_eq(anomalies, 0, "no anomalies on these clients")
+			assert_eq(vap.anomalies_bar_chart.weak_signal, 0, "every anomaly key is sent")
+		end
+	},
+	{
+		name = "inform json: satisfaction is -1, not absent or zero, when nothing is connected",
+		fn = function()
+			-- 0 would read as "terrible experience". The firmware sends -1,
+			-- which the controller's stat archiver skips; absent would leave
+			-- the device's last score standing (it copies the field only
+			-- when present).
+			local d = build({with_uci = true, with_clients = false})
+			assert_eq(d.vap_table[1].satisfaction, -1, "no vap score without clients")
+			assert_eq(d.satisfaction, -1, "no device score either")
+			for _, r in ipairs(d.radio_table) do
+				if r.athstats then
+					assert_eq(r.athstats.satisfaction, -1, "nor a radio score")
+				end
+			end
+			assert_eq(d.vap_table[1].reasons_bar_chart.signal, 0, "the charts are sent, all zero")
+		end
+	},
+	{
+		name = "inform json: the per-station cache forgets a station that left",
+		fn = function()
+			-- _sta_stats_cache is keyed by CLIENT MAC and was never emptied,
+			-- so on a daemon that runs for months in a place with transient
+			-- clients it only ever grew. A station back after the window is a
+			-- fresh association and starts a fresh WiFi Experience window.
+			inform._sta_stats_cache = {}
+			local orig_time = inform._time
+			inform._time = function() return 1000 end
+			build({with_uci = true, with_clients = true})   -- seeds one station
+			local seeded = 0
+			for _ in pairs(inform._sta_stats_cache) do seeded = seeded + 1 end
+			assert_eq(seeded, 2, "both connected stations are cached")
+
+			-- A later payload on which that station no longer appears.
+			inform._time = function() return 1000 + inform.STA_STATS_FORGET_AFTER + 1 end
+			build({with_uci = true})                        -- no clients this time
+			local left = 0
+			for _ in pairs(inform._sta_stats_cache) do left = left + 1 end
+			assert_eq(left, 0, "and dropped once it has been gone for the whole window")
+
+			inform._time = orig_time
+			inform._sta_stats_cache = {}
+		end
+	},
+	{
+		name = "inform json: 802.11k beacon reports enrich scan_radio_table",
+		fn = function()
+			-- The whole point of rrmscan.lua: the passive `iw scan dump` cache
+			-- only ever holds neighbours on the channel the radio is already
+			-- serving, so BSSes a CLIENT saw off-channel have to reach the
+			-- payload through here or they reach it not at all.
+			local prev = inform._rrm_neighbours
+			inform._rrm_neighbours = {
+				-- a BSS the passive scan already found -- must NOT be
+				-- duplicated, and must keep the scan's richer record
+				{bssid = "aa:bb:cc:dd:ee:01", channel = 6, band = "ng",
+				 signal = -70, seen_at = os.time()},
+				-- one only the client could see
+				{bssid = "00:00:5e:00:53:11", channel = 1, band = "ng",
+				 signal = -73, seen_at = os.time()},
+				-- and one on the other band, which belongs to no radio here
+				{bssid = "00:00:5e:00:53:17", channel = 48, band = "na",
+				 signal = -80, seen_at = os.time()},
+			}
+			local ok, d = pcall(build, {with_uci = true, with_scan = true})
+			inform._rrm_neighbours = prev
+			assert_true(ok, "build_json survives the merge")
+
+			local srt = d.scan_radio_table[1]
+			assert_eq(srt.radio, "ng", "the 2.4 GHz radio")
+			local seen = {}
+			for _, e in ipairs(srt.scan_table) do
+				assert_nil(seen[e.bssid], "no BSSID appears twice: " .. tostring(e.bssid))
+				seen[e.bssid] = e
+			end
+			assert_eq(#srt.scan_table, 3, "two scanned + one client-only neighbour")
+			assert_eq(seen["aa:bb:cc:dd:ee:01"].essid, "NeighborNet",
+				"the scanned record wins over the beacon report")
+			assert_eq(seen["aa:bb:cc:dd:ee:01"].signal, -55, "and keeps its own signal")
+			local added = seen["00:00:5e:00:53:11"]
+			assert_not_nil(added, "the client-only neighbour reached the payload")
+			assert_eq(added.channel, 1, "on the channel the client reported")
+			assert_eq(added.signal, -73, "with the RCPI-derived signal")
+			-- Without `band` the Environment tab filters the row out upstream
+			-- of every visible filter, with no error and no visible cause.
+			assert_eq(added.band, "ng", "band set or the row silently vanishes")
+			assert_nil(seen["00:00:5e:00:53:17"],
+				"a 5 GHz sighting is not filed under the 2.4 GHz radio")
+		end
+	},
+	{
+		-- A client reports the AP it sits on and its sibling APs like any
+		-- other BSS. Listed, the AP showed up as its own neighbour, and a
+		-- sibling carrying the site's SSID -- untagged, since the tag is in a
+		-- vendor element past where a report's frame body is cut -- is what
+		-- the controller flags as an impersonating rogue.
+		name = "inform json: beacon reports of this AP and its siblings are skipped",
+		fn = function()
+			local prev_n, prev_sib = inform._rrm_neighbours, inform._rrmscan.sibling_bssids
+			inform._rrm_neighbours = {
+				{bssid = "00:00:5e:00:53:01", channel = 1, band = "ng", signal = -11,
+				 seen_at = os.time(), essid = "SiteNet", security = "wpa2"},
+				{bssid = "00:00:5e:00:53:02", channel = 11, band = "ng", signal = -60,
+				 seen_at = os.time(), essid = "SiteNet", security = "wpa2"},
+				{bssid = "00:00:5e:00:53:03", channel = 11, band = "ng", signal = -70,
+				 seen_at = os.time(), essid = "SiteNet", security = "wpa2"},
+				{bssid = "00:00:5e:00:53:04", channel = 6, band = "ng", signal = -80,
+				 seen_at = os.time(), essid = "Elsewhere", security = "wpa2", bw = 40},
+			}
+			inform._rrmscan.sibling_bssids = function()
+				return {["00:00:5e:00:53:02"] = true}
+			end
+			local ok, d = pcall(build, {with_uci = true, vap_patch = function(vaps)
+				vaps[1].bssid, vaps[1].essid = "00:00:5E:00:53:01", "SiteNet"
+			end})
+			inform._rrm_neighbours, inform._rrmscan.sibling_bssids = prev_n, prev_sib
+			assert_true(ok, "build_json survives: " .. tostring(d))
+			local seen = {}
+			for _, e in ipairs(d.scan_radio_table[1].scan_table) do seen[e.bssid] = e end
+			assert_nil(seen["00:00:5e:00:53:01"], "this AP's own BSSID is skipped")
+			assert_nil(seen["00:00:5e:00:53:02"], "a usteer sibling is skipped")
+			assert_not_nil(seen["00:00:5e:00:53:03"], "an unknown BSS is still listed")
+			assert_nil(seen["00:00:5e:00:53:03"].essid, "but not with the site's SSID")
+			assert_eq(seen["00:00:5e:00:53:04"].essid, "Elsewhere", "a foreign SSID is carried")
+			assert_eq(seen["00:00:5e:00:53:04"].bw, 40, "with its width")
+		end
+	},
+	{
+		-- A UniFi AP reports utilisation over its last ~1 s (umac.ko diffs the
+		-- MIB counters every 10 beacons), not since the radio came up.
+		name = "inform json: channel utilisation is the delta since the previous inform",
+		fn = function()
+			local orig = inform._sysinfo.radio_stats
+			local cur
+			inform._sysinfo.radio_stats = function() return {cur} end
+			local function at(freq, active, busy, rx, tx)
+				cur = {freq = freq, in_use = true, noise = -95, channel_time = active,
+				       channel_time_busy = busy, channel_time_rx = rx, channel_time_tx = tx}
+				local a = build({with_uci = true, with_clients = true}).radio_table[1].athstats
+				return a.cu_total, a.cu_self_rx, a.cu_self_tx, a.cu_interf
+			end
+			inform._cu_cache = {}
+			-- first reading: everything since bring-up (25% lifetime average)
+			local t, rx, tx, i = at(2412, 40000, 10000, 9000, 200)
+			assert_eq(t, 25, "first reading: the counters as they stand")
+			-- next 10 s: 8 s busy, the lifetime average would say 26%
+			t, rx, tx, i = at(2412, 50000, 18000, 9500, 3200)
+			assert_eq(t, 80, "cu_total over the last window")
+			assert_eq(rx, 5, "cu_self_rx over the last window")
+			assert_eq(tx, 30, "cu_self_tx over the last window")
+			assert_eq(i, 45, "cu_interf from the windowed values")
+			-- rounded like the firmware: 6 ms busy of 1000 is 0.6%, reported as 1
+			t = at(2412, 51000, 18006, 9500, 3200)
+			assert_eq(t, 1, "0.6% rounds to 1, as the firmware's +128>>8 does")
+			-- no new active time: repeat the previous figures, don't invent 0%
+			t = at(2412, 51000, 18006, 9500, 3200)
+			assert_eq(t, 1, "a stalled reading repeats the previous result")
+			-- radio restarted: counters went backwards, take them as they stand
+			t = at(2412, 2000, 1000, 100, 100)
+			assert_eq(t, 50, "after a restart: everything since the restart")
+			-- channel change: no delta across two channels
+			t = at(2437, 4000, 1400, 100, 100)
+			assert_eq(t, 35, "after a channel change: the new channel's counters, not a delta (20)")
+			inform._sysinfo.radio_stats = orig
+			inform._cu_cache = {}
+		end
+	},
+	{
+		-- supportsRoamTopologyStats() is hasWifiCapability2(8192) (10.6.106).
+		-- With it the controller takes roams only from this AP's roam reports,
+		-- so it is claimed exactly while those are sent: when the controller
+		-- asked for connection notifs and conf.lua has not vetoed them.
+		name = "inform json: wifi_caps2 adds 0x2000 only while roam reports are sent",
+		fn = function()
+			-- This tree's base is 0xE2 (0x60 + the Quick/Airtime scan bits 0x2
+			-- and 0x80 it also claims); the roam bit rides on top of that.
+			assert_eq(build().wifi_caps2, 0xE2, "not asked: no claim")
+			inject_sysinfo()
+			local st = {authkey = state.DEFAULT_KEY, inform_url = "http://10.0.0.1:8080/inform",
+				mac = "aa:bb:cc:dd:ee:ff", notif_assoc_stat = true}
+			local d = cjson.decode(inform.build_json(st, {config = {}}, ufhw))
+			assert_eq(d.wifi_caps2, 0x20E2, "asked: claimed")
+			d = cjson.decode(inform.build_json(st, {config = {assoc_tracker = false}}, ufhw))
+			assert_eq(d.wifi_caps2, 0xE2, "assoc_tracker = false: no claim")
+		end
+	},
+	{
+		name = "inform json: satisfaction follows the firmware's terms through real counters",
+		fn = function()
+			inform._sta_stats_cache = {}
+			inform._sysinfo._driver_cache = {}
+			local orig_time = inform._time
+			local t = 1000
+			inform._time = function() return t end
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			local last_vap
+			local base_read = inform._sysinfo._read_file
+			-- One inform, ten seconds after the last: c = {signal, avg,
+			-- noise, tx/rx rate, lifetime tx packets/retries/failed, driver}.
+			local function inform_once(c)
+				inject_ucihelper()
+				inform._sysinfo._phy_info_cache = {}
+				inform._sysinfo._read_file = function(path)
+					if path:find("/device/uevent", 1, true) then
+						return "DRIVER=" .. c.driver .. "\n"
+					end
+					return base_read(path)
+				end
+				inform._sysinfo._run_cmd = function(cmd)
+					if cmd:find("station dump") then
+						return "Station 00:00:5e:00:53:01 (on wlan0)\n" ..
+							"\ttx packets:\t" .. c.packets .. "\n" ..
+							"\ttx retries:\t" .. c.retries .. "\n" ..
+							"\ttx failed:\t" .. c.failed .. "\n" ..
+							"\tsignal:  \t" .. c.signal .. " [-60, -61] dBm\n" ..
+							(c.avg and ("\tsignal avg:\t" .. c.avg .. " [-60, -61] dBm\n") or "") ..
+							"\ttx bitrate:\t" .. c.tx .. "\n" ..
+							"\trx bitrate:\t" .. c.rx .. "\n"
+					end
+					if cmd:find("survey dump") then
+						return "Survey data from wlan0\n\tfrequency:\t5180 MHz [in use]\n" ..
+							"\tnoise:\t" .. c.noise .. " dBm\n"
+					end
+					if cmd:find("dev wlan0 info") then return fixture("iw_dev_info.txt") end
+					if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
+					return ""
+				end
+				t = t + 10
+				local d = cjson.decode(inform.build_json(st, nil, ufhw))
+				last_vap = d.vap_table[1]
+				local sta = d.vap_table[1].sta_table[1]
+				return sta.satisfaction, sta.satisfaction_reason, sta.anomalies
+			end
+			local VHT = "866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2"
+			local function client(o)
+				local c = {signal = -60, noise = -90, tx = VHT, rx = VHT,
+					packets = 1000, retries = 0, failed = 0, driver = "ath9k"}
+				for k, v in pairs(o) do c[k] = v end
+				return c
+			end
+			local function step(c, pkts, retries, failed)
+				c.packets, c.retries, c.failed =
+					c.packets + pkts, c.retries + retries, c.failed + failed
+			end
+
+			-- Retries: judged over the last completed minute, and only then.
+			inform._sta_stats_cache = {}
+			local c = client{}
+			assert_eq(inform_once(c), 100, "a clean VHT client at 30 dB SNR")
+			for _ = 1, 5 do
+				step(c, 100, 40, 5)
+				assert_eq(inform_once(c), 100, "40 % retries: no minute completed yet")
+			end
+			step(c, 100, 40, 5)
+			local score, reason, anomalies = inform_once(c)
+			assert_eq(score, 50, "the minute: 40 % retries -> 80, less 30 drops")
+			assert_eq(reason, 16, "reason: wifi_retries")
+			assert_eq(anomalies, 0, "50 is not yet an anomaly")
+			step(c, 100, 0, 0)
+			assert_eq(inform_once(c), 50, "the minute's score holds until the next one")
+
+			-- mt76's tx failed counts failed attempts, not drops.
+			inform._sta_stats_cache = {}
+			inform._sysinfo._driver_cache = {}
+			c = client{driver = "mt798x-wmac"}
+			inform_once(c)
+			for _ = 1, 6 do step(c, 100, 40, 40) end
+			t = t + 50
+			assert_eq(inform_once(c), 80, "mt76: retries judged, failed attempts not counted as drops")
+			assert_eq(last_vap.tx_dropped, 0, "nor in the VAP's drops")
+			for _ = 1, 6 do step(c, 100, 40, 42) end
+			t = t + 50
+			assert_eq(inform_once(c), 68, "mt76: failed beyond the retries are drops: 80 less 12")
+			assert_eq(last_vap.tx_dropped, 12, "and the VAP reports those 12, not 492")
+			assert_eq(last_vap.wifi_tx_dropped, 12, "as does the pair the controller divides")
+			-- An underflowed counter (count - 1 with count 0) is no 2^32 retries.
+			c.retries, c.failed = 4294967295, 4294967295
+			inform_once(c)
+			assert_eq(last_vap.tx_retries, 0, "no 2^32 jump in the VAP's retries")
+			assert_true(last_vap.wifi_tx_attempts < 2147483648, "nor in its attempts")
+			inform._sysinfo._driver_cache = {}
+
+			-- SNR: the averaged signal over a noise floor taken as no lower than -96.
+			inform._sta_stats_cache = {}
+			assert_eq(inform_once(client{signal = -80, noise = -107}), 91,
+				"ath9k's -107 floor is taken as -96: SNR 16")
+			inform._sta_stats_cache = {}
+			assert_eq(inform_once(client{signal = -50, avg = -84, noise = -94}), 65,
+				"the running average, not the last frame: SNR 10")
+			inform._sta_stats_cache = {}
+			score, reason, anomalies = inform_once(client{signal = -90, noise = -94})
+			assert_eq(score, 0, "SNR 4: no signal")
+			assert_eq(anomalies, 1, "weak_signal")
+
+			-- PHY: the mean of the two rates, in absolute steps.
+			inform._sta_stats_cache = {}
+			score, reason = inform_once(client{tx = "65.0 MBit/s MCS 7", rx = "72.2 MBit/s MCS 7 short GI"})
+			assert_eq(score, 85, "a 2.4 GHz single-stream client at its top rate")
+			assert_eq(reason, 2, "reason: phy_rate")
+
+			inform._time = orig_time
+			inform._sta_stats_cache = {}
 		end
 	},
 }

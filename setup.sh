@@ -824,10 +824,12 @@ REQUIRED="lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw"
 # they fit rather than being merely mentioned.
 # kmod-nft-bridge: the Multicast/Broadcast Blocker's one bridge-family `meta`
 # rule needs nft_meta_bridge, which nftables does not pull in -- without it
-# the table builds and filters nothing. kmod-sched-act-police: the upload
-# half of WiFi Speed Limit; a stock filogic image ships sch_htb but no
-# act_police, so only the download cap applied. Both found by upstream.
-OPTIONAL="lldpd hostapd-utils usteer ip-bridge nftables kmod-nft-bridge tc-tiny kmod-sched-act-police"
+# the table builds and filters nothing. kmod-ifb: the upload half of WiFi
+# Speed Limit is queued on an IFB device; without it the fallback is
+# policing, which needs kmod-sched-act-police, and a stock filogic image
+# ships sch_htb but no act_police, so only the download cap applied. All
+# found by upstream.
+OPTIONAL="lldpd hostapd-utils usteer ip-bridge nftables kmod-nft-bridge tc-tiny kmod-ifb kmod-sched-act-police"
 # A board whose device tree declares gpio LEDs the running kernel cannot drive
 # registers only its radio LEDs (which may be wired to nothing); the gpio
 # driver is 9 KB and pointless where the LEDs already registered.

@@ -52,30 +52,18 @@
 ]]--
 
 local M = {}
+local util = package.loaded["openuf.util"]
+	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable: shell command runner, for real `nft` invocations.
-M._exec = function(cmd) return os.execute(cmd) end
-
--- os.execute's contract differs across the Lua versions this module runs on:
--- 5.1 (the target) returns the raw exit status, so SUCCESS is the number 0 and
--- failure is a non-zero number -- both truthy. 5.4+ returns ok, "exit", code.
--- A bare `if M._exec(...) then` therefore reports success for every failure on
--- the very interpreter the APs use, which is how the missing module above went
--- unnoticed. Normalise before deciding anything.
-local function exec_ok(status)
-	if status == nil or status == false then return false end
-	if type(status) == "number" then return status == 0 end
-	return true
-end
-M._exec_ok = exec_ok
+M._exec = os.execute
 
 local NFT_TABLE = "bridge openuf_bcfilt"
 
 -- Exactly "aa:bb:cc:dd:ee:ff": every allow-list entry is spliced into an nft
 -- command line, so the shape is enforced here as well as at the parser.
-local function is_mac(s)
-	return type(s) == "string" and s:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") ~= nil
-end
+local is_mac = util.is_mac
+local valid_ifname = util.valid_ifname
 
 -- Rebuild the filter to exactly match rules, a list of
 -- {ifname = "wlan0", macs = {"aa:bb:..", ...}} entries -- one per VAP that has
@@ -86,22 +74,19 @@ end
 -- Safe with an empty/nil list (leaves an empty table in place, blocking
 -- nothing) and safe to call repeatedly.
 function M.reconcile(rules)
-	local ok = true
-	M._exec("nft delete table " .. NFT_TABLE .. " 2>/dev/null")
-	M._exec("nft add table " .. NFT_TABLE)
-	M._exec("nft add chain " .. NFT_TABLE ..
-		" bcfilt '{ type filter hook forward priority 0; }'")
-
+	local T = NFT_TABLE
+	local stmts = {"add chain " .. T .. " bcfilt { type filter hook forward priority 0; }"}
+	local drop_of = {}   -- statement index -> the ifname its drop rule is for
 	for _, rule in ipairs(rules or {}) do
-		if rule.ifname then
+		if rule.ifname and not valid_ifname(rule.ifname) then
+			io.stderr:write(("bcfilter: ignoring odd interface name %q\n"):format(tostring(rule.ifname)))
+		elseif rule.ifname then
 			-- One set per interface, so each SSID keeps its own allow-list.
 			local set = "allow_" .. rule.ifname:gsub("[^%w]", "_")
-			M._exec("nft add set " .. NFT_TABLE .. " " .. set ..
-				" '{ type ether_addr; }'")
+			stmts[#stmts + 1] = "add set " .. T .. " " .. set .. " { type ether_addr; }"
 			for _, mac in ipairs(rule.macs or {}) do
 				if is_mac(mac) then
-					M._exec("nft add element " .. NFT_TABLE .. " " .. set ..
-						" '{ " .. mac .. " }' 2>/dev/null")
+					stmts[#stmts + 1] = "add element " .. T .. " " .. set .. " { " .. mac .. " }"
 				else
 					io.stderr:write(("bcfilter: ignoring malformed MAC %q\n")
 						:format(tostring(mac)))
@@ -126,17 +111,20 @@ function M.reconcile(rules)
 			-- the header): when that module is missing the add fails while
 			-- the set above still exists, leaving a table that looks built
 			-- and filters nothing. Say so, with the package name.
-			if not exec_ok(M._exec("nft add rule " .. NFT_TABLE ..
-				" bcfilt oifname '\"" .. rule.ifname ..
-				"\"' meta pkttype '{ broadcast, multicast }'" ..
-				" ether saddr != @" .. set .. " drop")) then
-				ok = false
-				io.stderr:write(string.format(
-					"openuf: Multicast/Broadcast Blocker: nft rejected the drop rule " ..
-					"for %s -- install kmod-nft-bridge\n" ..
-					"openuf: (nft_meta_bridge); without it this WLAN is filtering nothing.\n",
-					tostring(rule.ifname)))
-			end
+			stmts[#stmts + 1] = "add rule " .. T .. " bcfilt oifname \"" .. rule.ifname
+				.. "\" meta pkttype { broadcast, multicast } ether saddr != @" .. set .. " drop"
+			drop_of[#stmts] = rule.ifname
+		end
+	end
+	local ok, failed = util.nft_apply(T, stmts, M._exec)
+	for i = 1, #stmts do
+		local ifname = drop_of[i]
+		if ifname and failed[i] then
+			io.stderr:write(string.format(
+				"openuf: Multicast/Broadcast Blocker: nft rejected the drop rule " ..
+				"for %s -- install kmod-nft-bridge\n" ..
+				"openuf: (nft_meta_bridge); without it this WLAN is filtering nothing.\n",
+				ifname))
 		end
 	end
 	return ok

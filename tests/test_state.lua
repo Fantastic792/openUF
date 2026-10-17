@@ -141,6 +141,35 @@ return {
 		end
 	},
 	{
+		name = "state: sched_vaps_down (the WiFi Blackout Schedule's ledger) round-trips",
+		fn = function()
+			with_tmp(function()
+				local st = state.load()
+				st.adopted = true
+				st.sched_vaps_down = {"phy0-ap1", "phy1-ap1"}
+				state.save(st)
+				local loaded = state.load()
+				assert_eq(table.concat(loaded.sched_vaps_down or {}, " "), "phy0-ap1 phy1-ap1",
+					"kept for a restart")
+			end)
+		end
+	},
+	{
+		name = "state: sta_rates (per-client WiFi Speed Limits) round-trips",
+		fn = function()
+			with_tmp(function()
+				local st = state.load()
+				st.adopted = true
+				st.sta_rates = {["de:ad:be:ef:00:02"] = {up = 2048, down = -1}}
+				state.save(st)
+				local loaded = state.load()
+				local r = (loaded.sta_rates or {})["de:ad:be:ef:00:02"] or {}
+				assert_eq(r.up, 2048, "kept for a restart")
+				assert_eq(r.down, -1, "-1 too: it lifts the WLAN's cap")
+			end)
+		end
+	},
+	{
 		name = "state: blocked_stas and upgrade_requested_* round-trip type-checked",
 		fn = function()
 			-- These load() type-checks existed but were never exercised: a
@@ -325,6 +354,32 @@ return {
 					"a controller-assigned URL wins over the default")
 			end)
 			state.DEFAULT_INFORM_URL = orig_default
+		end
+	},
+	{
+		name = "state: a block list saved as an object loads back as a list",
+		fn = function()
+			-- The lab image's cjson keeps decoded {} tagged as an object, so
+			-- {} + one append was saved as {"1":mac}. Loaded raw, that is a
+			-- string key ipairs never sees: nft came up empty after a restart.
+			with_tmp(function()
+				local f = io.open(TMP, "w")
+				f:write('{"adopted":true,"blocked_stas":{"2":"aa:bb:cc:dd:ee:02",'
+					.. '"1":"aa:bb:cc:dd:ee:01","x":"junk","3":7}}')
+				f:close()
+				local st = state.load()
+				local got = {}
+				for _, m in ipairs(st.blocked_stas) do got[#got + 1] = m end
+				assert_eq(table.concat(got, ","), "aa:bb:cc:dd:ee:01,aa:bb:cc:dd:ee:02",
+					"numbered entries come back in order; junk dropped")
+				st.blocked_stas[#st.blocked_stas + 1] = "aa:bb:cc:dd:ee:03"
+				state.save(st)
+				f = io.open(TMP, "r")
+				local raw = f:read("*a")
+				f:close()
+				assert_true(raw:find('"blocked_stas":["aa:bb:cc:dd:ee:01","aa:bb:cc:dd:ee:02","aa:bb:cc:dd:ee:03"]', 1, true) ~= nil,
+					"saved back as a JSON array")
+			end)
 		end
 	},
 }

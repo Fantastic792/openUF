@@ -45,15 +45,10 @@
 ]]--
 
 local M = {}
+local util = package.loaded["openuf.util"]
+	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
-M._exec = function(cmd) return os.execute(cmd) end
-
--- os.execute on the device's Lua 5.1 returns the raw exit status (0 =
--- success, non-zero = failure, both truthy); newer Lua returns true/nil.
-local function exec_ok(status)
-	return status == true or status == 0
-end
-M._exec_ok = exec_ok
+M._exec = os.execute
 
 M.NFT_TABLE = "bridge openuf_l2guard"
 M.BGA       = "01:80:c2:00:00:00"
@@ -116,16 +111,17 @@ end
 
 -- ─── Apply ───────────────────────────────────────────────────────────────────
 
-local function valid_ifname(s)
-	return type(s) == "string" and s:match("^[%w%-%._]+$") ~= nil and #s <= 15
-end
+local valid_ifname = util.valid_ifname
 
 -- Rebuild the table to match spec on exactly these VAP netdevs. Returns the
 -- number of rules installed (0 when there was nothing to enforce or nothing
 -- to enforce it on; the table is deleted either way).
 function M.reconcile(spec, ifnames)
-	M._exec("nft delete table " .. M.NFT_TABLE .. " 2>/dev/null")
-	if type(spec) ~= "table" or not (spec.bpdu or spec.tagdrop) then return 0 end
+	local T = M.NFT_TABLE
+	if type(spec) ~= "table" or not (spec.bpdu or spec.tagdrop) then
+		util.nft_apply(T, nil, M._exec)
+		return 0
+	end
 	local names = {}
 	for _, n in ipairs(ifnames or {}) do
 		if valid_ifname(n) then
@@ -135,35 +131,139 @@ function M.reconcile(spec, ifnames)
 		end
 	end
 	if #names == 0 then
+		util.nft_apply(T, nil, M._exec)
 		io.stderr:write("l2guard: no AP interfaces to protect yet -- rules deferred\n")
 		return 0
 	end
 	local set = "{ " .. table.concat(names, ", ") .. " }"
-	M._exec("nft add table " .. M.NFT_TABLE)
-	-- -300 is where ebtables' nat/broute PREROUTING sat; before bridging.
-	M._exec("nft add chain " .. M.NFT_TABLE
-		.. " pre '{ type filter hook prerouting priority -300; policy accept; }'")
-	M._exec("nft add chain " .. M.NFT_TABLE
-		.. " post '{ type filter hook postrouting priority 0; policy accept; }'")
-	local rules = {}
+	local stmts = {
+		-- -300 is where ebtables' nat/broute PREROUTING sat; before bridging.
+		"add chain " .. T .. " pre { type filter hook prerouting priority -300; policy accept; }",
+		"add chain " .. T .. " post { type filter hook postrouting priority 0; policy accept; }",
+	}
+	local what = {}   -- statement index -> the rule's name, for the warning
+	local function rule(chain, r, name)
+		stmts[#stmts + 1] = "add rule " .. T .. " " .. chain .. " " .. r
+		what[#stmts] = name
+	end
 	if spec.bpdu then
-		rules[#rules + 1] = {"pre",  "iifname " .. set .. " ether daddr " .. M.BGA .. " drop", "BPDU drop (in)"}
-		rules[#rules + 1] = {"post", "oifname " .. set .. " ether daddr " .. M.BGA .. " drop", "BPDU drop (out)"}
+		rule("pre",  "iifname " .. set .. " ether daddr " .. M.BGA .. " drop", "BPDU drop (in)")
+		rule("post", "oifname " .. set .. " ether daddr " .. M.BGA .. " drop", "BPDU drop (out)")
 	end
 	if spec.tagdrop then
-		rules[#rules + 1] = {"pre",  "iifname " .. set .. " ether type vlan drop", "VLAN-tag drop"}
+		rule("pre",  "iifname " .. set .. " ether type vlan drop", "VLAN-tag drop")
 	end
+	local _, failed = util.nft_apply(T, stmts, M._exec)
 	local n = 0
-	for _, r in ipairs(rules) do
-		if exec_ok(M._exec("nft add rule " .. M.NFT_TABLE .. " " .. r[1] .. " '" .. r[2] .. "'")) then
+	for i = 1, #stmts do
+		if what[i] and not failed[i] then
 			n = n + 1
-		else
-			io.stderr:write("openuf: l2guard: nft rejected the " .. r[3] .. " rule. iifname/oifname in the "
+		elseif what[i] then
+			io.stderr:write("openuf: l2guard: nft rejected the " .. what[i] .. " rule. iifname/oifname in the "
 				.. "bridge family need kmod-nft-bridge (apk add kmod-nft-bridge); without it the "
 				.. "controller's ebtables rules are NOT enforced.\n")
 		end
 	end
 	return n
+end
+
+-- ─── Hairpin on force-isolated BSSes ─────────────────────────────────────────
+--
+-- OpenWrt forces ap_isolate=1 on any BSS with multicast_to_unicast or
+-- proxy_arp (/usr/share/ucode/wifi/ap.uc), whatever UCI `isolate` says --
+-- i.e. whenever the controller's Multicast Enhancement or Proxy ARP is on.
+-- Station-to-station traffic then has to hairpin through the bridge, and
+-- hostapd's x_snoop sets brport/hairpin_mode (and proxyarp_wifi for
+-- proxy_arp) once, at BSS setup. A reconfigure that re-enslaves the port
+-- after that leaves it with the kernel's defaults (both 0), and every frame
+-- between two clients of that BSS -- unicast and mDNS alike -- is dropped
+-- without a trace. Seen live 2026-10-07 on the Archer C5's ath10k BSS: a
+-- Google Home stereo pair on the same radio could no longer find each
+-- other, for eleven days, while every other BSS on both APs was fine.
+-- Nothing in OpenWrt re-checks the flags, so this does.
+
+M._list_hostapd_confs = function()
+	local p = io.popen("ls /var/run/hostapd-phy*.conf 2>/dev/null")
+	if not p then return {} end
+	local out = {}
+	for line in p:lines() do out[#out + 1] = line end
+	p:close()
+	return out
+end
+
+M._read = util.read_file
+
+M._write = function(path, value)
+	local f = io.open(path, "w")
+	if not f then return false end
+	local ok = f:write(value)
+	f:close()
+	return ok ~= nil
+end
+
+-- One entry per BSS of a hostapd config: `interface=` opens the first,
+-- each `bss=` the next.
+function M.parse_hostapd_bsses(text)
+	local out, cur = {}, nil
+	for line in ((text or "") .. "\n"):gmatch("([^\n]*)\n") do
+		local k, v = line:match("^([%w_]+)=(.*)$")
+		if k == "interface" or k == "bss" then
+			cur = {ifname = v}
+			out[#out + 1] = cur
+		elseif cur and k then
+			cur[k] = v
+		end
+	end
+	return out
+end
+
+-- The brport flags each force-isolated, bridged BSS needs: hairpin_mode
+-- always, proxyarp_wifi only with proxy_arp (hostapd sets it for nothing
+-- else).
+function M.hairpin_wants(bsses)
+	local wants = {}
+	for _, b in ipairs(bsses or {}) do
+		local mc, pa = b.multicast_to_unicast == "1", b.proxy_arp == "1"
+		if b.ap_isolate == "1" and (mc or pa) and (b.bridge or "") ~= "" then
+			if valid_ifname(b.ifname) then
+				wants[#wants + 1] = {ifname = b.ifname, proxyarp = pa}
+			else
+				io.stderr:write("l2guard: ignoring odd interface name " .. ("%q"):format(tostring(b.ifname)) .. "\n")
+			end
+		end
+	end
+	return wants
+end
+
+-- Re-assert the flags wherever they have gone missing. Writes only a flag
+-- that reads back other than 1, and says so: a correction is the OpenWrt
+-- race having happened, which should stay visible. Returns the number of
+-- flags rewritten.
+function M.reconcile_hairpin()
+	local bsses = {}
+	for _, path in ipairs(M._list_hostapd_confs()) do
+		for _, b in ipairs(M.parse_hostapd_bsses(M._read(path))) do bsses[#bsses + 1] = b end
+	end
+	local fixed = 0
+	for _, w in ipairs(M.hairpin_wants(bsses)) do
+		local base = "/sys/class/net/" .. w.ifname .. "/brport/"
+		local flags = {"hairpin_mode"}
+		if w.proxyarp then flags[2] = "proxyarp_wifi" end
+		for _, flag in ipairs(flags) do
+			local cur = M._read(base .. flag)
+			-- nil: the port is not enslaved (yet) -- nothing to fix.
+			if cur and cur:match("^%s*(%d+)") ~= "1" then
+				if M._write(base .. flag, "1") then
+					fixed = fixed + 1
+					io.stderr:write("openuf: l2guard: re-asserted " .. flag .. " on " .. w.ifname
+						.. " (ap_isolate is forced on; clients of this BSS could not reach each other)\n")
+				else
+					io.stderr:write("openuf: l2guard: could not set " .. flag .. " on " .. w.ifname .. "\n")
+				end
+			end
+		end
+	end
+	return fixed
 end
 
 return M

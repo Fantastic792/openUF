@@ -179,4 +179,57 @@ return {
 			end)
 		end
 	},
+	{
+		name = "usteer: reconcile_filter drops the sync on every VAP, first fragments and the rest",
+		fn = function()
+			local orig = usteer._exec
+			local exec, r = fake_nft()
+			local cmds = r.cmds
+			usteer._exec = exec
+			local n = usteer.reconcile_filter({"phy0-ap0", "phy1-ap0", "bad name;rm"})
+			usteer._exec = orig
+			assert_eq(n, 3, "three rules installed")
+			assert_eq(r.runs, 1, "one nft run")
+			assert_eq(cmds[2], "nft delete table bridge openuf_usteer", "rebuilt from scratch")
+			assert_true(cmds_contain(cmds, "hook postrouting"), "postrouting sees local and forwarded frames")
+			assert_true(cmds_contain(cmds, 'oifname { "phy0-ap0", "phy1-ap0" } ip daddr 255.255.255.255 udp dport 16720 drop'),
+				"first fragment / whole datagram, on both VAPs")
+			assert_true(cmds_contain(cmds, "ip daddr 255.255.255.255 ip protocol udp ip frag-off & 0x1fff != 0 drop"),
+				"the later fragments, which carry no UDP header")
+			assert_true(cmds_contain(cmds, "ip6 daddr ff02::4150 drop"), "usteer's ipv6 mode")
+			assert_false(cmds_contain(cmds, "bad name"), "an odd ifname never reaches the shell")
+			assert_false(cmds_contain(cmds, "udp dport 68"), "nothing else is touched")
+		end
+	},
+	{
+		name = "usteer: reconcile_filter with no VAPs only removes the table; a rejected rule is not counted",
+		fn = function()
+			local orig, origerr = usteer._exec, io.stderr
+			io.stderr = {write = function() end}
+			local exec, r = fake_nft()
+			usteer._exec = exec
+			local none = usteer.reconcile_filter({})
+			local ncmds = #r.cmds
+			-- fake_nft answers a rejected script with exit status 1, as 5.1's
+			-- os.execute does: truthy, and still a failure.
+			usteer._exec = fake_nft(function(l) return l:find("add rule", 1, true) end)
+			local rejected = usteer.reconcile_filter({"phy0-ap0"})
+			usteer._exec, io.stderr = orig, origerr
+			assert_eq(none, 0, "nothing installed")
+			assert_eq(ncmds, 2, "just the delete (after an add, so it cannot fail)")
+			assert_eq(rejected, 0, "Lua 5.1 exit status 1 is a failure, not success")
+		end
+	},
+	{
+		name = "usteer: filter_wanted follows openuf_active",
+		fn = function()
+			with_usteer(function(db)
+				assert_false(usteer.filter_wanted(), "never configured")
+				usteer.set_enabled(false, nil, true)
+				assert_true(usteer.filter_wanted(), "running for Roaming Assistant")
+				usteer.set_enabled(false, nil, false)
+				assert_false(usteer.filter_wanted(), "stopped")
+			end)
+		end
+	},
 }

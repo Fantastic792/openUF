@@ -9,6 +9,8 @@
 ]]--
 
 local M = {}
+local util = package.loaded["openuf.util"]
+	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable seams for tests
 M._uci        = nil  -- override with a mock UCI table; nil = require("uci")
@@ -16,27 +18,16 @@ M._uci        = nil  -- override with a mock UCI table; nil = require("uci")
 -- tests can capture the reconciled rules without shelling out to real nft.
 M._bcfilter   = nil  -- nil = load openuf/bcfilter.lua on first use
 -- "WiFi Speed Limit" enforcement (tc). Injectable for the same reason.
-M._shaper     = nil  -- nil = load openuf/shaper.lua on first use
-M._run_cmd    = function(cmd) return os.execute(cmd) end
+-- Minimum RSSI's constants (wire offset, refusal margin).
+M._minrssi    = nil  -- nil = load openuf/minrssi.lua on first use
+M._run_cmd    = os.execute
 
 -- Injectable: command execution that captures stdout (for read-only introspection,
 -- as opposed to M._run_cmd which only reports success/failure for mutating commands).
-M._popen = function(cmd)
-	local h = io.popen(cmd .. " 2>/dev/null")
-	if not h then return "" end
-	local s = h:read("*a")
-	h:close()
-	return s or ""
-end
+M._popen = util.capture
 
 -- Injectable: file reader, for sysfs lookups (e.g. interface MAC address).
-M._read_file = function(path)
-	local f = io.open(path, "r")
-	if not f then return nil end
-	local s = f:read("*a")
-	f:close()
-	return s
-end
+M._read_file = util.read_file
 
 -- Injectable clock, for the time-bounded capability cache below.
 M._time = os.time
@@ -72,6 +63,26 @@ local function pass_memo(key, fn)
 	return value
 end
 
+-- One cursor per pass: libuci keeps a package a cursor has loaded, so
+-- /etc/config/wireless is parsed once per tick however many readers ask.
+local function pass_cursor()
+	return pass_memo("cursor", function() return get_uci().cursor() end)
+end
+
+-- Call fn on every wifi-iface section, in file order, as cursor:foreach
+-- would. Inside a pass the sections are collected once: schedule_vaps runs
+-- every tick and get_vap_table every heartbeat, and each walked the package
+-- for the same answer. The section tables are shared between callers, which
+-- only read them.
+local function each_iface(fn)
+	local rows = pass_memo("iface_sections", function()
+		local out = {}
+		pass_cursor():foreach("wireless", "wifi-iface", function(s) out[#out + 1] = s end)
+		return out
+	end)
+	for _, s in ipairs(rows) do fn(s) end
+end
+
 -- Load an enforcement sibling by path, mirroring inform.lua's _require_sibling:
 -- openUF's modules are not on package.path, and the working directory differs
 -- between running from openuf/ and from an install root. Returns nil rather
@@ -91,7 +102,7 @@ local function get_sibling(name, override)
 end
 
 local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end
-local function get_shaper()   return get_sibling("shaper",   M._shaper)   end
+local function get_minrssi()  return get_sibling("minrssi",  M._minrssi)  end
 
 -- Map a UCI wifi-device's channel number to the controller's band identifier.
 -- The real controller's radio_table schema requires this "radio" field
@@ -415,12 +426,14 @@ local SECURITY_MAP = {
 }
 
 -- Deterministic 16-bit id from a string, formatted as 4 hex chars (802.11r
--- mobility domain is a 2-octet field). Used as a stopgap mobility_domain
--- when the controller only sends the high-level fast_roaming_enabled toggle
--- and no raw mobility_domain/r0kh/r1kh (UniFi's admin API has no such fields
--- -- it computes and syncs them internally across all APs on a site). Same
+-- mobility domain is a 2-octet field). The controller never sends a mobility
+-- domain: UniFi firmware derives one from the SSID on the AP itself
+-- (SHA1("salt" .. ssid)), so openUF does the same with its own hash. Same
 -- seed always yields the same domain, so every openUF-emulated AP on the
 -- same network computes it identically without needing to coordinate.
+-- Deliberately NOT UniFi's formula: real UAPs only exchange FT keys with
+-- peers running their patched hostapd, so a matching domain would make
+-- clients attempt a fast transition to them that can only fail.
 function M.derive_mobility_domain(seed)
 	local hash = 0
 	for i = 1, #seed do
@@ -883,10 +896,7 @@ end
 
 -- The bridge a netdev is enslaved to, or nil when it carries its own address.
 local function master_of(ifname)
-	local m = M._popen("readlink /sys/class/net/" .. tostring(ifname) .. "/master")
-	m = type(m) == "string" and m:match("([^/%s]+)%s*$") or nil
-	if m and m ~= "" and m ~= ifname then return m end
-	return nil
+	return util.master_of(ifname, M._read_file)
 end
 
 -- Give the management bridge the MAC openUF identifies as.
@@ -1022,12 +1032,11 @@ end
 -- a per-radio (not per-SSID) setting -- confirmed live 2026-07-14 via the
 -- controller's stamgr.<n>.minrssi.* wire keys, a section separate from and
 -- indexed the same as radio.<n>. minrssi_raw is stored as-received (raw wire
--- units, an offset from the driver's noise floor, NOT plain dBm -- see
--- inform.lua's M._parse_wifi_system_cfg for the conversion math), since the
--- dBm conversion needs a live noise-floor reading only available later, at
--- enforcement/readback time. On disable only the flag is written to 0;
--- minrssi_rssi stays parked in UCI (harmless -- every consumer gates on the
--- flag first) so a later re-enable without a threshold change reuses it.
+-- units, dBm + 95; openuf/minrssi.lua). On disable only the flag is written
+-- to 0; minrssi_rssi stays parked in UCI (harmless -- every consumer gates on
+-- the flag first) so a later re-enable without a threshold change reuses it.
+-- The refusal half is hostapd's: rssi_reject_assoc_rssi and
+-- rssi_ignore_probe_request, stamped openuf_minrssi and torn down on disable.
 -- rates: optional table from M.derive_rates() plus an optional beacon_rate,
 -- i.e. the "Minimum Data Rate" settings. These are wifi-DEVICE options in
 -- OpenWrt, not wifi-iface ones (confirmed in OpenWrt's hostapd.sh: basic_rate,
@@ -1104,10 +1113,14 @@ end
 -- availability and TX power limits are legal constraints, not preferences --
 -- the operator owns that decision, which is why this is off unless explicitly
 -- configured.
+-- opts.maxsta: Load balance's per-radio client cap (openuf/loadbalance.lua),
+-- kept in the openUF-only option loadbalance_maxsta; false deletes it (off),
+-- nil leaves UCI alone.
 function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, rates,
 		disabled, country, radio_policy, opts)
 	local uci = get_uci()
 	local cursor = uci.cursor()
+	local maxsta = opts and opts.maxsta
 	-- Every write below is cursor:set on a named section, which in UCI CREATES
 	-- that section when it does not exist. A controller naming a phy this
 	-- device does not have (a stale device record, a config cloned from
@@ -1291,6 +1304,30 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 	if minrssi_raw then
 		cursor:set("wireless", radio, "minrssi_rssi", tostring(minrssi_raw))
 	end
+	-- Minimum RSSI's refusal (openuf/minrssi.lua): the firmware's driver
+	-- answers no probe and no authentication below the threshold + 3 dB;
+	-- hostapd's equivalents are wifi-device options. Computed from the same
+	-- stored threshold the kick reads back, so the two halves never disagree.
+	local mr = get_minrssi()
+	local raw = tonumber(minrssi_raw or cursor:get("wireless", radio, "minrssi_rssi"))
+	if minrssi_enabled and raw and mr then
+		local refuse = tostring(mr.dbm(raw) + mr.REFUSE_MARGIN)
+		cursor:set("wireless", radio, "rssi_reject_assoc_rssi", refuse)
+		cursor:set("wireless", radio, "rssi_ignore_probe_request", refuse)
+		cursor:set("wireless", radio, "openuf_minrssi", "1")
+	elseif minrssi_enabled ~= nil and cursor:get("wireless", radio, "openuf_minrssi") == "1" then
+		-- Off: remove exactly what the stamp says openUF wrote. Hand-set
+		-- values on an unstamped radio are never touched.
+		for _, opt in ipairs({"rssi_reject_assoc_rssi", "rssi_ignore_probe_request",
+				"openuf_minrssi"}) do
+			cursor:delete("wireless", radio, opt)
+		end
+	end
+	if maxsta then
+		cursor:set("wireless", radio, "loadbalance_maxsta", tostring(maxsta))
+	elseif maxsta == false then
+		cursor:delete("wireless", radio, "loadbalance_maxsta")
+	end
 	if rates then
 		-- Stamp the sections we rate-manage: "Minimum Data Rate off" arrives
 		-- as the minrate_* keys simply vanishing from the wire, which is
@@ -1374,18 +1411,16 @@ end
 -- ─── Config apply ────────────────────────────────────────────────────────────
 
 -- Drive the two kernel-resident features from one normalized list of
--- {ifname, bcfilt_enabled, bcfilt_macs, down_kbps, up_kbps} entries, so the
+-- {ifname, bcfilt_enabled, bcfilt_macs} entries, so the
 -- setparam path (apply_config) and the startup reapply (reapply_runtime_rules)
 -- cannot drift apart.
 --
--- Both are reconciled unconditionally, even with an empty list: each rebuilds
--- from scratch rather than diffing, so turning a control off in the controller
+-- Reconciled unconditionally, even with an empty list: it rebuilds from
+-- scratch rather than diffing, so turning the control off in the controller
 -- tears the previous ruleset down instead of leaving it in place -- the same
--- contract firewall.lua keeps. That is also why EVERY managed VAP is passed to
--- the shaper and not just the capped ones: shaper.reconcile clears each
--- interface it is handed before reshaping it, so a VAP whose limit was just
--- removed has to appear here, with both rates nil, to get its old qdisc torn
--- down.
+-- contract firewall.lua keeps. (WiFi Speed Limit is per client, so it needs
+-- the stations: inform's _shaper_resync applies it every heartbeat from the
+-- openuf_ratelimit_* stamps, see shaper.lua.)
 local function reconcile_runtime(entries)
 	local bcfilter = get_bcfilter()
 	if bcfilter then
@@ -1396,19 +1431,6 @@ local function reconcile_runtime(entries)
 			end
 		end
 		bcfilter.reconcile(rules)
-	end
-
-	local shaper = get_shaper()
-	if shaper then
-		local rules = {}
-		for _, e in ipairs(entries) do
-			rules[#rules + 1] = {
-				ifname    = e.ifname,
-				down_kbps = e.down_kbps,
-				up_kbps   = e.up_kbps,
-			}
-		end
-		shaper.reconcile(rules)
 	end
 end
 
@@ -1501,6 +1523,7 @@ function M.apply_config(resp, cfg, opts)
 				radio.min_rssi_enabled, radio.min_rssi, rates, radio.disabled,
 				radio.country, cfg and cfg.radio,
 				{force_wifi4 = iot_by_radio[radio.name] or false,
+				 maxsta = radio.loadbalance_maxsta,
 				 country_override = cfg and cfg.config
 					and cfg.config.country_override or nil})
 		end
@@ -1547,6 +1570,17 @@ function M.apply_config(resp, cfg, opts)
 				extra.ieee80211r = "1"
 				extra.mobility_domain = M.derive_mobility_domain(vap.ssid)
 				extra.ft_over_ds = "0"
+				-- UniFi firmware's hostapd template also sets these two
+				-- (firmware-confirmed for 4.0.15). The push hands a
+				-- client's PMK-R1 to each peer key holder right after it
+				-- connects, so its first roam there needs no pull.
+				-- hostapd skips the wildcard r1kh entry when pushing, so
+				-- the push reaches a peer only once it has been learned
+				-- from a pull (kept for rkh_pos_timeout, a day). It is
+				-- written on the key-holder path only (SAE, EAP). The
+				-- deadline is in TU: 3000 instead of OpenWrt's 20000.
+				extra.pmk_r1_push            = "1"
+				extra.reassociation_deadline = "3000"
 				-- ft_psk_generate_local is deliberately NOT set. It used to be
 				-- forced to "1", which silently disabled fast roaming for every
 				-- WPA3 client: local key generation is FT-PSK only (each AP
@@ -1561,12 +1595,26 @@ function M.apply_config(resp, cfg, opts)
 				-- reassociated with auth_alg=sae plus a full 4-way handshake,
 				-- even between two BSSes on the SAME radio.
 				--
-				-- OpenWrt's own default is already right: hostapd.sh keys it on
-				-- auth_type (psk -> 1, anything else -> 0) and, when it is 0,
-				-- derives wildcard key holders from md5(mobility_domain/psk) --
-				-- deterministic, so every AP sharing an SSID and passphrase
-				-- computes the same key with no coordination, the same
-				-- reasoning behind derive_mobility_domain above.
+				-- OpenWrt's own default is already right: hostapd.sh / ap.uc
+				-- key it on auth_type (psk -> 1, anything else -> 0), and
+				-- only when it is 0 do they write r0kh/r1kh at all. FT-PSK
+				-- keeps local derivation and needs no inter-AP traffic, while
+				-- FT-SAE and FT-EAP get the key holders they cannot work
+				-- without.
+				--
+				-- The key-holder secret is the controller's: aaa.<n>.iapp_key,
+				-- 128 random bits per WLAN, the same key UniFi firmware wraps
+				-- its own inter-AP FT frames with. The wildcard forms are the
+				-- ones OpenWrt itself generates, so any openUF AP on the WLAN
+				-- is accepted as a peer. Without the key (an older controller,
+				-- or iapp_enabled off) OpenWrt derives one from
+				-- md5(mobility_domain .. "/" .. psk), which also works, but
+				-- anyone who knows the passphrase can compute that one.
+				if vap.iapp_key then
+					extra.r0kh = { "ff:ff:ff:ff:ff:ff,*," .. vap.iapp_key }
+					extra.r1kh = { "00:00:00:00:00:00,00:00:00:00:00:00,"
+						.. vap.iapp_key }
+				end
 			end
 			if opts and (opts.band_steering_active or opts.roam_assist_active) then
 				-- usteer requires 802.11k (neighbor reports) + BSS
@@ -1587,8 +1635,23 @@ function M.apply_config(resp, cfg, opts)
 				if vap.bss_transition ~= nil then
 					extra.bss_transition = vap.bss_transition and "1" or "0"
 				end
+				-- The WLAN's own 802.11k toggle (aaa.<n>.11k.status). Off
+				-- needs nothing: the section is rebuilt, and OpenWrt's
+				-- ieee80211k defaults to 0. Without usteer nothing fills
+				-- hostapd's neighbor list, so a neighbor report names no
+				-- other AP; beacon reports (rrmscan) work regardless.
+				if vap.rrm then
+					extra.ieee80211k          = "1"
+					extra.rrm_neighbor_report = "1"
+					extra.rrm_beacon_report   = "1"
+				end
 			end
 			if vap.dtim_period then extra.dtim_period = vap.dtim_period end
+			-- U-APSD. `uapsd` is hostapd.sh's option and, on 25.12, a schema
+			-- alias of uapsd_advertisement_enabled, so one name covers both.
+			if vap.uapsd ~= nil then extra.uapsd = vap.uapsd and "1" or "0" end
+			-- GTK rekey interval (s, 0 = off); hostapd's own default is 86400.
+			if vap.group_rekey then extra.wpa_group_rekey = vap.group_rekey end
 			if vap.qbssload ~= nil then
 				-- "Force WiFi 4 Mode" (IoT Optimization) sends
 				-- wireless.<n>.qbssload=disabled alongside iot=enabled. The
@@ -1661,6 +1724,12 @@ function M.apply_config(resp, cfg, opts)
 				-- so switching it off in the controller leaves nothing behind.
 				extra.openuf_roam_assist = tostring(vap.roam_assist_rssi or -75)
 			end
+			if vap.schedule_lines then
+				-- "WiFi Blackout Schedule": the firmware's schedule lines,
+				-- read back by schedule_vaps for inform's heartbeat check
+				-- (wlansched.lua). Absent means no schedule, as above.
+				extra.openuf_schedule = table.concat(vap.schedule_lines, " ")
+			end
 			if vap.bcfilt_enabled ~= nil then
 				-- "Multicast and Broadcast Blocker". Recorded on the section so
 				-- the configured state is visible in `uci show` and survives to
@@ -1720,10 +1789,10 @@ function M.apply_config(resp, cfg, opts)
 				extra.macfilter = M.DELETE
 				extra.maclist   = M.DELETE
 			end
-			-- "WiFi Speed Limit". Recorded on the section so the configured
-			-- state shows up in `uci show`; the actual enforcement is tc, done
-			-- after the wifi reload below (see shaper.lua for why no hostapd or
-			-- OpenWrt option can express it). Values are kbps, as pushed.
+			-- "WiFi Speed Limit", kbps as pushed. Read back by get_vap_table
+			-- for inform's _shaper_resync, which enforces it per client with
+			-- tc (shaper.lua: no hostapd or OpenWrt option expresses it).
+			-- Absent means no limit: wlan_clear drops the section first.
 			if vap.ratelimit_down_kbps then
 				extra.openuf_ratelimit_down = vap.ratelimit_down_kbps
 			end
@@ -1869,23 +1938,19 @@ function M.apply_config(resp, cfg, opts)
 	M._ws_cache   = nil
 	M._pass_cache = nil
 
-	-- "Multicast and Broadcast Blocker" (nftables) and "WiFi Speed Limit" (tc)
-	-- enforcement. Deliberately after the reload: the rules key off each VAP's
-	-- live netdev name, which only exists (and can change) once netifd has
-	-- brought the interfaces back up.
+	-- "Multicast and Broadcast Blocker" (nftables) enforcement. Deliberately
+	-- after the reload: the rules key off each VAP's live netdev name, which
+	-- only exists (and can change) once netifd has brought the interfaces
+	-- back up.
 	local entries = {}
 	for _, vap in ipairs(vap_table) do
 		if vap.ssid and vap.radio then
-			-- Resolved once per VAP and shared by both features -- this used to
-			-- be two lookups per VAP through the same ubus status call. An OWE
-			-- transition VAP has two netdevs, and both get the rules.
+			-- An OWE transition VAP has two netdevs, and both get the rules.
 			for _, ifname in ipairs(M.get_ifnames_for_vap(vap.radio, vap.ssid)) do
 				entries[#entries + 1] = {
 					ifname         = ifname,
 					bcfilt_enabled = vap.bcfilt_enabled,
 					bcfilt_macs    = vap.bcfilt_macs,
-					down_kbps      = vap.ratelimit_down_kbps,
-					up_kbps        = vap.ratelimit_up_kbps,
 				}
 			end
 		end
@@ -1893,19 +1958,73 @@ function M.apply_config(resp, cfg, opts)
 	reconcile_runtime(entries)
 end
 
--- Reapply both kernel-resident WiFi features from UCI.
+-- Radio options only openUF writes, deleted outright on Forget, and the
+-- stamped ones rf_config writes only under its openuf_minrssi/openuf_rates
+-- markers, deleted only where the marker is.
+local FORGET_RADIO_OPTS  = {"minrssi_enabled", "minrssi_rssi", "loadbalance_maxsta"}
+local FORGET_RADIO_STAMP = {
+	openuf_minrssi = {"rssi_reject_assoc_rssi", "rssi_ignore_probe_request"},
+	openuf_rates   = {"basic_rate", "supported_rates", "legacy_rates", "beacon_rate"},
+}
+
+-- Undo what apply_config wrote, for a controller "Forget" (setdefault) or a
+-- reset-inform. UniFi firmware answers setdefault with `syswrapper.sh
+-- restore-default`, a factory reset and reboot that leaves no SSID on the air
+-- (firmware-confirmed for 4.0.15); this is the same end state without the
+-- reboot, limited to what openUF itself put there:
+--   * every openuf_ wifi-iface, with its private-key sections (wlan_clear)
+--   * every openuf_ VLAN network and bridge (prune_vlan_networks)
+--   * the radio options above
+--   * the user's own SSIDs that use_only_unifi_wlan switched off come back
+--     on, since no controller SSID is left to stand in for them
+--   * the Multicast and Broadcast Blocker's ruleset
+-- A radio's channel, width, transmit power, country and enable stay as the
+-- controller last set them: rf_config overwrites those without keeping the
+-- original, and they are valid settings for the board either way.
+function M.forget()
+	local uci = get_uci()
+	local cursor = uci.cursor()
+	local radios = {}
+	cursor:foreach("wireless", "wifi-device", function(s)
+		radios[#radios + 1] = s
+	end)
+	for _, s in ipairs(radios) do
+		local name = s[".name"]
+		for _, opt in ipairs(FORGET_RADIO_OPTS) do
+			if s[opt] ~= nil then cursor:delete("wireless", name, opt) end
+		end
+		for stamp, opts in pairs(FORGET_RADIO_STAMP) do
+			if s[stamp] == "1" then
+				for _, opt in ipairs(opts) do cursor:delete("wireless", name, opt) end
+				cursor:delete("wireless", name, stamp)
+			end
+		end
+	end
+	cursor:commit("wireless")
+	M.wlan_clear()
+	M.prune_vlan_networks({})
+	M.set_wlan_exclusive(false)
+	if M._network_dirty then
+		M._run_cmd("/etc/init.d/network reload 2>/dev/null")
+		M._network_dirty = false
+	end
+	M._run_cmd("wifi reload")
+	M._ws_cache   = nil
+	M._pass_cache = nil
+	reconcile_runtime({})
+end
+
+-- Reapply the Multicast and Broadcast Blocker from UCI.
 --
--- The blocker is an nftables ruleset and the speed limit is a tc qdisc: both
--- are LIVE KERNEL STATE that a reboot discards, and neither has a UCI option
--- OpenWrt itself understands. apply_config() only ever runs on a setparam, and
--- after a reboot there is no setparam to run it -- cfgversion is persisted, so
--- it matches on the first inform and the controller replies noop with no
--- system_cfg at all. Both features therefore stayed switched off indefinitely
--- while the controller UI went on showing them as on.
+-- It is an nftables ruleset: LIVE KERNEL STATE that a reboot discards, with no
+-- UCI option OpenWrt itself understands. apply_config() only ever runs on a
+-- setparam, and after a reboot there is no setparam to run it -- cfgversion is
+-- persisted, so it matches on the first inform and the controller replies noop
+-- with no system_cfg at all. The blocker therefore stayed switched off
+-- indefinitely while the controller UI went on showing it as on.
 --
--- The four openuf_bcfilt/openuf_ratelimit_* options wlan_add stamps onto each
--- managed section are the record this reads back; before this they were
--- written and never read by anything.
+-- The openuf_bcfilt* options wlan_add stamps onto each managed section are
+-- the record this reads back.
 --
 -- Called at startup by inform.M.run, alongside the blocked-client and LED
 -- reconciliation, and for the same reason. Returns the number of managed VAPs
@@ -1932,8 +2051,6 @@ function M.reapply_runtime_rules()
 				ifname         = ifname,
 				bcfilt_enabled = (s.openuf_bcfilt == "1"),
 				bcfilt_macs    = macs,
-				down_kbps      = tonumber(s.openuf_ratelimit_down),
-				up_kbps        = tonumber(s.openuf_ratelimit_up),
 			}
 		end
 	end)
@@ -1957,8 +2074,7 @@ end
 -- radio/channel/tx_power against.
 local function radio_rows()
 	return pass_memo("radio_rows", function()
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor = pass_cursor()
 	local radios = {}
 	cursor:foreach("wireless", "wifi-device", function(s)
 		radios[#radios + 1] = {
@@ -1996,6 +2112,9 @@ local function radio_rows()
 			-- discards this raw field.
 			min_rssi_enabled = (s.minrssi_enabled == "1"),
 			min_rssi_raw     = tonumber(s.minrssi_rssi),
+			-- Load balance's cap, nil when off. Internal: build_json
+			-- consumes it and strips it before serializing.
+			loadbalance_maxsta = tonumber(s.loadbalance_maxsta),
 		}
 	end)
 	return radios
@@ -2058,8 +2177,8 @@ local function get_cjson()
 end
 
 -- The decoded `ubus call network.wireless status`, shared by the two lookups
--- below. Cached only inside a pass opened by begin_pass() -- inform.lua's
--- build_json opens one per payload and closes it on return -- and dropped by
+-- below. Cached only INSIDE a pass opened by begin_pass() -- inform.lua's
+-- _tick opens one per cycle and closes it after the payload -- and dropped by
 -- end_pass() and after every `wifi reload`, so a netdev name read before
 -- netifd rebuilt the interfaces is never reused after. Outside a pass every
 -- call forks ubus exactly as before, which is also what keeps the test
@@ -2068,7 +2187,15 @@ end
 -- four-SSID box is one.
 M._ws_cache = nil      -- {status = <decoded table> | false} while a pass is open
 M._ws_pass  = false
-function M.begin_pass() M._ws_pass = true;  M._ws_cache = nil; M._pass_cache = {} end
+-- Nest-safe: returns true only when it opened the pass, and only that caller
+-- closes it. inform._tick opens one for the whole cycle, so the once-a-minute
+-- resyncs and the payload share one ubus answer and one config read; a
+-- build_json called on its own still opens (and closes) its own.
+function M.begin_pass()
+	if M._ws_pass then return false end
+	M._ws_pass = true; M._ws_cache = nil; M._pass_cache = {}
+	return true
+end
 function M.end_pass()   M._ws_pass = false; M._ws_cache = nil; M._pass_cache = nil end
 
 local function wireless_status()
@@ -2242,6 +2369,27 @@ function M.get_ifnames_for_vap(radio, ssid)
 	return vlan_ifnames(iface, out)
 end
 
+-- Every enabled openUF VAP with a WiFi Blackout Schedule, as {ifnames =,
+-- lines =}: its BSS netdevs (its own and an OWE transition's open BSS; a
+-- private pre-shared key's VLAN netdev goes with its BSS) and the schedule
+-- lines apply_config stored.
+function M.schedule_vaps()
+	local out = {}
+	each_iface(function(s)
+		if s.disabled == "1" or not s.openuf_wlanconf_id or not s.openuf_schedule then return end
+		local ok_if, ifnames = pcall(M.get_ifnames_for_vap, s.device, s.ssid)
+		if not ok_if or #ifnames == 0 then return end
+		local bss = {}
+		for _, n in ipairs(ifnames) do
+			if not M._vlan_parent[n] then bss[#bss + 1] = n end
+		end
+		local lines = {}
+		for l in s.openuf_schedule:gmatch("%S+") do lines[#lines + 1] = l end
+		out[#out + 1] = {ifnames = bss, lines = lines}
+	end)
+	return out
+end
+
 -- "Minimum RSSI" enforcement: send a single 802.11 deauthentication frame to
 -- mac on ifname. Deliberately standalone from firewall.lua's block-sta
 -- feature -- confirmed via web research that Minimum RSSI is a roaming aid,
@@ -2410,14 +2558,11 @@ end
 
 -- Return a table of VAP (virtual AP) info for the inform payload.
 function M.get_vap_table()
-	local uci = get_uci()
-	local cursor = uci.cursor()
-
 	local radio_by_name = {}
 	for _, r in ipairs(M.get_radio_table()) do radio_by_name[r.name] = r end
 
 	local vaps = {}
-	cursor:foreach("wireless", "wifi-iface", function(s)
+	each_iface(function(s)
 		-- Skip foreign SSIDs that are switched off: a disabled section with no
 		-- wlanconf id is not openUF's and is not on the air (typically
 		-- OpenWrt's stock "OpenWrt" default_radioN sections, which
@@ -2548,6 +2693,10 @@ function M.get_vap_table()
 			-- Internal, never serialized: build_json consumes it for
 			-- Roaming Assistant and removes it.
 			roam_assist_rssi = tonumber(s.openuf_roam_assist),
+			-- Internal, never serialized: WiFi Speed Limit (kbps), for
+			-- inform's _shaper_resync.
+			ratelimit_down = tonumber(s.openuf_ratelimit_down),
+			ratelimit_up   = tonumber(s.openuf_ratelimit_up),
 		}
 	end)
 	return vaps

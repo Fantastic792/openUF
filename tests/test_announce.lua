@@ -49,6 +49,20 @@ local function find_tlv(pkt, want_type)
 	return nil
 end
 
+-- /proc/net/dev of a swconfig board whose LAN trunk is eth0 (header as the
+-- kernel prints it; eth0.1 in br-lan, eth0.10 in a VLAN bridge).
+local PROC_NET_DEV = table.concat({
+	"Inter-|   Receive                                                |  Transmit",
+	" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed",
+	"    lo:  424520    2474    0    0    0     0          0         0   424520    2474    0    0    0     0       0          0",
+	"  eth0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0",
+	"eth0.1:    1200      10    0    0    0     0          0         0     1300      11    0    0    0     0       0          0",
+	"br-lan:    1200      10    0    0    0     0          0         0     1300      11    0    0    0     0       0          0",
+	"eth0.10:      0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0",
+	"  eth00:      0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0",
+	"",
+}, "\n")
+
 return {
 	{
 		name = "announce: packet starts with 0x02 0x06 header",
@@ -280,6 +294,7 @@ return {
 	{
 		name = "announce: get_ip reads the address off the interface itself",
 		fn = function()
+			announce._holder = nil
 			local orig, seen = announce._popen, {}
 			announce._popen = function(cmd)
 				seen[#seen + 1] = cmd
@@ -298,23 +313,27 @@ return {
 	{
 		name = "announce: get_ip falls back to the bridge when the port has no address",
 		fn = function()
+			announce._holder = nil
 			-- The real target layout: lan_cpueth names eth1, but eth1 is a
 			-- br-lan member and carries no address -- without the fallback,
 			-- announce broadcasts 192.168.1.1 and inform reports "0.0.0.0".
-			local orig = announce._popen
+			local orig, orig_read = announce._popen, announce._read_file
 			announce._popen = function(cmd)
 				if cmd:match("addr show dev eth1") then return "" end
-				if cmd:match("readlink /sys/class/net/eth1/master") then
-					return "../../../../../virtual/net/br-lan\n"
-				end
 				if cmd:match("addr show dev br%-lan") then
 					return "    inet 192.0.2.3/24 brd 192.0.2.255 scope global br-lan\n"
 				end
 				return ""
 			end
+			announce._read_file = function(path)
+				if path == "/sys/class/net/eth1/master/uevent" then
+					return "DEVTYPE=bridge\nINTERFACE=br-lan\nIFINDEX=5\n"
+				end
+				return nil
+			end
 			local ip = announce.get_ip("eth1")
-			announce._popen = orig
-			assert_not_nil(ip, "bridge address found via master symlink")
+			announce._popen, announce._read_file = orig, orig_read
+			assert_not_nil(ip, "bridge address found via the port's master")
 			assert_eq(table.concat(ip, "."), "192.0.2.3", "bridge octets parsed")
 		end
 	},
@@ -326,43 +345,135 @@ return {
 			-- VLAN 20 becomes eth0.20 and not eth0.1.20 -- so the trunk itself
 			-- is neither addressed nor bridged. Confirmed on a real
 			-- TL-WDR3500, where this reported ip 0.0.0.0 on every inform.
-			local orig = announce._popen
+			local orig, orig_read = announce._popen, announce._read_file
 			announce._popen = function(cmd)
 				if cmd:match("addr show dev eth0%.1") or cmd:match("addr show dev eth0 ") then
 					return ""   -- neither the trunk nor the tagged child is addressed
-				end
-				if cmd:match("readlink /sys/class/net/eth0/master") then return "" end
-				if cmd:match("ls %-d /sys/class/net/eth0%.") then
-					return "/sys/class/net/eth0.1\n"
-				end
-				if cmd:match("readlink /sys/class/net/eth0%.1/master") then
-					return "../../../../../virtual/net/br-lan\n"
 				end
 				if cmd:match("addr show dev br%-lan") then
 					return "    inet 192.0.2.2/24 brd 192.0.2.255 scope global br-lan\n"
 				end
 				return ""
 			end
+			-- eth0 has no master/ at all; only the tagged child is enslaved.
+			announce._read_file = function(path)
+				if path == "/sys/class/net/eth0.1/master/uevent" then
+					return "DEVTYPE=bridge\nINTERFACE=br-lan\nIFINDEX=5\n"
+				end
+				if path == "/proc/net/dev" then return PROC_NET_DEV end
+				return nil
+			end
+			announce._holder = nil
 			local ip = announce.get_ip("eth0")
-			announce._popen = orig
+			announce._popen, announce._read_file = orig, orig_read
 			assert_not_nil(ip, "address found two hops away")
 			assert_eq(table.concat(ip, "."), "192.0.2.2", "trunk -> tagged child -> bridge")
 		end
 	},
 	{
-		name = "announce: get_ip returns nil when neither port nor bridge has an address",
+		name = "announce: steady ticks ask one `ip` for the netdev that held the address",
 		fn = function()
-			local orig = announce._popen
-			announce._popen = function() return "" end
-			local unbridged = announce.get_ip("eth1")
+			-- The trunk layout costs four forks to walk (port, tagged child,
+			-- bridge, and the `ls` that found the child). announce asks every
+			-- 10 s, and the answer only moves on a reprovision.
+			local orig, orig_read, orig_now = announce._popen, announce._read_file, announce._now
+			local asked, reads, now = {}, 0, 1000
 			announce._popen = function(cmd)
-				if cmd:match("readlink") then
-					return "../../../../../virtual/net/br-lan\n"
+				asked[#asked + 1] = cmd
+				if cmd:match("addr show dev br%-lan") then
+					return "    inet 192.0.2.2/24 brd 192.0.2.255 scope global br-lan\n"
 				end
 				return ""
 			end
+			announce._read_file = function(path)
+				reads = reads + 1
+				if path == "/sys/class/net/eth0.1/master/uevent" then return "INTERFACE=br-lan\n" end
+				if path == "/proc/net/dev" then return PROC_NET_DEV end
+				return nil
+			end
+			announce._now = function() return now end
+			announce._holder = nil
+			announce.get_ip("eth0")
+			assert_eq(#asked, 3, "the first call walks eth0, eth0.1, br-lan")
+			asked, reads = {}, 0
+			for _ = 1, 5 do
+				now = now + 10
+				assert_eq(table.concat(announce.get_ip("eth0"), "."), "192.0.2.2", "same address")
+			end
+			assert_eq(#asked, 5, "one fork per tick")
+			for _, c in ipairs(asked) do
+				assert_true(c:match("^ip %-4 addr show dev br%-lan$") ~= nil, "only the bridge is asked: " .. c)
+			end
+			assert_eq(reads, 0, "and no sysfs or /proc reads")
+			-- Past the TTL the chain is walked again, so a layout change is
+			-- found even while the old holder keeps an address.
+			asked, now = {}, now + announce.HOLDER_TTL
+			announce.get_ip("eth0")
+			assert_eq(#asked, 3, "re-resolved after HOLDER_TTL")
+			-- A clock stepped backwards does not pin the cache.
+			asked, now = {}, now - 3600
+			announce.get_ip("eth0")
+			assert_eq(#asked, 3, "re-resolved after a backwards clock step")
+			-- Another interface is not answered from eth0's holder.
+			asked = {}
+			assert_nil(announce.get_ip("eth1"), "eth1 has no address")
+			assert_eq(asked[1], "ip -4 addr show dev eth1", "eth1 is asked itself")
+			announce._popen, announce._read_file, announce._now = orig, orig_read, orig_now
+			announce._holder = nil
+		end
+	},
+	{
+		name = "announce: when the remembered netdev loses its address the chain is walked at once",
+		fn = function()
+			local orig, orig_read = announce._popen, announce._read_file
+			local on = "br-lan"
+			announce._popen = function(cmd)
+				if cmd == "ip -4 addr show dev " .. on then
+					return "    inet 192.0.2.2/24 brd 192.0.2.255 scope global " .. on .. "\n"
+				end
+				return ""
+			end
+			announce._read_file = function(path)
+				if path == "/sys/class/net/eth0.1/master/uevent" then return "INTERFACE=br-lan\n" end
+				if path == "/proc/net/dev" then return PROC_NET_DEV end
+				return nil
+			end
+			announce._holder = nil
+			assert_eq(table.concat(announce.get_ip("eth0"), "."), "192.0.2.2", "on the bridge")
+			on = "eth0.1"
+			local ip = announce.get_ip("eth0")
+			announce._popen, announce._read_file = orig, orig_read
+			assert_not_nil(ip, "found in the same call, not a tick later")
+			assert_eq(announce._holder and announce._holder.dev, "eth0.1", "the new holder is remembered")
+			announce._holder = nil
+		end
+	},
+	{
+		name = "announce: get_ip returns nil when neither port nor bridge has an address",
+		fn = function()
+			announce._holder = nil
+			local orig, orig_read = announce._popen, announce._read_file
+			local asked = {}
+			announce._popen = function(cmd)
+				asked[#asked + 1] = cmd
+				return ""
+			end
+			announce._read_file = function() return nil end
+			local unbridged = announce.get_ip("eth1")
+			announce._read_file = function(path)
+				if path == "/sys/class/net/eth1/master/uevent" then
+					return "INTERFACE=br-lan\n"
+				end
+				return nil
+			end
+			asked = {}
 			local bridged = announce.get_ip("eth1")
-			announce._popen = orig
+			announce._popen, announce._read_file = orig, orig_read
+			local asked_bridge = false
+			for _, c in ipairs(asked) do
+				if c:match("addr show dev br%-lan") then asked_bridge = true end
+			end
+			assert_true(asked_bridge, "the bridge was asked")
 			assert_nil(unbridged, "no address and no bridge -> nil")
 			assert_nil(bridged, "bridge exists but has no address -> nil")
 		end

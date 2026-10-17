@@ -21,10 +21,12 @@ local function with_fixtures(file_map, cmd_map, fn)
 	-- feeding a canned phy dump must not leak those caps into a later one.
 	sysinfo._phy_info_cache = {}
 	-- Same reasoning for the lookup pass and for the uplink cache, which holds
-	-- a `readlink` and an `ip route` answer for five minutes: a pass or an
-	-- entry left behind would memoize one test's fixtures into the next.
+	-- an `ip route` answer for five minutes: a pass or an entry left behind
+	-- would memoize one test's fixtures into the next.
 	sysinfo.end_pass()
 	sysinfo._uplink_cache = {}
+	sysinfo._peer_cache = {}
+	sysinfo._akm_cache = {}
 	sysinfo._read_file = function(path)
 		for k, v in pairs(file_map) do
 			if path == k or path:find(k, 1, true) then return v end
@@ -42,6 +44,8 @@ local function with_fixtures(file_map, cmd_map, fn)
 	sysinfo._run_cmd   = orig_cmd
 	sysinfo._phy_info_cache = {}
 	sysinfo._uplink_cache = {}
+	sysinfo._peer_cache = {}
+	sysinfo._akm_cache = {}
 	sysinfo.end_pass()
 	if not ok then error(err, 2) end
 end
@@ -71,7 +75,39 @@ return {
 				local m = sysinfo.meminfo()
 				assert_eq(m.total_kb, 131072, "total_kb")
 				assert_eq(m.free_kb,   65536, "free_kb")
+				assert_eq(m.buffers_kb, 2048, "buffers_kb")
 			end)
+		end
+	},
+	{
+		name = "sysinfo: loadavg() returns /proc/loadavg's three strings, zeros without it",
+		fn = function()
+			with_fixtures({["/proc/loadavg"] = "1.07 0.66 0.30 2/71 4321\n"}, {}, function()
+				local a, b, c = sysinfo.loadavg()
+				assert_eq(a, "1.07", "1 min")
+				assert_eq(b, "0.66", "5 min")
+				assert_eq(c, "0.30", "15 min")
+			end)
+			with_fixtures({}, {}, function()
+				local a, b, c = sysinfo.loadavg()
+				assert_eq(a .. " " .. b .. " " .. c, "0.00 0.00 0.00", "firmware's default")
+			end)
+		end
+	},
+	{
+		name = "sysinfo: ext_offset() puts the secondary 20 MHz on the primary's 40 MHz partner",
+		fn = function()
+			assert_eq(sysinfo.ext_offset(2437, 20, 2437), 0, "20 MHz: none")
+			assert_eq(sysinfo.ext_offset(2412, 40, 2422), 1, "HT40+ ch 1: above")
+			assert_eq(sysinfo.ext_offset(2462, 40, 2452), -1, "HT40- ch 11: below")
+			-- 80 MHz block 100-112 (center 5530): 40 MHz pairs 100/104, 108/112.
+			assert_eq(sysinfo.ext_offset(5500, 80, 5530), 1, "ch 100: partner 104 above")
+			assert_eq(sysinfo.ext_offset(5520, 80, 5530), -1, "ch 104: partner 100 below")
+			assert_eq(sysinfo.ext_offset(5540, 80, 5530), 1, "ch 108: partner 112 above")
+			assert_eq(sysinfo.ext_offset(5560, 80, 5530), -1, "ch 112: partner 108 below")
+			-- 160 MHz block 36-64 (center 5250): ch 44's partner is 48.
+			assert_eq(sysinfo.ext_offset(5220, 160, 5250), 1, "160 MHz ch 44: above")
+			assert_eq(sysinfo.ext_offset(nil, 40, 2422), 0, "no frequency: none")
 		end
 	},
 	{
@@ -126,9 +162,8 @@ return {
 				assert_eq(stas[2].rx_mcs, 5,                      "second client rx_mcs from 'MCS 5'")
 				assert_eq(stas[2].tx_generation, "n",            "second client is plain HT (bare MCS)")
 				assert_eq(stas[2].tx_nss, 1,                     "second client nss from MCS 6 -> floor(6/8)+1")
-				assert_eq(stas[1].tx_duration, 9835724,          "tx airtime in us")
-				assert_eq(stas[1].rx_duration, 14756520,         "rx airtime in us")
-				assert_eq(stas[2].tx_duration, nil,              "no airtime line: nil, not 0")
+				assert_eq(stas[1].signal_avg, -63,               "running average, its own line")
+				assert_eq(stas[2].signal_avg, -74,               "second client signal_avg")
 			end)
 		end
 	},
@@ -177,45 +212,221 @@ return {
 		end
 	},
 	{
-		name = "sysinfo: hostapd_sta_caps() reads each station's association ceiling",
+		name = "sysinfo: sta_table() reads an underflowed u32 retry counter as 0",
 		fn = function()
-			-- `hostapd_cli all_sta`, trimmed, as captured on an ath10k VHT
-			-- BSS, an mt76 2.4 GHz BSS, and a legacy-only station.
-			local out = "00:00:5e:00:53:01\n"
-				.. "flags=[AUTH][ASSOC][AUTHORIZED][SHORT_PREAMBLE][WMM][HT][VHT]\n"
-				.. "aid=1\ncapability=0x31\n"
-				.. "rx_vht_mcs_map=fffe\ntx_vht_mcs_map=fffe\n"
-				.. "ht_mcs_bitmask=ff000000010000000000\n"
-				.. "vht_caps_info=0x33c07030\nvht_capab=3070c033feff8601feff8601\n"
-				.. "ht_caps_info=0x006e\next_capab=0000000020000040\n"
-				.. "00:00:5E:00:53:02\n"
-				.. "flags=[AUTH][ASSOC][AUTHORIZED][SHORT_PREAMBLE][WMM][MFP][HT]\n"
-				.. "ht_mcs_bitmask=ff000000000000000000\nht_caps_info=0x0020\n"
-				.. "00:00:5e:00:53:03\n"
-				.. "flags=[AUTH][ASSOC][AUTHORIZED][WMM]\n"
-				.. "00:00:5e:00:53:04\n"
-				.. "flags=[AUTH][ASSOC][AUTHORIZED][WMM][HT][VHT][HE]\n"
-				.. "rx_vht_mcs_map=fffa\nht_mcs_bitmask=ffff0000000000000000\n"
-				.. "vht_caps_info=0x0000000c\nht_caps_info=0x0002\n"
-			with_fixtures({}, {["all_sta"] = out}, function()
-				local c = sysinfo.hostapd_sta_caps("phy0-ap0")
-				local vht = c["00:00:5e:00:53:01"]
-				assert_eq(vht.mode, "vht", "[VHT] flag")
-				assert_eq(vht.nss, 1, "fffe: stream 1 at MCS 0-9, the rest unsupported")
-				assert_eq(vht.max_mcs, 9, "fffe: stream 1 value 2 -> MCS 9")
-				assert_eq(vht.width, 80, "vht_caps_info width set 0 -> 80 MHz")
-				local ht = c["00:00:5e:00:53:02"]
-				assert_not_nil(ht, "MAC keyed lower-case")
-				assert_eq(ht.mode, "ht", "[HT] only")
-				assert_eq(ht.nss, 1, "one ff byte in the HT bitmask")
-				assert_eq(ht.max_mcs, 7, "HT tops out at MCS 7 per stream")
-				assert_eq(ht.width, 20, "ht_caps_info 0x0020: 40 MHz bit clear")
-				assert_true(c["00:00:5e:00:53:03"] == nil, "no HT: no ceiling to compare against")
-				local he = c["00:00:5e:00:53:04"]
-				assert_eq(he.mode, "he", "[HE] flag")
-				assert_eq(he.max_mcs, 11, "HE is taken as MCS 0-11")
-				assert_eq(he.nss, 2, "fffa: two streams")
-				assert_eq(he.width, 160, "vht_caps_info width set 3 -> 160 MHz")
+			-- mt76 (OpenWrt 25.12) adds count - 1 with no guard for count 0:
+			-- a fresh station's counters read 2^32 - 1, which the controller
+			-- added to its per-band totals as a 2^32 jump.
+			local dump = "Station cc:cc:cc:cc:cc:cc (on wlan1)\n"
+				.. "\ttx packets:\t12\n"
+				.. "\ttx retries:\t4294967295\n"
+				.. "\ttx failed:\t4294967295\n"
+				.. "Station dd:dd:dd:dd:dd:dd (on wlan1)\n"
+				.. "\ttx packets:\t5000\n"
+				.. "\ttx retries:\t2147483647\n"
+				.. "\ttx failed:\t7\n"
+			with_fixtures({}, {["station dump"] = dump}, function()
+				local stas = sysinfo.sta_table("wlan1")
+				assert_eq(stas[1].tx_retries, 0, "-1 as u32 is no retry count")
+				assert_eq(stas[1].tx_failed, 0, "nor a failed count")
+				assert_eq(stas[2].tx_retries, 2147483647, "2^31 - 1 is still a count")
+				assert_eq(stas[2].tx_failed, 7, "small counts pass")
+			end)
+		end
+	},
+	{
+		name = "sysinfo: wifi_driver() reads the netdev's driver once, without a fork",
+		fn = function()
+			sysinfo._driver_cache = {}
+			local reads, forks = 0, 0
+			with_fixtures({["/sys/class/net/phy1-ap0/device/uevent"] =
+				"OF_NAME=wifi\nDRIVER=mt798x-wmac\nMODALIAS=of:Nwifi\n"}, {}, function()
+				local orig, orig_cmd = sysinfo._read_file, sysinfo._run_cmd
+				sysinfo._read_file = function(p) reads = reads + 1; return orig(p) end
+				sysinfo._run_cmd = function(cmd) forks = forks + 1; return orig_cmd(cmd) end
+				assert_eq(sysinfo.wifi_driver("phy1-ap0"), "mt798x-wmac", "the uevent's DRIVER=")
+				assert_eq(sysinfo.wifi_driver("phy1-ap0"), "mt798x-wmac", "cached")
+				sysinfo._read_file, sysinfo._run_cmd = orig, orig_cmd
+			end)
+			assert_eq(reads, 1, "one read per netdev")
+			assert_eq(forks, 0, "and no fork")
+			with_fixtures({}, {}, function()
+				assert_nil(sysinfo.wifi_driver("lo"), "no driver link: nil")
+			end)
+			assert_nil(sysinfo.wifi_driver(nil), "no netdev: nil")
+			sysinfo._driver_cache = {}
+		end
+	},
+	{
+		name = "sysinfo: sta_powersave() reads PS_STA only where mac80211 tracks it",
+		fn = function()
+			local D = "/sys/kernel/debug/ieee80211/"
+			local st = D .. "phy1/netdev:phy1-ap0/stations/"
+			sysinfo._ps_phy_cache = {}
+			with_fixtures({
+				["/sys/class/net/phy1-ap0/phy80211/name"] = "phy1\n",
+				[D .. "phy1/hwflags"] = "RX_INCLUDES_FCS\nSIGNAL_DBM\nPS_NULLFUNC_STACK\n",
+				[st .. "00:00:5e:00:53:31/flags"] = "AUTH\nASSOC\nPS_STA\nAUTHORIZED\n",
+				[st .. "00:00:5e:00:53:32/flags"] = "AUTH\nASSOC\nAUTHORIZED\n",
+			}, {}, function()
+				assert_eq(sysinfo.sta_powersave("phy1-ap0", "00:00:5e:00:53:31"), true, "PS_STA: dozing")
+				assert_eq(sysinfo.sta_powersave("phy1-ap0", "00:00:5e:00:53:32"), false, "no PS_STA: awake")
+				assert_eq(sysinfo.sta_powersave("phy1-ap0", "00:00:5e:00:53:33"), nil, "no station dir: unknown")
+			end)
+			-- ath10k and mt76 set AP_LINK_PS: the driver owns power save and
+			-- PS_STA never appears, so the answer is unknown, not "awake".
+			sysinfo._ps_phy_cache = {}
+			with_fixtures({
+				["/sys/class/net/phy0-ap0/phy80211/name"] = "phy0\n",
+				[D .. "phy0/hwflags"] = "SIGNAL_DBM\nAP_LINK_PS\nSUPPORTS_TX_ENCAP_OFFLOAD\n",
+				[D .. "phy0/netdev:phy0-ap0/stations/00:00:5e:00:53:31/flags"] = "AUTH\nASSOC\nAUTHORIZED\n",
+			}, {}, function()
+				assert_eq(sysinfo.sta_powersave("phy0-ap0", "00:00:5e:00:53:31"), nil, "AP_LINK_PS: unknown")
+			end)
+			-- No debugfs at all.
+			sysinfo._ps_phy_cache = {}
+			with_fixtures({["/sys/class/net/phy0-ap0/phy80211/name"] = "phy0\n"}, {}, function()
+				assert_eq(sysinfo.sta_powersave("phy0-ap0", "00:00:5e:00:53:31"), nil, "no hwflags: unknown")
+			end)
+			sysinfo._ps_phy_cache = {}
+		end
+	},
+	{
+		name = "sysinfo: sta_akms() parses hostapd all_sta, akm_is_ft() knows the FT suites",
+		fn = function()
+			local seen
+			with_fixtures({}, {["all_sta"] =
+				"00:00:5e:00:53:31\nflags=[AUTH][ASSOC][AUTHORIZED][WMM][MFP]\naid=3\n"
+				.. "AKMSuiteSelector=00-0f-ac-9\nhostapdWPAPTKState=11\n"
+				.. "00:00:5e:00:53:32\nflags=[AUTH][ASSOC][AUTHORIZED]\nAKMSuiteSelector=00-0f-ac-2\n"
+				.. "00:00:5e:00:53:33\nflags=[AUTH][ASSOC][AUTHORIZED]\n"}, function()
+				local orig = sysinfo._run_cmd
+				sysinfo._run_cmd = function(cmd) seen = cmd; return orig(cmd) end
+				local a, listed = sysinfo.sta_akms({"phy0-ap0", "phy0-ap1", "bad;name"})
+				sysinfo._run_cmd = orig
+				assert_eq(a["00:00:5e:00:53:31"], "00-0f-ac-9", "FT-SAE station")
+				assert_eq(a["00:00:5e:00:53:32"], "00-0f-ac-2", "PSK station")
+				assert_eq(a["00:00:5e:00:53:33"], nil, "open station: no AKM line")
+				assert_true(listed["00:00:5e:00:53:33"], "but listed")
+				assert_eq(listed["00:00:5e:00:53:34"], nil, "a station hostapd did not print is not")
+			end)
+			assert_true(seen:find("for b in phy0-ap0 phy0-ap1;", 1, true) ~= nil, "one run over both BSSes")
+			assert_true(seen:find("bad;name", 1, true) == nil, "a name unsafe for the shell is dropped")
+			with_fixtures({}, {}, function()
+				local n = 0
+				local orig = sysinfo._run_cmd
+				sysinfo._run_cmd = function(cmd) n = n + 1; return orig(cmd) end
+				assert_eq(next((sysinfo.sta_akms({}))), nil, "no BSS: empty")
+				sysinfo._run_cmd = orig
+				assert_eq(n, 0, "no BSS: nothing run")
+			end)
+			for _, akm in ipairs({"00-0f-ac-3", "00-0f-ac-4", "00-0f-ac-9", "00-0f-ac-13", "00-0f-ac-19", "00-0f-ac-25"}) do
+				assert_true(sysinfo.akm_is_ft(akm), akm .. " is FT")
+			end
+			for _, akm in ipairs({"00-0f-ac-1", "00-0f-ac-2", "00-0f-ac-6", "00-0f-ac-8", "00-0f-ac-18"}) do
+				assert_eq(sysinfo.akm_is_ft(akm), false, akm .. " is not FT")
+			end
+			assert_eq(sysinfo.akm_is_ft(nil), false, "no AKM: not FT")
+		end
+	},
+	{
+		name = "sysinfo: sta_akms_cached() asks hostapd once per association",
+		fn = function()
+			local files = {["/proc/uptime"] = "1000.00 0\n"}
+			local A, B, C = "00:00:5e:00:53:31", "00:00:5e:00:53:32", "00:00:5e:00:53:33"
+			local reply = {
+				["phy0-ap0"] = A .. "\nAKMSuiteSelector=00-0f-ac-9\n" .. B .. "\nAKMSuiteSelector=00-0f-ac-2\n",
+				["phy0-ap1"] = C .. "\nflags=[AUTH][ASSOC][AUTHORIZED]\n",
+			}
+			local runs, asked = 0, {}
+			with_fixtures(files, {}, function()
+				sysinfo._run_cmd = function(cmd)
+					runs = runs + 1
+					local out = {}
+					for b in cmd:match("for b in (.-);"):gmatch("%S+") do
+						asked[#asked + 1] = b
+						out[#out + 1] = reply[b] or ""
+					end
+					return table.concat(out)
+				end
+				local stas = {{mac = A, bss = "phy0-ap0", conn = 100}, {mac = B, bss = "phy0-ap0", conn = 50},
+					{mac = C, bss = "phy0-ap1", conn = 10}}
+				local a = sysinfo.sta_akms_cached(stas)
+				assert_eq(runs, 1, "first heartbeat: one hostapd_cli run")
+				assert_eq(#asked, 2, "over both BSSes")
+				assert_eq(a[A], "00-0f-ac-9", "FT-SAE station")
+				assert_eq(a[B], "00-0f-ac-2", "PSK station")
+				assert_eq(a[C], nil, "open station: no AKM")
+
+				-- Fifteen seconds on: the same associations, one second of jitter.
+				files["/proc/uptime"] = "1015.00 0\n"
+				stas[1].conn, stas[2].conn, stas[3].conn = 116, 65, 25
+				a = sysinfo.sta_akms_cached(stas)
+				assert_eq(runs, 1, "steady stations: nothing run")
+				assert_eq(a[A], "00-0f-ac-9", "FT-SAE from the cache")
+				assert_eq(a[B], "00-0f-ac-2", "PSK from the cache")
+				assert_eq(a[C], nil, "open station cached as having none")
+
+				-- B reconnected with a new AKM between heartbeats: its connected
+				-- time is still past the last one, but its start moved.
+				files["/proc/uptime"] = "1030.00 0\n"
+				stas[1].conn, stas[2].conn, stas[3].conn = 131, 12, 40
+				reply["phy0-ap0"] = A .. "\nAKMSuiteSelector=00-0f-ac-9\n" .. B .. "\nAKMSuiteSelector=00-0f-ac-8\n"
+				asked = {}
+				a = sysinfo.sta_akms_cached(stas)
+				assert_eq(runs, 2, "a new association is asked again")
+				assert_eq(#asked, 1, "on its BSS only")
+				assert_eq(asked[1], "phy0-ap0", "phy0-ap0")
+				assert_eq(a[B], "00-0f-ac-8", "with its new AKM")
+				assert_eq(a[C], nil, "the other BSS still answers from the cache")
+
+				-- A moved to the other BSS with the same connected time.
+				stas[1].bss = "phy0-ap1"
+				reply["phy0-ap1"] = C .. "\n" .. A .. "\nAKMSuiteSelector=00-0f-ac-4\n"
+				a = sysinfo.sta_akms_cached(stas)
+				assert_eq(runs, 3, "a station on another BSS is asked again")
+				assert_eq(a[A], "00-0f-ac-4", "with the AKM it holds there")
+
+				-- hostapd did not list a station (it failed, or the station came
+				-- after iw's read): nothing is kept for it.
+				local D = "00:00:5e:00:53:34"
+				stas[4] = {mac = D, bss = "phy0-ap1", conn = 1}
+				sysinfo.sta_akms_cached(stas)
+				assert_eq(runs, 4, "a new station is asked for")
+				sysinfo.sta_akms_cached(stas)
+				assert_eq(runs, 5, "and asked again while hostapd does not list it")
+				stas[4] = nil
+
+				-- A station unseen for AKM_IDLE is forgotten; a cache hit
+				-- counts as seen.
+				assert_true(sysinfo._akm_cache[D] == nil, "an unlisted station was never cached")
+				files["/proc/uptime"] = "1250.00 0\n"
+				sysinfo.sta_akms_cached({{mac = B, bss = "phy0-ap0", conn = 232}})
+				assert_eq(runs, 5, "B answered from the cache")
+				files["/proc/uptime"] = "1330.00 0\n"
+				sysinfo.sta_akms_cached({})
+				assert_true(sysinfo._akm_cache[A] ~= nil, "A kept for AKM_IDLE")
+				files["/proc/uptime"] = "1331.00 0\n"
+				sysinfo.sta_akms_cached({})
+				assert_eq(sysinfo._akm_cache[A], nil, "and dropped after it")
+				assert_true(sysinfo._akm_cache[B] ~= nil, "B, seen at 1250, kept")
+				files["/proc/uptime"] = "1551.00 0\n"
+				sysinfo.sta_akms_cached({})
+				assert_eq(next(sysinfo._akm_cache), nil, "all gone")
+			end)
+		end
+	},
+	{
+		name = "sysinfo: sta_akms_cached() without a clock asks every time",
+		fn = function()
+			local runs = 0
+			with_fixtures({}, {}, function()
+				sysinfo._run_cmd = function() runs = runs + 1 return "00:00:5e:00:53:31\nAKMSuiteSelector=00-0f-ac-9\n" end
+				local stas = {{mac = "00:00:5e:00:53:31", bss = "phy0-ap0", conn = 100}}
+				assert_eq(sysinfo.sta_akms_cached(stas)["00:00:5e:00:53:31"], "00-0f-ac-9", "answered")
+				sysinfo.sta_akms_cached(stas)
+				assert_eq(runs, 2, "asked again")
+				assert_eq(next(sysinfo._akm_cache), nil, "nothing kept")
 			end)
 		end
 	},
@@ -652,7 +863,8 @@ return {
 				{}, function()
 					assert_eq(sysinfo.lan_bridge("br-lan"), "br-lan", "a bridge is its own answer")
 				end)
-			with_fixtures({}, {["readlink"] = "../../../../../virtual/net/br-lan\n"},
+			-- The master is read off sysfs (util.master_of), not a readlink fork.
+			with_fixtures({["/sys/class/net/wan/master/uevent"] = "INTERFACE=br-lan\n"}, {},
 				function()
 					assert_eq(sysinfo.lan_bridge("wan"), "br-lan", "a port resolves to its master")
 				end)
@@ -714,10 +926,11 @@ return {
 	{
 		name = "sysinfo: bridge_of() names the bridge a socket is enslaved to",
 		fn = function()
-			with_fixtures({}, {["readlink"] =
-				"../../../../../../../../virtual/net/br-lan\n"}, function()
+			with_fixtures({["/sys/class/net/lan3/master/uevent"] =
+				"DEVTYPE=bridge\nINTERFACE=br-lan\nIFINDEX=7\n"}, {}, function()
 					assert_eq(sysinfo.bridge_of("lan3"), "br-lan", "lan3 is in br-lan")
 				end)
+			-- A netdev that is not a bridge port has no master/ at all.
 			with_fixtures({}, {}, function()
 				assert_true(sysinfo.bridge_of("eth0") == nil, "not enslaved -> nil")
 			end)
@@ -824,8 +1037,10 @@ return {
 			local cmd = sysinfo.peer_scan_cmd("phy0-ap0")
 			local want = hex:sub(5, 18):gsub("(%x%x)", "\\x%1")
 			assert_true(cmd:find('"' .. want .. '"', 1, true) ~= nil, "prefix matches the builder")
-			assert_true(cmd:find("length(d)==13", 1, true) ~= nil, "body length is 0x0d")
+			assert_true(cmd:find("n==13&&substr(d,0,7)==", 1, true) ~= nil, "body length is 0x0d")
 			assert_true(cmd:find('dev:"phy0-ap0"', 1, true) ~= nil, "asks about the right interface")
+			local tail = 'if(r!=null)print("' .. sysinfo.PEER_SCAN_DONE .. '\\n");\' 2>/dev/null'
+			assert_eq(cmd:sub(-#tail), tail, "the done line is printed last, after the walk, and only for a dump that answered")
 			assert_eq(sysinfo.peer_scan_cmd("x'; reboot; '"), nil, "an interface name cannot break out of the quoting")
 			assert_eq(sysinfo.peer_ie_hex(nil), nil, "no identity, no IE")
 			assert_eq(sysinfo.peer_ie_hex("not-a-mac"), nil, "garbage, no IE")
@@ -857,6 +1072,32 @@ return {
 				assert_eq(nets[3].essid, " Net", "escaped leading space kept")
 				assert_eq(nets[4].essid, nil, "NUL-filled hidden SSID has no essid")
 				assert_eq(nets[5].essid, nil, "empty hidden SSID has no essid")
+			end)
+		end
+	},
+	{
+		name = "sysinfo: scan_table() reads each field from its own line, never from an SSID",
+		fn = function()
+			-- iw prints ':' and the rest of printable ASCII in an SSID as is.
+			-- The parser used to try every pattern on every line, so a
+			-- neighbour's name could set its own frequency, age, width and
+			-- security, since the SSID line comes after those.
+			local ssid = "x freq: 2412 last seen: 99000 ms ago capability: Privacy" ..
+				" secondary channel offset: above"
+			local dump = "BSS 00:00:5e:00:53:01(on wlan0)\n" ..
+				"\tlast seen: 120 ms ago\n\tfreq: 5180\n" ..
+				"\tcapability: ESS ShortSlotTime (0x0401)\n\tsignal: -60.00 dBm\n" ..
+				"\tSSID: " .. ssid .. "\n" ..
+				"\tHT operation:\n\t\t * secondary channel offset: no secondary\n"
+			with_fixtures({}, {["scan dump"] = dump}, function()
+				local nets = sysinfo.scan_table("wlan0")
+				assert_eq(#nets, 1, "one BSS")
+				assert_eq(nets[1].essid, ssid, "the whole name is the essid")
+				assert_eq(nets[1].freq, 5180, "freq from the freq line")
+				assert_eq(nets[1].channel, 36, "channel from that freq")
+				assert_eq(nets[1].age, 0, "age from the last seen line")
+				assert_eq(nets[1].security, "open", "no Privacy in the capability line")
+				assert_eq(nets[1].bw, 20, "no secondary channel")
 			end)
 		end
 	},
@@ -933,6 +1174,7 @@ return {
 				assert_false(caps.has_ht160, "no 160 MHz support (no VHT at all on 2.4GHz)")
 				assert_eq(caps.nss, 2, "nss from 'HT TX Max spatial streams: 2'")
 				assert_eq(caps.channel, 6, "live channel from 'channel 6 (2437 MHz)...'")
+				assert_eq(caps.extchannel, 0, "20 MHz: no secondary channel")
 			end)
 		end
 	},
@@ -1121,6 +1363,94 @@ return {
 			sysinfo._read_file = orig
 			sysinfo._sae_supported_cache = nil
 			assert_eq(reads, 1, "probed once, not on every inform")
+		end
+	},
+	{
+		name = "sysinfo: inside a pass every radio's caps come off one `iw dev`, unchanged",
+		fn = function()
+			-- radio_caps forked `iw dev <if> info` once per radio per
+			-- heartbeat; `iw dev` lists them all. Captured on both boards
+			-- (ath79: one 5 GHz and two 2.4 GHz VAPs; filogic: the reverse).
+			local function flat(t)
+				local keys = {}
+				for k in pairs(t) do keys[#keys + 1] = k end
+				table.sort(keys)
+				for i, k in ipairs(keys) do keys[i] = k .. "=" .. tostring(t[k]) end
+				return table.concat(keys, " ")
+			end
+			for _, board in ipairs({"ath79", "filogic"}) do
+				local info, order = {}, {}
+				-- No "\0" in a pattern: 5.1 rejects it. Only the headers carry "#".
+				local text = fixture("iw_dev_info_" .. board .. ".txt")
+				for name, body in text:gmatch("## (%S+)\n([^#]*)") do
+					info[name] = body:gsub("\n$", "")
+					order[#order + 1] = name
+				end
+				assert_eq(#order, 3, board .. ": three interfaces in the capture")
+				local dump = fixture("iw_dev_" .. board .. ".txt")
+				with_fixtures({}, {}, function()
+					local runs = {}
+					sysinfo._run_cmd = function(cmd)
+						runs[#runs + 1] = cmd
+						if cmd == "iw dev" then return dump end
+						local i = cmd:match("^iw dev (%S+) info$")
+						if i then return info[i] or "" end
+						local p = cmd:match("^iw phy phy(%d+) info$")
+						if p then return fixture(p == "0" and "iw_phy_info_5g.txt" or "iw_phy_info_2g.txt") end
+						return ""
+					end
+					local want = {}
+					for _, i in ipairs(order) do want[i] = flat(sysinfo.radio_caps(i)) end
+					runs = {}
+					sysinfo.begin_pass()
+					for _, i in ipairs(order) do
+						assert_eq(flat(sysinfo.radio_caps(i)), want[i],
+							board .. " " .. i .. ": the same caps as its own `info`")
+					end
+					sysinfo.end_pass()
+					local n_dump, n_info = 0, 0
+					for _, c in ipairs(runs) do
+						if c == "iw dev" then n_dump = n_dump + 1 end
+						if c:match(" info$") and c:match("^iw dev") then n_info = n_info + 1 end
+					end
+					assert_eq(n_dump, 1, board .. ": one `iw dev` for the pass")
+					assert_eq(n_info, 0, board .. ": and no per-interface `info`")
+				end)
+			end
+		end
+	},
+	{
+		name = "sysinfo: the `iw dev` dump skips unnamed entries and falls back for unlisted interfaces",
+		fn = function()
+			with_fixtures({}, {}, function()
+				local runs = {}
+				sysinfo._run_cmd = function(cmd)
+					runs[#runs + 1] = cmd
+					if cmd == "iw dev" then
+						-- A P2P device lists after the VAP with its own
+						-- channel; read as part of wlan0 it would have given
+						-- a down VAP that channel.
+						return "phy#0\n\tInterface wlan0\n\t\tifindex 3\n\t\ttype AP\n"
+							.. "\tUnnamed/non-netdev interface\n\t\twdev 0x2\n\t\ttype P2P-device\n"
+							.. "\t\tchannel 11 (2462 MHz), width: 20 MHz, center1: 2462 MHz\n"
+					end
+					if cmd == "iw dev wlan9 info" then
+						return "Interface wlan9\n\twiphy 0\n\tchannel 6 (2437 MHz)\n"
+					end
+					if cmd == "iw phy phy0 info" then return fixture("iw_phy_info_2g.txt") end
+					return ""
+				end
+				sysinfo.begin_pass()
+				local caps = sysinfo.radio_caps("wlan0")
+				assert_eq(caps.nss, 2, "wlan0 resolved to phy0 off the dump")
+				assert_nil(caps.channel, "and the P2P device's channel is not wlan0's")
+				assert_eq(sysinfo.radio_caps("wlan9").channel, 6,
+					"an interface the dump lacks is asked for on its own")
+				sysinfo.end_pass()
+				local dumps = 0
+				for _, c in ipairs(runs) do if c == "iw dev" then dumps = dumps + 1 end end
+				assert_eq(dumps, 1, "the dump still runs once")
+			end)
 		end
 	},
 	{
@@ -1783,24 +2113,23 @@ return {
 		end
 	},
 	{
-		name = "sysinfo: the uplink's near-static inputs are cached, the cable-following ones are not",
+		name = "sysinfo: the uplink's near-static input is cached, the cable-following ones are not",
 		fn = function()
 			-- Which socket the cable is in must stay measured every heartbeat.
-			-- Which BRIDGE a netdev is on, and what the default route's gateway
-			-- IP is, are not measurements of the cable and changed only when
-			-- the network was reconfigured -- two forks a heartbeat, forever.
+			-- What the default route's gateway IP is, is not a measurement of
+			-- the cable and changes only when the network is reconfigured -- a
+			-- fork a heartbeat, forever. Which BRIDGE a netdev is on is a sysfs
+			-- read, asked live and never forked.
 			local orig_cmd, orig_rf, orig_time =
 				sysinfo._run_cmd, sysinfo._read_file, sysinfo._time
 			local clock = 5000
 			sysinfo._time = function() return clock end
 			sysinfo._uplink_cache = {}
-			local readlinks, routes = 0, 0
+			local masters, routes, forks = 0, 0, 0
 			local gw = "192.0.2.1"
 			sysinfo._run_cmd = function(cmd)
-				if cmd:find("readlink") then
-					readlinks = readlinks + 1
-					return "../../../../../virtual/net/br-lan\n"
-				elseif cmd:find("ip route") then
+				forks = forks + 1
+				if cmd:find("ip route") then
 					routes = routes + 1
 					return "default via " .. gw .. " dev br-lan \n"
 				end
@@ -1812,13 +2141,17 @@ return {
 					arp_reads = arp_reads + 1
 					return gw .. " 0x1 0x2 aa:bb:cc:00:00:01 * br-lan\n"
 						.. "192.0.2.9 0x1 0x2 aa:bb:cc:00:00:09 * br-lan\n"
+				elseif path == "/sys/class/net/wan/master/uevent" then
+					masters = masters + 1
+					return "INTERFACE=br-lan\n"
 				end
 				return nil
 			end
 
 			assert_eq(sysinfo.bridge_of("wan"), "br-lan", "the bridge is found")
 			sysinfo.bridge_of("wan"); sysinfo.bridge_of("wan")
-			assert_eq(readlinks, 1, "and asked for once, not once per heartbeat")
+			assert_eq(masters, 3, "asked live each time")
+			assert_eq(forks, 0, "and never forked")
 
 			assert_eq(sysinfo._default_gateway_mac(), "aa:bb:cc:00:00:01", "the gateway")
 			sysinfo._default_gateway_mac()
@@ -1838,10 +2171,8 @@ return {
 
 			-- Past the TTL the near-static half is re-asked too.
 			clock = clock + sysinfo.UPLINK_TTL + 1
-			sysinfo.bridge_of("wan")
 			sysinfo._default_gateway_mac()
-			assert_eq(readlinks, 2, "the bridge is re-read once the TTL is up")
-			assert_eq(routes, 2, "and so is the default route")
+			assert_eq(routes, 2, "the default route is re-asked once the TTL is up")
 
 			sysinfo._run_cmd, sysinfo._read_file, sysinfo._time =
 				orig_cmd, orig_rf, orig_time
@@ -1853,20 +2184,22 @@ return {
 		fn = function()
 			-- "No default route" and "not a bridge port" are ordinary states
 			-- during boot, before DHCP has settled or netifd has finished.
-			-- Caching them would leave the device unable to find its uplink for
-			-- the next five minutes.
+			-- Remembering them would leave the device unable to find its uplink
+			-- for the next five minutes.
 			local orig_cmd, orig_rf = sysinfo._run_cmd, sysinfo._read_file
 			sysinfo._uplink_cache = {}
 			local up = false
 			sysinfo._run_cmd = function(cmd)
 				if not up then return "" end
-				if cmd:find("readlink") then return "/sys/devices/virtual/net/br-lan\n" end
 				if cmd:find("ip route") then return "default via 10.0.0.1 dev br-lan \n" end
 				return ""
 			end
 			sysinfo._read_file = function(path)
 				if path == "/proc/net/arp" then
 					return "10.0.0.1 0x1 0x2 aa:bb:cc:00:00:01 * br-lan\n"
+				end
+				if up and path == "/sys/class/net/wan/master/uevent" then
+					return "INTERFACE=br-lan\n"
 				end
 				return nil
 			end
@@ -1972,6 +2305,93 @@ return {
 				assert_eq(f[1].freq, 5745, "decimal MHz parsed")
 				assert_true(f[2].passive, "no IR: passive")
 			end)
+		end
+	},
+	{
+		name = "sysinfo: scan_table() reads the sibling tags on every read, so a new sibling is one right away",
+		fn = function()
+			-- By decision: the ucode reader runs per radio per read. Upstream
+			-- keeps its answer per BSSID (a stranger for ten minutes); this
+			-- tree reports what the air says on the next heartbeat.
+			local files = {["/proc/uptime"] = "1000.00 0\n"}
+			local scan = fixture("iw_scan_dump.txt")
+			local reads, reply = 0, sysinfo.PEER_SCAN_DONE .. "\n"
+			local cmds = {["scan dump"] = scan}
+			with_fixtures(files, cmds, function()
+				local orig = sysinfo._run_cmd
+				sysinfo._run_cmd = function(cmd)
+					if cmd:find("ucode -e", 1, true) then reads = reads + 1 return reply end
+					return orig(cmd)
+				end
+				local nets = sysinfo.scan_table("wlan0")
+				assert_eq(reads, 1, "first read")
+				assert_eq(nets[1].peer_mac, nil, "a stranger so far")
+				-- The same BSSID starts beaconing the element: tagged on the
+				-- very next read, not after a ten-minute hold.
+				reply = "AA:BB:CC:DD:EE:01 00:00:5E:00:53:20\n" .. sysinfo.PEER_SCAN_DONE .. "\n"
+				nets = sysinfo.scan_table("wlan0")
+				assert_eq(reads, 2, "read again")
+				assert_eq(nets[1].peer_mac, "00:00:5e:00:53:20", "and a sibling at once")
+				nets = sysinfo.scan_table("wlan0")
+				assert_eq(reads, 3, "every read, nothing reused")
+				sysinfo._run_cmd = orig
+			end)
+		end
+	},
+	{
+		name = "sysinfo: peer_scan_cmd() also recognises a real UniFi AP's element",
+		fn = function()
+			-- The matcher is ucode and only runs on a device or in an OpenWrt
+			-- image (tools/peer-ie-vectors.lua executes it against vectors).
+			-- Here: pin the firmware layout it must encode, and that the scan
+			-- command really uses it.
+			local pm = sysinfo.peer_match_ucode()
+			assert_true(pm:find("ord(d,0)!=0||ord(d,1)!=0x15||ord(d,2)!=0x6d", 1, true) ~= nil,
+				"Ubiquiti OUI 00:15:6d")
+			assert_true(pm:find("||ord(d,3)!=0||ord(d,4)!=1||ord(d,5)!=1)", 1, true) ~= nil,
+				"subtype 00 01 01 (a UniFi AP), not other Ubiquiti products")
+			assert_true(pm:find("for(let i=11;i+2<=n;i+=2+ord(d,i+1))", 1, true) ~= nil,
+				"TLVs walked from body offset 11 by their own lengths")
+			assert_true(pm:find("ord(d,i)==0x81&&ord(d,i+1)==6&&i+8<=n", 1, true) ~= nil,
+				"serial TLV 0x81, 6 bytes, bounds-checked")
+			local cmd = sysinfo.peer_scan_cmd("phy0-ap0")
+			assert_true(cmd:find(pm, 1, true) ~= nil, "the scan command embeds the matcher")
+			assert_true(cmd:find("hit=pm(e.data)", 1, true) ~= nil, "and calls it on every vendor element")
+			local inner = cmd:match("^ucode %-e '(.*)' 2>/dev/null$")
+			assert_true(inner ~= nil and not inner:find("'", 1, true),
+				"no single quote inside the shell-quoted script")
+		end
+	},
+	{
+		name = "sysinfo: the forget sweep runs once a minute, not once per wired host",
+		fn = function()
+			-- It walked every remembered host on every sighting: N hosts per
+			-- heartbeat made it N*N steps. A host back after the window still
+			-- starts a fresh uptime when the sweep hasn't reached it yet.
+			sysinfo._mac_first_seen, sysinfo._mac_last_seen = {}, {}
+			sysinfo._mac_swept_at = nil
+			local A, B, C, E = "eth1 aa:bb:cc:dd:ee:01", "eth1 aa:bb:cc:dd:ee:02",
+				"eth1 aa:bb:cc:dd:ee:03", "eth1 aa:bb:cc:dd:ee:05"
+			sysinfo._note_seen(A, 1000)                 -- sweeps (first ever)
+			sysinfo._note_seen(B, 1050)                 -- inside the minute: no sweep
+			sysinfo._note_seen(E, 1055)
+			sysinfo._note_seen(C, 4601)                 -- sweeps: A is 3601 s old
+			assert_nil(sysinfo._mac_last_seen[A], "A forgotten by the sweep")
+			sysinfo._note_seen(C, 4652)                 -- B is 3602 s old, but no sweep yet
+			assert_not_nil(sysinfo._mac_last_seen[B], "B waits for the next sweep")
+			assert_eq(sysinfo._note_seen(B, 4655), 4655,
+				"yet B back now is a fresh sighting, not one from 1050")
+			sysinfo._note_seen(C, 4661)                 -- a minute after 4601: sweeps
+			assert_nil(sysinfo._mac_last_seen[E], "E (3606 s old) forgotten")
+			assert_nil(sysinfo._mac_first_seen[E], "from both halves")
+			assert_eq(sysinfo._note_seen(B, 4662), 4655, "B keeps its new stamp")
+			-- A clock stepped back must not stall the sweep until it catches up.
+			local F = "eth1 aa:bb:cc:dd:ee:06"
+			sysinfo._note_seen(F, 100)
+			sysinfo._note_seen(C, 3800)
+			assert_nil(sysinfo._mac_last_seen[F], "swept after the clock stepped back")
+			sysinfo._mac_first_seen, sysinfo._mac_last_seen = {}, {}
+			sysinfo._mac_swept_at = nil
 		end
 	},
 }

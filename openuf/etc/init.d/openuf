@@ -40,7 +40,10 @@ start_service() {
 	# adopted, silent, no WiFi. Refused here instead, naming the fix --
 	# `openuf deps --install` (also a button on the LuCI overview) replaces
 	# the basic build with the full one of the same crypto library.
-	if ! grep -q bss_transition /usr/sbin/hostapd 2>/dev/null; then
+	# wnm_sleep_mode is compiled in only with WNM; bss_transition is no test
+	# (a basic binary carries bss_transition_* EVENT names) -- upstream's
+	# correction, 2026-10-01.
+	if ! grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/dev/null; then
 		echo "openuf: not starting: hostapd has no 802.11v support (a wpad-basic build, or none)" >&2
 		echo "openuf: install a full wpad build: openuf deps --install" >&2
 		return 1
