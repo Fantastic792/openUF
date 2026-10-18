@@ -365,6 +365,16 @@ return view.extend({
 		o.placeholder = '4194304';
 		o.datatype = 'uinteger';
 
+		// ── the device's own page: openuf.web, a section of its own (a `main`
+		// section means "UCI describes the daemon", see gate.uc) ──
+		const sweb = m.section(form.NamedSection, 'web', 'web', _('Device page'),
+			_('What a browser sees at this device\'s address. The device page shows the access point\'s state and where it is managed from, with openUF\'s settings behind the root password; LuCI is reached from there and offers "Exit LuCI mode" to go back.'));
+		sweb.addremove = false;
+		o = sweb.option(form.Flag, 'portal', _('Open the device page instead of LuCI'),
+			_('Turn off to have the address open LuCI directly, as on any OpenWrt device. Takes effect on the next page load.'));
+		o.default = '1';
+		o.rmempty = false;
+
 		// ── custom hardware profile: what the board reported, editable ──
 		const netdevs = arr(discover.netdevs).slice().sort(function(a, b) {
 			return (b.bridge ? 1 : 0) - (a.bridge ? 1 : 0) || a.name.localeCompare(b.name);
@@ -409,12 +419,21 @@ return view.extend({
 				(l.trigger != 'none' ? ' (' + _('trigger %s').format(l.trigger) + ')' : '')));
 		}
 
-		o = sd.option(form.MultiValue, 'hwassign', _('Radios reported to the controller'),
-			_('Tick the radios openUF should present and manage. A radio left out is never reported and never touched.'));
-		for (const r of arr(discover.radios))
-			if (r.uci)
+		// A picker with no choices makes LuCI's dropdown throw and takes the
+		// whole page down with it (seen on a board with no radio driver
+		// loaded): say so instead.
+		const radios = arr(discover.radios).filter(r => r.uci);
+		if (radios.length) {
+			o = sd.option(form.MultiValue, 'hwassign', _('Radios reported to the controller'),
+				_('Tick the radios openUF should present and manage. A radio left out is never reported and never touched.'));
+			for (const r of radios)
 				o.value(r.uci, '%s: %s, up to %s MHz%s'.format(r.uci, r.band, r.max_width || '?', r.he ? ', WiFi 6' : (r.vht ? ', WiFi 5' : ', WiFi 4')));
-		o.rmempty = true;
+			o.rmempty = true;
+		}
+		else {
+			o = sd.option(form.DummyValue, '_hwassign', _('Radios reported to the controller'));
+			o.default = _('No radio was found on this board: check that its WiFi driver is loaded (`wifi status`).');
+		}
 
 		o = sd.option(form.Value, 'lan_name', _('LAN network name'), _('The OpenWrt network the identity interface belongs to; "lan" on a stock configuration.'));
 		o.placeholder = 'lan';

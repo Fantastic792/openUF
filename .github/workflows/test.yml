@@ -95,3 +95,28 @@ jobs:
           dash -n install.sh
           dash -n update.sh
           dash -n tools/deploy.sh
+          bash -n openuf/hook/openuf-deps.sh && dash -n openuf/hook/openuf-deps.sh
+          # The LuCI packages' uci-defaults run under busybox ash on the device.
+          for f in package/luci-app-openuf/root/etc/uci-defaults/* package/luci-theme-halo/root/etc/uci-defaults/*; do
+            bash -n "$f" && dash -n "$f"
+          done
+
+  web-syntax:
+    name: Device page, LuCI views and theme script syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Plain browser JavaScript with no build step: a syntax error ships as a
+      # blank page on every router, so parse each file before it can.
+      - name: Parse every shipped script
+        run: |
+          for f in package/luci-app-openuf/htdocs/openuf/portal.js \
+              package/luci-app-openuf/htdocs/luci-static/resources/preload/*.js \
+              package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/*.js \
+              package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/*.js \
+              package/luci-theme-halo/htdocs/luci-static/resources/*.js; do
+            node --check "$f" && echo "ok $f"
+          done
+          for f in package/luci-app-openuf/root/usr/share/rpcd/acl.d/*.json; do
+            python3 -m json.tool "$f" > /dev/null && echo "ok $f"
+          done

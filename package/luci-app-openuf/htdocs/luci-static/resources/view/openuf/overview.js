@@ -121,7 +121,7 @@ function installButton(w, missing) {
 		choices.map(c => E('option', { 'value': c, 'selected': (c == w.suggested) ? '' : null }, c)));
 	const label = swap
 		? (missing.length ? _('Replace hostapd with the full build and install the missing packages') : _('Replace hostapd with the full build'))
-		: _('Install the missing packages');
+		: (missing.length ? _('Install the missing packages') : _('Install the Halo theme'));
 	const btn = E('button', { 'class': 'btn cbi-button cbi-button-positive', 'click': function() {
 		const chosen = swap ? select.value : null;
 		ui.showModal(label, [
@@ -185,12 +185,30 @@ function softwareBlock(s) {
 			E('td', { 'class': 'td' }, installed(p.present, p.required)),
 			E('td', { 'class': 'td' }, p.unlocks)
 		]));
+	// The Halo theme: cosmetic, so it is offered only where the flash has
+	// room to spare (openuf deps decides, and says so here).
+	const th = d.theme;
+	if (th && th.luci) {
+		let state;
+		if (th.installed)
+			state = installed(true, false);
+		else if (th.wanted)
+			state = E('span', { 'class': 'label notice' }, _('not yet: the install button adds it'));
+		else
+			state = E('span', { 'class': 'label' }, _('skipped: %d KB free, needs %d KB').format(th.free_kb, th.min_free_kb));
+		t.appendChild(E('tr', { 'class': 'tr' }, [
+			E('td', { 'class': 'td' }, th.package),
+			E('td', { 'class': 'td' }, _('optional')),
+			E('td', { 'class': 'td' }, state),
+			E('td', { 'class': 'td' }, _('The Halo look for LuCI, matching the device page; installed only on devices with flash to spare'))
+		]));
+	}
 	const parts = [ t ];
 	if (w.full === false)
 		parts.push(E('p', {}, _('openUF will not start with a basic hostapd build: it rejects the 802.11v option every network from the controller carries and takes the radio down with it. The full build of the same crypto library is suggested, so nothing else on the device changes and no extra flash is used.')));
 	if (missing.length)
 		parts.push(E('p', {}, _('A missing mandatory package stops openUF from running; a missing optional one leaves that feature off. Everything is installed from the OpenWrt package repository, so the device needs internet access for this.')));
-	if (w.full === false || missing.length)
+	if (w.full === false || missing.length || (th && th.wanted))
 		parts.push(installButton(w, missing));
 	return E('div', {}, parts);
 }

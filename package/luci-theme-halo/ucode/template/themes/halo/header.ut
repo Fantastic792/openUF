@@ -1,0 +1,102 @@
+{#
+ Halo theme for LuCI.
+ Copyright 2026 Yesrab Ali <yesrab.ali111@gmail.com>
+ Licensed to the public under the Apache License 2.0.
+
+ Structure follows luci-theme-bootstrap's header (Copyright 2008 Steven
+ Barth, 2012 David Menting, 2008-2022 Jo-Philipp Wich), Apache License 2.0.
+-#}
+
+{%
+	import { getuid, getspnam } from 'luci.core';
+
+	const boardinfo = ubus.call('system', 'board') ?? {};
+	// halo-dark / halo-light pin the scheme; plain halo follows the OS.
+	const darkpref = (theme == 'halo-dark' ? 'true' : (theme == 'halo-light' ? 'false' : null));
+	const hostname = boardinfo.hostname ?? '?';
+
+	http.prepare_content('text/html; charset=UTF-8');
+-%}
+
+<!DOCTYPE html>
+<html lang="{{ dispatcher.lang }}" {{ darkpref ? `data-darkmode="${darkpref}"` : '' }}>
+	<head>
+		<meta charset="utf-8">
+		<title>{{ striptags(`${dispatched?.title ? `${_(dispatched.title)} · ` : ''}${hostname}`) }}</title>
+		{% if (!darkpref): %}
+		<script>
+			(function() {
+				var mq = window.matchMedia('(prefers-color-scheme: dark)'),
+				    root = document.documentElement,
+				    set = function(m) { root.setAttribute('data-darkmode', m.matches) };
+				mq.addEventListener('change', set);
+				set(mq);
+			})();
+		</script>
+		{% endif %}
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+		<meta name="color-scheme" content="light dark">
+		<meta name="darkreader-lock">
+		<link rel="stylesheet" href="{{ media }}/cascade.css">
+		<link rel="icon" href="{{ media }}/logo.svg" type="image/svg+xml" sizes="any">
+		{% if (dispatched?.css): %}
+		<link rel="stylesheet" href="{{ resource }}/{{ dispatched.css }}">
+		{% endif %}
+		{% if (css): %}
+		<style title="text/css">{{ css }}</style>
+		{% endif %}
+		<script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}"></script>
+		<script src="{{ resource }}/cbi.js"></script>
+	</head>
+
+	<body class="lang_{{ dispatcher.lang }}{{ blank_page ? ' halo-blank' : '' }}{{ halo_login ? ' halo-login-page' : '' }}" data-page="{{ entityencode(join('-', length(ctx.request_path) ? ctx.request_path : ctx.path), true) }}">
+		{% if (!blank_page): %}
+		<div class="halo-shell">
+			<aside id="halo-sidebar" aria-label="{{ _('Navigation') }}">
+				<a class="halo-brand" href="/" title="{{ entityencode(hostname, true) }}">
+					<span class="halo-mark" aria-hidden="true"></span>
+					<span class="halo-host">{{ striptags(hostname) }}</span>
+				</a>
+				<ul class="halo-nav" id="topmenu" style="display:none"></ul>
+				<ul id="modemenu" style="display:none"></ul>
+				<div class="halo-sidebar-foot" id="halo-sidebar-foot"></div>
+			</aside>
+			<div class="halo-scrim" id="halo-scrim"></div>
+
+			<div class="halo-main">
+				<header class="halo-topbar">
+					<button class="halo-burger" id="halo-burger" type="button" aria-label="{{ _('Menu') }}" aria-controls="halo-sidebar" aria-expanded="false"></button>
+					<nav class="halo-crumbs" id="halo-crumbs" aria-label="{{ _('Location') }}"></nav>
+					<div id="indicators" class="pull-right"></div>
+				</header>
+
+				<div id="maincontent" class="container">
+					{% if (getuid() == 0 && getspnam('root')?.pwdp === ''): %}
+						<div class="alert-message warning">
+							<h4>{{ _('No password set!') }}</h4>
+							<p>{{ _('There is no password set on this router. Please configure a root password to protect the web interface.') }}</p>
+							{% if (dispatcher.lookup("admin/system/admin")): %}
+							<div class="right"><a class="btn" href="{{ dispatcher.build_url("admin/system/admin") }}">{{ _('Go to password configuration...') }}</a></div>
+							{% endif %}
+						</div>
+					{% endif %}
+
+					{% if (boardinfo.rootfs_type == "initramfs"): %}
+						<div class="alert-message warning">
+							<h4>{{ _('System running in recovery (initramfs) mode.') }}</h4>
+							<p>{{ _('No changes to settings will be stored and are lost after rebooting. This mode should only be used to install a firmware upgrade') }}</p>
+							{% if (dispatcher.lookup("admin/system/flash")): %}
+							<div class="right"><a class="btn" href="{{ dispatcher.build_url("admin/system/flash") }}">{{ _('Go to firmware upgrade...') }}</a></div>
+							{% endif %}
+						</div>
+					{% endif %}
+
+					<noscript>
+						<div class="alert-message warning">
+							<h4>{{ _('JavaScript required!') }}</h4>
+							<p>{{ _('You must enable JavaScript in your browser or LuCI will not work properly.') }}</p>
+						</div>
+					</noscript>
+
+					<div id="tabmenu" style="display:none"></div>
+		{% endif %}

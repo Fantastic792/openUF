@@ -21,8 +21,18 @@ openUF/
 │   │   │                         (the init script is openuf/etc/init.d/openuf inside
 │   │   │                          the source archive: install.sh ships the same file)
 │   │   └── test.sh               feed CI runtime check (openuf --version)
-│   └── luci-app-openuf/          -> openwrt/luci: applications/luci-app-openuf
-│       ├── Makefile              LUCI_TITLE, LUCI_DEPENDS:=+luci-base +openuf
+│   ├── luci-app-openuf/          -> openwrt/luci: applications/luci-app-openuf
+│       ├── Makefile              LUCI_DEPENDS:=+luci-base +openuf +uhttpd-mod-ucode; the
+│       │                         postinst/prerm that load and remove the gate
+│       ├── htdocs/openuf/{index.html,portal.css,portal.js}
+│       │                         the device page (no LuCI files, no web fonts)
+│       ├── htdocs/luci-static/resources/preload/openuf_exit.js
+│       │                         "Exit LuCI mode" in LuCI's indicator bar
+│       ├── root/usr/share/ucode/openuf/gate.uc   the gate in front of LuCI
+│       ├── root/etc/uci-defaults/80_openuf-portal
+│       │                         registers the gate with uhttpd, creates openuf.web
+│       ├── root/usr/share/rpcd/acl.d/luci-app-openuf-portal.json
+│       │                         `unauthenticated`: luci.openuf getPublic only
 │       ├── htdocs/luci-static/resources/view/openuf/{overview,settings,log}.js
 │       ├── htdocs/luci-static/resources/view/status/include/05_openuf.js
 │       │                         the essentials on Status → Overview
@@ -30,6 +40,11 @@ openUF/
 │       ├── root/usr/share/rpcd/acl.d/luci-app-openuf.json
 │       ├── root/usr/share/luci/menu.d/luci-app-openuf.json
 │       └── po/templates/openuf.pot
+│   └── luci-theme-halo/          -> openwrt/luci: themes/luci-theme-halo
+│       ├── htdocs/luci-static/halo/{cascade.css,logo.svg}, halo-dark/halo-light symlinks
+│       ├── htdocs/luci-static/resources/menu-halo.js     sidebar, breadcrumb, tabs
+│       ├── ucode/template/themes/halo/{header,footer,sysauth}.ut (+ variant symlinks)
+│       └── root/etc/uci-defaults/30_luci-theme-halo        registers the three variants
 └── .github/workflows/release.yml verify, build .ipk + .apk, attach to the release
 
 openuf/hook/                      what the packages install as commands
@@ -100,10 +115,60 @@ would read differently.
     DNS), "keep the WAN socket as WAN", and the warning that the address will change.
 - **Log**: `logread -e ^` (ubox's `-e daemon` matched nothing) filtered client-side.
 
-ACL: read `cgi-io exec`, `ubus luci.openuf getStatus/listPresets/discover/exportPreset/
+Also on the settings page: *Device page* (`openuf.web.portal`), and the radio picker becomes
+a note when the board reports no radio (an empty MultiValue blanks the page).
+
+ACL (`luci-app-openuf-portal.json` adds the `unauthenticated` group: `ubus luci.openuf
+getPublic`, nothing else): read `cgi-io exec`, `ubus luci.openuf getStatus/listPresets/discover/exportPreset/
 getConvertState`, `file exec` for `logread -e *`, `/etc/init.d/openuf start|stop|restart`,
 `openuf reset-inform|11k-scan|deps --check`, `uci openuf`; write `ubus luci.openuf
 convert/revert`, `file exec openuf deps --install [*]`, `uci openuf`.
+
+## The device page and the gate (luci-app-openuf, 2026-10-18)
+
+The user's brief: like an adopted Omada or UniFi device, the box should belong to its
+controller -- its address opens a page that says where it is managed from, with the local
+settings behind a login -- and LuCI should be reachable only through a hidden gesture, with
+a way back.
+
+| Piece | What it does |
+|---|---|
+| `gate.uc` | A uhttpd ucode handler registered for `/cgi-bin/luci`. Per request: `/__openuf/unlock` sets the `openuf_luci=<epoch>` cookie and goes to LuCI; `/__openuf/lock` destroys the LuCI session, clears the cookie, goes to `/openuf/?locked`; with `openuf.web.portal` off (or `/www/openuf/index.html` missing) everything goes to LuCI's dispatcher; otherwise a request passes only with the cookie AND (a valid LuCI session OR the cookie younger than 600 s, to log in), and goes to `/openuf/` (`?expired` when a session ended). Any error falls through to LuCI. It also supplies `DOCUMENT_ROOT`, which uhttpd's ucode handler omits and LuCI's preload discovery needs. Presentation only: LuCI keeps its login, `/ubus` and cgi-io are not behind it |
+| `/www/openuf/` | *Overview*: `luci.openuf getPublic` with the unauthenticated rpcd session -- hostname, model, presented identity, MAC, openUF version, adopted, controller host/port, last contact/failure, uptime, running (cached 5 s; the facts the discovery packets already broadcast, plus where to manage it). *Local Settings*: `session.login` as root, then `luci.openuf getStatus/listPresets`, `uci get/set/add/commit` on `openuf` (`main` only where it exists, `web` created when absent), `file exec` for `openuf reset-inform` and the init script, `system reboot`. Konami code / seven taps on the device picture → "Open LuCI?" → `/cgi-bin/luci/__openuf/unlock` |
+| `preload/openuf_exit.js` | Shows *Exit LuCI mode* (an indicator beside *Refreshing*) only while the `openuf_luci` cookie is set |
+| lifecycle | uci-defaults switches `uhttpd.*.ucode_prefix` to the gate but restarts nothing, so a first install takes over at the next reboot; the postinst restarts uhttpd only when it already runs the gate (an upgrade); the prerm (not on upgrade: apk runs none, opkg sets `PKG_UPGRADE`) restores LuCI's line and restarts uhttpd at once |
+| `luci-theme-halo` | Optional, never a dependency; installed by `openuf deps --install` only with LuCI present and ≥ 4096 KB free on the overlay (`--no-theme` skips; `--check` reports `theme`); the LuCI overview's software table shows the decision |
+
+Verified on an OpenWrt 25.12.6 armsr/armv8 VM under QEMU (stock image + `uhttpd-mod-ucode`,
+openUF from the tarball, the app's files laid out as luci.mk installs them) on 2026-10-18:
+the redirect from `/` and every `/cgi-bin/luci` path; `getPublic` answering the
+unauthenticated session while `getStatus` is refused (-32002); wrong and right password;
+settings save creating only `openuf.web` on a box with no `main`; the switch followed live
+both ways; the Konami code with real key presses; LuCI's login; *Exit LuCI mode* beside
+*Refreshing*; lock and expiry returning to the page; the four lifecycle cases (first install
+waits for the reboot, the reboot takes over, an upgrade reloads the gate, removal restores
+LuCI immediately); and the same unlock → login (`sysauth_https`) → a session outliving the
+10-minute grace → lock → old cookie refused sequence over HTTPS. Light, dark and a 390 px
+phone layout were screenshotted. The VM's user-mode networking resets the odd parallel
+static request, which also happens with stock uhttpd and no gate. **Not yet run:** on a real
+AP (both lab APs are production), through the SDK, on 24.10/opkg.
+
+## The Halo theme (luci-theme-halo, 2026-10-18)
+
+A full LuCI theme modelled on UniFi Network, meant to stand alone: a sidebar of LuCI's menu
+with icons (level 1 as collapsible groups, level 2 as links, level 3+ as underlined tabs above
+the page, all from `ui.menu` in `menu-halo.js`), a glass top bar with the breadcrumb and
+LuCI's indicators, sections as cards with ruled grouped-list rows, flag options as switches,
+a floating glass *Save & Apply* bar, Apple-style modal and dropdowns, and the login page as
+a centred card. Halo / Halo Dark / Halo Light like bootstrap's three. No web fonts, no
+images beyond inline SVG. Every class `luci-theme-bootstrap` styles is covered, with its
+mechanics for the dropdown, dynamic list, tooltip, modal overlay and the narrow-screen table
+collapse carried over (Apache-2.0, credited in the file); the newer `cbi-range-slider`,
+`drag-handle` and `cbi-section-filter` are styled too. bootstrap's colour variables are
+aliased for apps that use them inline. Checked in the VM above: login, Status overview,
+Interfaces (and its edit dialog: tabs, dropdown open, switches, dynamic list), System,
+Firewall (zones table fits beside the sidebar), the pending-changes dialog and an apply,
+openUF's own pages; light, dark, and the drawer at 390 px.
 
 ## Release workflow (GitHub Actions)
 

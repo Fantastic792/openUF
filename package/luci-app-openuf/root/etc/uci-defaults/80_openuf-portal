@@ -1,0 +1,40 @@
+#!/bin/sh
+# Route /cgi-bin/luci through openUF's gate (/usr/share/ucode/openuf/gate.uc),
+# so the device's address opens openUF's page instead of LuCI.
+#
+# The gate is a uhttpd ucode handler (uhttpd-mod-ucode, a dependency of this
+# package). It replaces LuCI's own ucode line where one exists, and is simply
+# added where LuCI runs as the /www/cgi-bin/luci CGI script (stock 25.12):
+# uhttpd answers a matching ucode prefix before it looks for a CGI file, so
+# the gate sits in front of LuCI either way without touching luci-base's
+# files. luci-base's postinst adds its own line only when no ucode prefix
+# mentions /cgi-bin/luci, which ours does, so a LuCI upgrade leaves it be.
+#
+# uhttpd reads this at its next start -- in practice the reboot after
+# installing -- so an install never pulls the page out from under an open
+# LuCI session. The package's prerm takes the line out again. The page itself
+# is switched on and off with `uci set openuf.web.portal=0|1` and needs no
+# restart: the gate reads that option on every request.
+# The page's own switch, openuf.web.portal. A config kept from before this
+# version (it is a conffile) has no `web` section; LuCI's settings page needs
+# one to show the switch. Only `web` is created here: a `main` section would
+# put UCI in charge of the daemon.
+if [ -f /etc/config/openuf ] && ! uci -q get openuf.web >/dev/null; then
+	uci set openuf.web=web
+	uci set openuf.web.portal=1
+	uci commit openuf
+fi
+
+[ -f /etc/config/uhttpd ] || exit 0
+
+GATE='/cgi-bin/luci=/usr/share/ucode/openuf/gate.uc'
+LUCI='/cgi-bin/luci=/usr/share/ucode/luci/uhttpd.uc'
+
+for s in $(uci -q show uhttpd | sed -n "s/^uhttpd\.\([^.=]*\)=uhttpd$/\1/p"); do
+	list=$(uci -q get "uhttpd.$s.ucode_prefix")
+	case " $list " in *" $GATE "*) continue ;; esac
+	uci -q del_list "uhttpd.$s.ucode_prefix=$LUCI"
+	uci add_list "uhttpd.$s.ucode_prefix=$GATE"
+done
+uci commit uhttpd
+exit 0

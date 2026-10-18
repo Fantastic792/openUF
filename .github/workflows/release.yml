@@ -187,7 +187,7 @@ jobs:
           ARCH: ${{ matrix.sdk }}
           FEEDNAME: openuf
           FEED_DIR: ${{ github.workspace }}/package
-          PACKAGES: openuf luci-app-openuf
+          PACKAGES: openuf luci-app-openuf luci-theme-halo
           NO_REFRESH_CHECK: true
           # The action's init-script check runs `git diff` inside the mounted
           # feed directory, which is not a git repository in the container
@@ -210,7 +210,7 @@ jobs:
       - name: Collect the packages
         run: |
           mkdir -p out
-          find bin -type f \( -name 'openuf*.ipk' -o -name 'openuf*.apk' -o -name 'luci-app-openuf*.ipk' -o -name 'luci-app-openuf*.apk' \) -exec cp -v {} out/ \;
+          find bin -type f \( -name 'openuf*.ipk' -o -name 'openuf*.apk' -o -name 'luci-app-openuf*.ipk' -o -name 'luci-app-openuf*.apk' -o -name 'luci-theme-halo*.ipk' -o -name 'luci-theme-halo*.apk' \) -exec cp -v {} out/ \;
           ls -l out
       - uses: actions/upload-artifact@v4
         with:

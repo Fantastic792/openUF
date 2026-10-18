@@ -223,6 +223,17 @@ hardware profile filled in from what the board reports, an export of that profil
 to contribute, and the conversion into an AP (WAN off, DHCP and firewall off) as a button;
 from the shell that is `openuf-convert`.
 
+From the reboot after `luci-app-openuf` is installed, the device's address opens openUF's own
+**device page** instead of LuCI, the way an adopted Ubiquiti or Omada device sends you to its
+controller: an *Overview* anyone on the network can see (adoption state, the controller's
+address, the device facts it already broadcasts) and *Local Settings* behind the root
+password. LuCI is one hidden step away: the Konami code (↑ ↑ ↓ ↓ ← → ← → B A), or seven taps
+on the device picture on a phone, offers it, and LuCI's header then carries *Exit LuCI mode*.
+`uci set openuf.web.portal=0` (or the switch on either settings page) turns the page off.
+**`luci-theme-halo`** is a full LuCI theme in the same style -- sidebar, cards, switches, light
+and dark -- usable without openUF too; `openuf deps --install` adds it only where LuCI is
+installed and the flash has room to spare. See USAGE.md § "The device page".
+
 One command on the device, over SSH:
 
 ```sh

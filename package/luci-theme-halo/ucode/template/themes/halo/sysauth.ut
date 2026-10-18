@@ -1,0 +1,118 @@
+{#
+ Halo theme for LuCI: the login page.
+ Copyright 2026 Yesrab Ali <yesrab.ali111@gmail.com>
+ Licensed to the public under the Apache License 2.0.
+
+ A plain form, no script needed to sign in: the dispatcher reads
+ luci_username and luci_password (and any auth plugin's own fields) from a
+ POST to the same URL, exactly as luci-base's own sysauth template sends them.
+-#}
+
+{% include('header', { blank_page: true, halo_login: true }) %}
+
+{%
+	const boardinfo = ubus.call('system', 'board') ?? {};
+	let https_ports = uci.get('uhttpd', 'main', 'listen_https') ?? [];
+
+	https_ports = uniq(filter(
+		map(
+			(type(https_ports) == 'string') ? split(https_ports, /\s+/) : https_ports,
+			e => +match(e, /\d+$/)?.[0]
+		),
+		p => (p >= 0 && p <= 65535)
+	));
+-%}
+
+<main class="halo-login" aria-labelledby="halo-login-title">
+	<div class="halo-mark" aria-hidden="true"></div>
+	<h1 id="halo-login-title">{{ striptags(boardinfo.hostname ?? 'OpenWrt') }}</h1>
+	<p class="halo-login-sub">{{ _('Please enter your username and password.') }}</p>
+
+	<form method="post" autocomplete="on">
+		{% if (fuser): %}
+			<div class="alert-message error" role="alert">
+				{{ _('Invalid username and/or password! Please try again.') }}
+			</div>
+		{% elif (auth_message): %}
+			<div class="alert-message{% if (auth_plugin): %} warning{% endif %}" role="status">
+				{{ auth_message }}
+			</div>
+		{% endif %}
+
+		<div class="halo-field">
+			<label for="luci_username">{{ _('Username') }}</label>
+			<input name="luci_username" id="luci_username" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" value="{{ entityencode(duser, true) }}">
+		</div>
+		<div class="halo-field">
+			<label for="luci_password">{{ _('Password') }}</label>
+			<input name="luci_password" id="luci_password" type="password" autocomplete="current-password">
+		</div>
+
+		{% if (auth_fields): %}
+			{% for (let field in auth_fields): %}
+				<div class="halo-field">
+					<label for="{{ field.name }}">{{ _(field.label ?? field.name) }}</label>
+					<input
+						name="{{ field.name }}"
+						id="{{ field.name }}"
+						type="{{ field.type ?? 'text' }}"
+						{% if (field.placeholder): %}placeholder="{{ field.placeholder }}"{% endif %}
+						{% if (field.inputmode): %}inputmode="{{ field.inputmode }}"{% endif %}
+						{% if (field.pattern): %}pattern="{{ field.pattern }}"{% endif %}
+						{% if (field.maxlength): %}maxlength="{{ field.maxlength }}"{% endif %}
+						{% if (field.autocomplete): %}autocomplete="{{ field.autocomplete }}"{% endif %}
+						{% if (field.required): %}required{% endif %}
+					>
+				</div>
+			{% endfor %}
+		{% endif %}
+
+		{% if (auth_html): %}
+			<div class="halo-field">{{ auth_html }}</div>
+		{% endif %}
+
+		{% if (auth_assets): %}
+			{% for (let asset in auth_assets): %}
+				{% if (asset.type == 'script'): %}
+					<script src="{{ asset.src }}"></script>
+				{% endif %}
+			{% endfor %}
+		{% endif %}
+
+		<button type="submit" class="btn">{{ _('Log in') }}</button>
+	</form>
+
+	<p class="halo-login-foot">{{ version.distname }} {{ version.distversion }}</p>
+</main>
+
+<script>
+	(function() {
+		var form = document.querySelector('.halo-login form'),
+		    pw = document.getElementById('luci_password'),
+		    btn = form.querySelector('button[type="submit"]');
+
+		if (pw)
+			pw.focus();
+
+		form.addEventListener('submit', function() {
+			btn.classList.add('spinning');
+			btn.disabled = true;
+		});
+
+		/* As luci-base's own login page: hop to HTTPS when the router
+		 * serves it and the browser trusts the certificate. */
+		if (document.location.protocol != 'https:') {
+			{{ https_ports }}.forEach(function(port) {
+				var url = 'https://' + window.location.hostname + ':' + port + window.location.pathname;
+				var img = new Image();
+
+				img.onload = function() { window.location = url };
+				img.src = 'https://' + window.location.hostname + ':' + port + '{{ resource }}/icons/loading.svg?' + Math.random();
+
+				setTimeout(function() { img.src = '' }, 5000);
+			});
+		}
+	})();
+</script>
+
+{% include('footer', { blank_page: true }) %}
