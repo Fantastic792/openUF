@@ -239,8 +239,8 @@ Then set:
   choice -- the controller then offers 802.11ac modes instead of HE ones the hardware
   cannot run -- but it is unvalidated until a controller adopts under it. The
   `archer-a7-v5` map is the first to use it, and names `u6iw` as the fallback. `"u7hd"` (UAP-AC-HD)
-  is the WiFi 5 choice for a TWO-socket board -- both in-wall identities carry five -- and is
-  equally unvalidated; the `deco-m5` and both `deco-m4r` maps use it.
+  is the WiFi 5 choice for a TWO-socket board -- both in-wall identities carry five -- and has
+  been adopted once, on a Deco M4R v1 (2026-10-18); the `deco-m5` and both `deco-m4r` maps use it.
 
 ### 3. `lan_cpueth` decides the device's IDENTITY
 

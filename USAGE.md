@@ -425,6 +425,10 @@ dev = dofile("modelmap/jiorouter-ax6000-jidu6101.lua")
 -- For JioRouter AX6000 JIDU6J01 / 6201 / 6401 / 6601 / 6701 (one map, all five):
 dev = dofile("modelmap/jiorouter-ax6000-jidu6j01.lua")
 
+-- For Dynalink DL-WRX36 (IPQ8072A / qualcommax — five sockets, one netdev each; presents as
+-- a U6-InWall like the JioRouters; pin br-lan's MAC before adopting, see the file's header):
+dev = dofile("modelmap/dynalink-dl-wrx36.lua")
+
 -- For Xiaomi Mi Router AX3000T (MT7981 / filogic — DSA; adopted from upstream):
 dev = dofile("modelmap/xiaomi-ax3000t.lua")
 
@@ -693,8 +697,9 @@ five sockets and a two-port board reporting either leaves three rows in the cont
 view that never link up.  `platform`/`model` are `U7HD` and `fw.ver` (`6.8.2.15592`) is the
 catalog's release entry for that platform, subject to the same bare-version rule.  The UAP-AC-HD
 also has a USB-C socket Ubiquiti marks "reserved for future use"; no inform field describes it,
-so openUF reports nothing and the controller sees it as it would on a real unit.  ⚠️ Equally
-unadopted so far; the same fallback applies.
+so openUF reports nothing and the controller sees it as it would on a real unit.  ⚠️ Adopted
+once so far, a Deco M4R v1 on 2026-10-18; the port questions in the file's header are still
+open, and the same fallback applies.
 
 ### `/etc/config/openuf` (package installs)
 

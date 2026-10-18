@@ -185,6 +185,18 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   ⚠️ **Not yet confirmed on the hardware**: derived from the OpenWrt DTS plus the
   JIDU6101 profile, which is the same SoC and the same MT7976 radios. It inherits that
   board’s measured `dev.conf.radio` policy; the header flags what to re-check first
+- **Dynalink DL-WRX36** (dual-band 802.11ax, IPQ8072A / qualcommax-ipq807x) — use
+  `modelmap/dynalink-dl-wrx36.lua`. Presents as a **U6-InWall**, like the JioRouter profiles: WiFi 6
+  on two bands and five sockets, four GbE LAN and a 2.5 GbE WAN. Every socket is its own netdev, so
+  the profile uses the bridge and detects the uplink, as on every DSA board here. OpenWrt main drives
+  the switch as DSA (the PPE driver); 24.10 and 25.12 still use the NSS dataplane, which presents
+  the same five netdevs. ⚠️ **Not yet run on the hardware**: derived from the OpenWrt DTS and
+  `board.d`; the header flags what to check first (the radio order, the reverse of the JioRouters',
+  and the LED name `blue:`). ⚠️ **Pin the bridge MAC before adopting**: `board.d` sets none, so
+  `br-lan` follows `lan1`, and a port VLAN on Port 1 would change the identity; the header has the
+  three commands. It carries the JioRouters' 80 MHz floor on 5 GHz, which answers the U6-InWall's
+  40 MHz default, but not their DFS and 160 MHz limits, which answer a MediaTek driver. NAND flash,
+  so space is a non-issue
 
 Anything else: `modelmap/generic-dualband-ap.lua` or `modelmap/generic-singleband-ap.lua`,
 or let `setup.sh` generate a profile from the running device (DSA boards only, where every
@@ -205,7 +217,7 @@ report the whole LAN, gateway included, as hosts plugged into it:
 | Per-port VLAN assignment | supported (`switch_vlan` sections) | supported (the socket moves into the VLAN's bridge; Native VLAN only) |
 | `dev.conf.vlan` | required | must be **absent** |
 
-The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `ufmodel/u7hd.lua` (UAP-AC-HD, the WiFi 5 ceiling AP with **two** sockets) is selected by the Deco M5 and both Deco M4R profiles for the same reason and to match those boards' socket count; its facts come from the same catalog and it is equally unadopted so far.  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
+The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `ufmodel/u7hd.lua` (UAP-AC-HD, the WiFi 5 ceiling AP with **two** sockets) is selected by the Deco M5 and both Deco M4R profiles for the same reason and to match those boards' socket count; its facts come from the same catalog, and a controller has adopted it once so far, on a Deco M4R v1 (2026-10-18).  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
 
 ## Quick start
 
