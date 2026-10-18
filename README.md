@@ -308,7 +308,8 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 
 # 2. Download and install (no git client or scp needed). This is the source
 #    tree; install.sh comment-strips it on the way in. A tagged release
-#    (vX.Y.Z) publishes a pre-stripped openuf.tar.gz under Releases instead.
+#    (vX.Y.Z) publishes a pre-stripped openuf-X.Y.Z.tar.gz under Releases
+#    instead; it unpacks to openuf-X.Y.Z/ and installs the same way.
 wget -O openuf-src.tar.gz https://codeload.github.com/yesrab/openUF/tar.gz/main
 tar xzf openuf-src.tar.gz && cd openUF-main
 sh install.sh install

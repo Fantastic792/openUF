@@ -275,9 +275,10 @@ tar xzf openuf-src.tar.gz && cd openUF-main
 sh install.sh install
 ```
 
-Releases are tagged `vX.Y.Z`; each tag push builds and publishes a pre-stripped
-`openuf.tar.gz` plus its `.sha256` via GitHub Actions under
-`https://github.com/yesrab/openUF/releases`, and those install the same way. If you're
+Releases are tagged `vX.Y.Z`; each one publishes a pre-stripped `openuf-X.Y.Z.tar.gz`
+plus its `.sha256` via GitHub Actions under `https://github.com/yesrab/openUF/releases`.
+It is the archive the OpenWrt package builds from, it unpacks to `openuf-X.Y.Z/`, and it
+installs the same way. If you're
 working from a git checkout instead (e.g. for development), the old transfer-then-install
 flow still works:
 
@@ -344,7 +345,8 @@ openuf-update --check                     # what is installed: build stamp, mode
                                           # identity, last inform, whether the daemons run
 openuf-update                             # fetch main from GitHub and upgrade in place
 openuf-update --ref v1.2.0                # a tag or branch instead
-openuf-update --from /tmp/openuf.tar.gz   # a tarball already on the device
+openuf-update --from /tmp/openuf-X.Y.Z.tar.gz
+                                          # a release archive already on the device
 ```
 
 It backs up `/opt/openuf` and `/etc/openuf` to a tarball in `/tmp`, runs `install.sh

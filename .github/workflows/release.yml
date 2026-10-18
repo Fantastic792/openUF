@@ -134,13 +134,18 @@ jobs:
               package/openuf/test.sh; do
             bash -n "$f" && dash -n "$f"
           done
-      - name: Build the archives (dist.sh --verify runs the suite on the stripped tree)
+      # One archive, openuf-<version>.tar.gz: the OpenWrt package builds from
+      # it, and it is also a manual install -- unpack and run install.sh
+      # inside, or hand it to setup.sh (OPENUF_TARBALL_URL) or openuf-update
+      # (--from), which both find the tree one directory down. dist.sh's
+      # intermediate openuf.tar.gz holds the same stripped tree without the
+      # version and docs, and is not published: nothing downloads it.
+      - name: Build the source archive (dist.sh --verify runs the suite on the stripped tree)
         id: meta
         run: |
           sh tools/release-archive.sh "$VERSION"
-          sha256sum openuf.tar.gz > openuf.tar.gz.sha256
           echo "sha256=$(cut -d' ' -f1 "openuf-$VERSION.tar.gz.sha256")" >> "$GITHUB_OUTPUT"
-      - name: Create the release (and its tag) unless it exists, then attach the source archives
+      - name: Create the release (and its tag) unless it exists, then attach the source archive
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -150,7 +155,7 @@ jobs:
             gh release create "$TAG" --target "$GITHUB_SHA" --title "openUF $TAG" --generate-notes
           fi
           gh release upload "$TAG" --clobber \
-            openuf-"$VERSION".tar.gz openuf-"$VERSION".tar.gz.sha256 openuf.tar.gz openuf.tar.gz.sha256
+            openuf-"$VERSION".tar.gz openuf-"$VERSION".tar.gz.sha256
 
   packages:
     name: Build ${{ matrix.format }} with the ${{ matrix.sdk }} SDK
