@@ -1444,9 +1444,10 @@ downlink is kept out of the L2 hardening rules (a child's tagged frames and BPDU
 design). The per-VLAN bridges need nothing extra on a DSA board: `br-lan.<vid>` sits on top
 of `br-lan`, which is where both backhaul netdevs land.
 
-A swconfig board needs more, and gets it from `meshvlan.lua` (since 2026-10-18, **not yet
-run on hardware**; the guard and the port were checked on an OpenWrt 25.12 kernel in a VM,
-with veth stand-ins for the wired and the wireless port). Its per-VLAN bridge rides `eth0.<vid>`, the CPU trunk's sub-device, which
+A swconfig board needs more, and gets it from `meshvlan.lua` (since 2026-10-18; **a tagged
+SSID across the hop is not yet confirmed on hardware**, though the untagged mesh ran on a Deco
+M4R v1 on 2026-10-19, and the guard and the port were checked on an OpenWrt 25.12 kernel in a
+VM, with veth stand-ins for the wired and the wireless port). Its per-VLAN bridge rides `eth0.<vid>`, the CPU trunk's sub-device, which
 reaches the switch and nothing else. So while a mesh is configured, each tagged SSID's bridge
 `br-openuf<vid>` also gets `br-lan.<vid>` as a second uplink, the one DSA has by design. That
 port alone would be a loop: a tagged frame `br-lan` hands to its wired port `eth0.1` leaves
@@ -1486,8 +1487,10 @@ and the topology hop; the parent lists the child as a wireless downlink.
 
 **What you need for it:** nothing. openUF claims `wifi_caps` `0x1`/`0x800` on every board,
 the controller turns the device's mesh-connect flag on by itself, and the push carries both
-entries. Verified end to end on DSA boards; swconfig boards (the Deco M4R v1/v2 first) claim
-it since 2026-10-18 without a hardware run yet. A parent on a DFS channel worked in the lab
+entries. Verified end to end on DSA boards. swconfig boards claim it since 2026-10-18; the
+first run on one, a Deco M4R v1 on 2026-10-19 (user, shallow), came up online over the
+wireless uplink with its cable pulled. The cable coming back and a tagged SSID across the hop
+are not yet confirmed there. A parent on a DFS channel worked in the lab
 (channel 100); if a child never associates, check `iw dev phy1-sta0 info` says `4addr: on`
 and compare the two sections' keys.
 

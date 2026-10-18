@@ -2076,7 +2076,7 @@ function M.build_json(st, cfg, ufhw)
 		-- 0x1+0x800 its push carries the hidden WDS downlink and the 4-address
 		-- uplink station that backhaul.lua provisions (PROTOCOL-VALIDATION.md
 		-- § Wireless uplink; verified end to end 2026-10-03 on DSA). Claimed on
-		-- swconfig boards too since 2026-10-18 (unverified there): the uplink
+		-- swconfig boards too since 2026-10-18 (first run 2026-10-19, an M4R v1): the uplink
 		-- policy reads the socket's link from the switch (backhaul.tick), and a
 		-- tagged SSID's VLAN crosses the hop through meshvlan.lua's guarded
 		-- `br-lan.<vid>` port, which DSA's per-VLAN bridges have by design.

@@ -781,8 +781,9 @@ factory reset.
   client cannot measure a 5 GHz class at all.
 - **WPA-Enterprise is unsupported and skipped**, not mis-provisioned: the wire protocol
   carries no RADIUS server, port or secret.
-- **On swconfig, mesh is two problems DSA does not have** (since 2026-10-18, not yet run on
-  hardware). (1) `br-lan`'s wired port is the CPU trunk's sub-device, whose carrier never
+- **On swconfig, mesh is two problems DSA does not have** (since 2026-10-18; first run on a
+  Deco M4R v1 on 2026-10-19: untagged, online over the air with the cable pulled). (1)
+  `br-lan`'s wired port is the CPU trunk's sub-device, whose carrier never
   drops: the uplink policy must read the socket's link from the switch
   (`st.backhaul_wired_phys`, `backhaul.tick`), and on a switch between wire and air the
   bridges are flushed by hand. (2) The VLAN bridges ride `eth0.<vid>`, so a tagged SSID

@@ -49,8 +49,10 @@
 	for: the switch drops a VID it has no table entry for, and the guard keeps
 	the child's frames off the wired sockets instead of leaking them there.
 
-	NOT verified on hardware: written for the Deco M4R v1/v2, whose first
-	unit is the test. What to look at is in USAGE.md (the mesh section).
+	NOT verified on hardware yet. The untagged mesh it builds on ran on a
+	Deco M4R v1 on 2026-10-19 (user, shallow: online over the wireless
+	uplink with the cable pulled); a tagged SSID across the hop has not been
+	tried there. What to look at is in USAGE.md (the mesh section).
 	Checked on a real kernel (OpenWrt 25.12.6, Linux 6.12, nftables 1.1.6, in
 	a VM, 2026-10-18) with veth stand-ins for a wired and a wireless port:
 	nft takes the rules as written; a tagged frame crosses from the
