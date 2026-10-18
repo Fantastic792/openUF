@@ -49,6 +49,12 @@
 	from each radio's own UCI `band`/`hwmode`. Check `uci show wireless` on
 	the first unit anyway.
 
+	Mesh (wireless uplink): claimed here as on every board since 2026-10-18,
+	and the first swconfig board to run it. The backhaul is on the 5 GHz
+	radio (ath10k-ct, QCA9888), whose 4-address mode is the first thing to
+	check on a unit. The uplink policy reads socket 3/5's link from the
+	switch, not eth0.1's; USAGE.md § 6b lists what to look at.
+
 	Presented to the controller as a UAP-AC-HD (ufmodel/u7hd.lua): WiFi 5
 	like this hardware, TWO ethernet sockets like this hardware. That
 	identity is itself unvalidated -- if adoption stalls under it, switch
