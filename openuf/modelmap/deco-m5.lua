@@ -47,8 +47,11 @@
 	11-ath10k-caldata feeds a000000.wifi from ART offset 0x1000 and
 	a800000.wifi from 0x5000, the 2G and 5G halves of an IPQ40xx ART, and
 	the Deco DTS hands wifi0 precal@1000 and wifi1 precal@5000. OpenWrt
-	numbers radios by sysfs path, so a000000 sorts first. Nothing here
-	depends on it: band is read from each radio's own UCI `band`/`hwmode`.
+	numbers radios in wiphy registration order (wifi-scripts' wifi-detect.uc
+	walks nl80211's phy list and mac80211.uc names them in that order), and
+	both radios are platform devices of one driver, probed in DT order --
+	a000000 before a800000. Nothing here depends on it: band is read from
+	each radio's own UCI `band`/`hwmode`.
 	Check `uci show wireless` on the first unit anyway.
 
 	Presented to the controller as a UAP-AC-HD (ufmodel/u7hd.lua): WiFi 5

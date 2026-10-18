@@ -529,4 +529,109 @@ return {
 			assert_eq(#dev.openuf.uap.hwassign, 2, "both radios reported")
 		end
 	},
+	{
+		name = "modelmap: deco-m4r-v1 pins the two-socket QCA9563 swconfig board, one name for the v1 and v2",
+		fn = function()
+			-- Board-specific regression guard, from the OpenWrt tree rather
+			-- than a live unit (none has run openUF yet). board.d gives the
+			-- board `0@eth0` -- a TAGGED CPU port on a single trunk -- and
+			-- exactly two sockets, physical 3 ("lan:1") and 5 ("lan:2"),
+			-- with NO wan entry at all; OpenWrt's commit 063e9047cc builds
+			-- the v2 from the v1's DTS, so there is one compatible string.
+			local dev = dofile(MODELMAP_DIR .. "/deco-m4r-v1.lua")
+
+			-- One trunk: the identity / VLAN netdev is eth0 itself, never the
+			-- eth0.1 sub-device.
+			assert_eq(dev.conf.net.lan_cpueth, "eth0", "the trunk, not the LAN VLAN sub-device")
+			assert_eq(dev.conf.vlan.device, "switch0", "the swconfig device")
+			assert_eq(dev.conf.vlan.cpu_lan, 0, "CPU port 0 serves the LAN VLAN")
+			assert_eq(dev.conf.vlan.cpu_wan, 0, "and is the only CPU port")
+
+			-- No WAN role anywhere: not a switch port, not a CPU netdev.
+			-- OpenWrt makes both sockets LAN, so a `wan` here would name a
+			-- socket that does not exist and tag the trunk for it.
+			assert_nil(dev.conf.vlan.ports.wan, "the board has no WAN socket")
+			assert_nil(dev.conf.net.wan_cpueth, "and no WAN CPU netdev to name")
+
+			-- One board name. A v2 reports "tplink,deco-m4r-v1" too (no v2
+			-- DTS exists), and the MediaTek v4 is another map.
+			assert_eq(#dev.openwrt_boards, 1, "exactly one compatible string")
+			assert_eq(dev.openwrt_boards[1], "tplink,deco-m4r-v1",
+				"the one DTS OpenWrt builds for the v1 and the v2")
+
+			-- Two sockets, physical 3 and 5, neither the CPU port, neither
+			-- statically the uplink.
+			local ports = dev.conf.net.ports
+			assert_eq(#ports, 2, "one port per socket -- the board has two")
+			local phys = {}
+			for _, p in ipairs(ports) do
+				assert_nil(p.uplink, "port " .. p.idx .. " is not statically flagged uplink")
+				assert_not_nil(p.swport, "port " .. p.idx .. " names a socket")
+				local n = dev.conf.vlan.ports[p.swport]
+				assert_not_nil(n, "swport " .. tostring(p.swport) .. " is in the switch map")
+				phys[#phys + 1] = n
+			end
+			table.sort(phys)
+			assert_eq(table.concat(phys, ","), "3,5",
+				"board.d's \"3:lan:1\" \"5:lan:2\" -- the set is certain, the order is one sample")
+			assert_eq(dev.conf.vlan.ports.lan1, 3, "LAN1 is physical 3")
+			assert_eq(dev.conf.vlan.ports.lan2, 5, "LAN2 is physical 5")
+
+			-- The running LED, the Deco M5's trade: procd owns every channel
+			-- of the one case light, so the green it leaves steady is taken.
+			assert_eq(dev.conf.led, "green:power", "the case light's green channel")
+
+			-- The two-socket WiFi 5 identity, shared with the v4 map.
+			assert_eq(dev.openuf.uap.ufmodel, "u7hd", "presents as a UAP-AC-HD")
+			assert_eq(#dev.openuf.uap.hwassign, 2, "both radios reported")
+		end
+	},
+	{
+		name = "modelmap: deco-m4r-v4 pins the MT7621 DSA board whose two sockets are named eth0 and eth1",
+		fn = function()
+			-- Board-specific regression guard, from the OpenWrt tree rather
+			-- than a live unit (none has run openUF yet). The DTS (commit
+			-- 4fed462454) names switch port 0 "eth0", switch port 1 "eth1"
+			-- and the CPU conduit "dsa", so the swconfig-era reading of
+			-- "eth0" -- a CPU trunk -- is exactly wrong here. board.d:
+			-- ucidef_set_interfaces_lan_wan "eth1" "eth0".
+			local dev = dofile(MODELMAP_DIR .. "/deco-m4r-v4.lua")
+
+			-- DSA: the bridge is the identity / trunk netdev, the uplink is
+			-- measured, and there is no swconfig map to drift.
+			assert_eq(dev.conf.net.lan_cpueth, "br-lan", "the LAN bridge, per the DSA rule")
+			assert_eq(dev.conf.net.uplink_detect, "fdb", "uplink is detected, never declared")
+			assert_nil(dev.conf.vlan, "no swconfig port map on a DSA board")
+			assert_eq(dev.conf.net.wan_cpueth, "eth0", "OpenWrt's WAN role is the socket eth0")
+
+			-- One board name; the Qualcomm v1/v2 is another map.
+			assert_eq(#dev.openwrt_boards, 1, "exactly one compatible string")
+			assert_eq(dev.openwrt_boards[1], "tplink,deco-m4r-v4", "the v4 DTS")
+
+			-- Two sockets named eth0 and eth1 -- as netdevs, not as CPU
+			-- ports: no swport, no static uplink.
+			local ports = dev.conf.net.ports
+			assert_eq(#ports, 2, "one port per socket -- the board has two")
+			local names = {}
+			for _, p in ipairs(ports) do
+				assert_nil(p.uplink, "port " .. p.idx .. " is not statically flagged uplink")
+				assert_nil(p.swport, "port " .. p.idx .. " carries no swconfig port")
+				names[#names + 1] = p.ifname
+			end
+			table.sort(names)
+			assert_eq(table.concat(names, ","), "eth0,eth1",
+				"the board's real DSA port names -- sockets, despite the names")
+
+			-- The running LED, the Deco M5's trade, on the one case light.
+			assert_eq(dev.conf.led, "green:logo", "the logo's green channel")
+
+			-- Both M4R maps present the same identity: the controller sees
+			-- one retail product whichever silicon is inside.
+			local v1 = dofile(MODELMAP_DIR .. "/deco-m4r-v1.lua")
+			assert_eq(dev.openuf.uap.ufmodel, "u7hd", "presents as a UAP-AC-HD")
+			assert_eq(v1.openuf.uap.ufmodel, dev.openuf.uap.ufmodel,
+				"the Qualcomm and MediaTek revisions share one UniFi identity")
+			assert_eq(#dev.openuf.uap.hwassign, 2, "both radios reported")
+		end
+	},
 }

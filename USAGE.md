@@ -411,6 +411,14 @@ dev = dofile("modelmap/archer-a7-v5.lua")
 -- presents as a UAP-AC-HD -- see "Device identity" below):
 dev = dofile("modelmap/deco-m5.lua")
 
+-- For TP-Link Deco M4R v1 / v2 (QCA9563 / ath79 — swconfig; one map for both, the v2 reports
+-- the v1's board name; presents as a UAP-AC-HD):
+dev = dofile("modelmap/deco-m4r-v1.lua")
+
+-- For TP-Link Deco M4R v4 (MT7621 / ramips — a DSA board whose two sockets are the netdevs
+-- eth0 and eth1; presents as a UAP-AC-HD):
+dev = dofile("modelmap/deco-m4r-v4.lua")
+
 -- For JioRouter AX6000 JIDU6101 (MT7986A / filogic — a DSA board):
 dev = dofile("modelmap/jiorouter-ax6000-jidu6101.lua")
 
@@ -679,7 +687,7 @@ Available" for the device, re-read the catalog URL in the file's header and upda
 ⚠️ No controller has adopted a device under this identity yet; if adoption stalls, set
 `ufmodel = "u6iw"` in the modelmap and report what the controller did.
 
-The Deco M5 profile selects `ufmodel/u7hd.lua`: the **UAP-AC-HD**, the WiFi 5 Wave 2 ceiling
+The Deco M5 profile and both Deco M4R profiles select `ufmodel/u7hd.lua`: the **UAP-AC-HD**, the WiFi 5 Wave 2 ceiling
 AP with **two** GbE sockets (Main and Secondary), chosen because both in-wall identities carry
 five sockets and a two-port board reporting either leaves three rows in the controller's Ports
 view that never link up.  `platform`/`model` are `U7HD` and `fw.ver` (`6.8.2.15592`) is the

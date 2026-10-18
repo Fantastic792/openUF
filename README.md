@@ -140,6 +140,23 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   `ufmodel/u7hd.lua`, the UAP-AC-HD — which no controller has adopted under yet; the header says
   how to fall back to `u6iw`. The USB-C socket is power only on the Deco and "reserved for
   future use" on the UAP-AC-HD, so nothing is reported for it
+- **TP-Link Deco M4R v1 / v2** (dual-band 802.11n + 802.11ac Wave 2, 2x2, QCA9563 + QCA9886, ath79,
+  swconfig) — use `modelmap/deco-m4r-v1.lua`, **one profile for both revisions**: OpenWrt builds the
+  v2 from the v1's DTS (same chips, same OEM firmware), so both report `tplink,deco-m4r-v1`. Two
+  sockets on one tagged CPU trunk (`0@eth0`), physical ports 3 and 5, and **no WAN role at all** —
+  OpenWrt makes both sockets LAN, so the AP conversion has nothing to move. ⚠️ **Not yet run on the
+  hardware**: derived from the OpenWrt DTS and `board.d`; the header flags what to check first (which
+  hole is physical 3, the radio order, the LED name). 16 MB flash, so a stock image fits. Presents the
+  same **two-socket WiFi 5 identity** as the Deco M5 (`ufmodel/u7hd.lua`), with the same fallback
+- **TP-Link Deco M4R v4** (dual-band 802.11n + 802.11ac Wave 2, 2x2, MT7621 + MT7603 + MT7613,
+  ramips / mt7621, DSA) — use `modelmap/deco-m4r-v4.lua`. A different board from the v1/v2 (MediaTek
+  instead of Qualcomm, DSA instead of swconfig), hence its own profile. ⚠️ **Its two sockets are the
+  netdevs `eth0` and `eth1`** — DSA ports, renamed so in OpenWrt 24.10, with the CPU conduit called
+  `dsa` — so the generic profiles, which take `eth0` for a CPU trunk, are wrong on it; this profile
+  uses the bridge, as on every DSA board here. ⚠️ **Not yet run on the hardware**: derived from the
+  OpenWrt DTS and `board.d`; the header flags what to check first (the bridge MAC against the sticker,
+  which hole is switch port 0, the radio order, whether the PCB's extra LEDs show through the case).
+  16 MB flash, so a stock image fits. Presents the same identity as the v1/v2
 - **Xiaomi Mi Router AX3000T** (dual-band 802.11ax, 2x2, MT7981 / mediatek-filogic) — use
   `modelmap/xiaomi-ax3000t.lua`. Profile adopted from upstream (jonasevcik/openUF), where
   it is verified on the hardware: HE on both bands, 160 MHz on 5 GHz, DSA. Its four sockets
@@ -187,7 +204,7 @@ report the whole LAN, gateway included, as hosts plugged into it:
 | Per-port VLAN assignment | supported (`switch_vlan` sections) | supported (the socket moves into the VLAN's bridge; Native VLAN only) |
 | `dev.conf.vlan` | required | must be **absent** |
 
-The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `ufmodel/u7hd.lua` (UAP-AC-HD, the WiFi 5 ceiling AP with **two** sockets) is selected by the Deco M5 profile for the same reason and to match that board's socket count; its facts come from the same catalog and it is equally unadopted so far.  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
+The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `ufmodel/u7hd.lua` (UAP-AC-HD, the WiFi 5 ceiling AP with **two** sockets) is selected by the Deco M5 and both Deco M4R profiles for the same reason and to match those boards' socket count; its facts come from the same catalog and it is equally unadopted so far.  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
 
 ## Quick start
 

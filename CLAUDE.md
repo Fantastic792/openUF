@@ -11,7 +11,7 @@ Two orthogonal concepts, constantly confused:
   sockets, switch geometry, status LED.
 - **ufmodel** (`openuf/ufmodel/*.lua`) — *the UniFi identity presented to the controller*.
   `u6iw` is the only one validated end-to-end. `uhdiw` (UAP-IW-HD: WiFi 5, the same five
-  sockets) and `u7hd` (UAP-AC-HD: WiFi 5, two sockets, for the Deco M5) are sourced from
+  sockets) and `u7hd` (UAP-AC-HD: WiFi 5, two sockets, for the Deco M5 and M4R) are sourced from
   Ubiquiti's firmware catalog but have never adopted -- see "Adding a UniFi identity" below.
 
 `openuf/conf.lua` picks one of each and holds runtime options. It is the file users
@@ -188,7 +188,9 @@ and the map needs a ⚠️ rather than silence.
 `openuf/modelmap/<vendor>-<model>.lua`. Copy the closest existing map:
 `jiorouter-ax6000-jidu6101.lua` for DSA (`deco-m5.lua` for a two-socket DSA board whose LED name
 varies by revision), `archer-c5-v1.lua` for swconfig with two CPU
-netdevs, `archer-a7-v5.lua` for swconfig with one tagged CPU trunk (`0@eth0`).
+netdevs, `archer-a7-v5.lua` for swconfig with one tagged CPU trunk (`0@eth0`), `deco-m4r-v1.lua`
+for that trunk on a board OpenWrt gives no WAN role at all, `deco-m4r-v4.lua` for a DSA board whose
+sockets are named `eth0`/`eth1`.
 
 ```lua
 --[[
@@ -238,7 +240,7 @@ Then set:
   cannot run -- but it is unvalidated until a controller adopts under it. The
   `archer-a7-v5` map is the first to use it, and names `u6iw` as the fallback. `"u7hd"` (UAP-AC-HD)
   is the WiFi 5 choice for a TWO-socket board -- both in-wall identities carry five -- and is
-  equally unvalidated; the `deco-m5` map uses it.
+  equally unvalidated; the `deco-m5` and both `deco-m4r` maps use it.
 
 ### 3. `lan_cpueth` decides the device's IDENTITY
 
@@ -692,7 +694,14 @@ factory reset.
   Native-VLAN push on that first socket takes it out of br-lan and the next inform arrives
   under a MAC the controller never adopted. Pin the address in UCI before adopting (the
   `deco-m5` header has the three lines). The JioRouters escape it because `board.d` sets
-  `lan`'s MAC for them, the AX3000T because its map names a socket.
+  `lan`'s MAC for them, the AX3000T because its map names a socket, the Deco M4R v4 because every
+  one of its DSA ports inherits the conduit's label MAC.
+- **On the Deco M4R v4, `eth0` and `eth1` are DSA sockets and the CPU conduit is `dsa`** (OpenWrt
+  24.10 renamed them, commit 4fed462454, to keep the stock names working). The daemon keys on the
+  name `eth0` in one place only, inform's fallback port table for a map with no `ports`; the generic
+  maps' `lan_cpueth = "eth0"` would name a bridge port there, and a VLAN sub-device on a bridge
+  port never sees a frame. Its map uses `br-lan`. New code that treats `eth<n>` as a CPU netdev is
+  wrong on that board.
 - **`led.set_enabled` writes the LED's own `max_brightness`, read from sysfs, not a literal 1.**
   A GPIO LED's ceiling is 1, so the literal was invisible on every board until the Deco M5's
   lp5521 (ceiling 255), where 1 is 0.4 %: the case light went dark the moment openUF started,
