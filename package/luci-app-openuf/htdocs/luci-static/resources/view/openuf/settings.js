@@ -267,9 +267,11 @@ return view.extend({
 		o = s.taboption('profile', form.ListValue, 'modelmap', _('Hardware profile'),
 			_('Describes this board to openUF: its Ethernet sockets, radios and status LED. "Automatic" picks the shipped profile made for this board, and openUF refuses to start rather than guess if none was made for it.') + lock);
 		o.value('auto', presets.auto ? _('Automatic (this board: %s)').format(presets.auto) : _('Automatic (no shipped profile matches this board)'));
+		// Just the product name: the board strings and the verification
+		// state are for contributors, and read as noise to someone picking
+		// their device.
 		for (const p of arr(presets.modelmaps))
-			o.value(p.name, '%s [%s]%s'.format(p.title, arr(p.boards).join(', ') || _('generic'),
-				p.unverified ? ' ' + _('(not yet verified on real hardware)') : ''));
+			o.value(p.name, p.title || p.name);
 		o.value('custom', _('Custom profile (the device, port, vlan and radio sections of /etc/config/openuf)'));
 		o.default = 'auto';
 		o.rmempty = false;
@@ -279,8 +281,7 @@ return view.extend({
 			_('The Ubiquiti access point the controller will believe this device is. "Automatic" is the profile\'s own choice. Match the hardware generation: a WiFi 5 board should present as a WiFi 5 model, a board with one radio as a single-radio model.') + lock);
 		o.value('auto', _('Automatic (the profile\'s choice)'));
 		for (const u of arr(presets.ufmodels))
-			o.value(u.name, '%s, model %s, firmware %s%s'.format(u.title, u.model || u.name, u.fw_ver || '?',
-				u.unverified ? ' ' + _('(not yet verified with a controller)') : ''));
+			o.value(u.name, u.title || u.name);
 		o.value('custom', _('Custom identity (the identity section of /etc/config/openuf)'));
 		o.default = 'auto';
 		o.rmempty = false;
