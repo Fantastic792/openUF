@@ -138,8 +138,15 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   label **before adopting** — netifd otherwise follows the bridge's first member, and a per-port
   VLAN push can change that — plus the radio order and the LED name). Presents a **two-socket WiFi 5 identity** —
   `ufmodel/u7hd.lua`, the UAP-AC-HD — first adopted by a live controller on a Deco M4R v1
-  (2026-10-18, user); the header says what that left open and how to fall back to `u6iw`. The USB-C socket is power only on the Deco and "reserved for
-  future use" on the UAP-AC-HD, so nothing is reported for it
+  (2026-10-18, user); the header says what that left open and how to fall back to `u6iw`. The
+  USB-C socket is power only on the Deco and "reserved for future use" on the UAP-AC-HD, so nothing
+  is reported for it. ⚠️ **Upstream OpenWrt has it in snapshots only**: the M5 reached main on
+  2026-03-25 and is in no release. Release-based images, 24.10.2 to 25.12.5, come from
+  [dutchmillbytes/openwrt](https://github.com/dutchmillbytes/openwrt/releases); they put the label
+  MAC on `lan` instead of `eth0`, which leaves `eth0` random, so the header's pin command copies
+  `br-lan`'s own address and works on both. ⚠️ **No image ships the M5's WiFi board data yet**
+  (`ipq-wifi-tplink_deco-m5`, so far only on that fork's branches): the radios run on the generic
+  IPQ4019 data until one does
 - **TP-Link Deco M4R v1 / v2** (dual-band 802.11n + 802.11ac Wave 2, 2x2, QCA9563 + QCA9886, ath79,
   swconfig) — use `modelmap/deco-m4r-v1.lua`, **one profile for both revisions**: OpenWrt builds the
   v2 from the v1's DTS (same chips, same OEM firmware), so both report `tplink,deco-m4r-v1`. Two

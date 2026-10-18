@@ -19,6 +19,27 @@
 	        image size limit, kmod-leds-lp5521
 	  • target/linux/ipq40xx/config-6.18
 	        CONFIG_NET_DSA_QCA8K_IPQ4019=y -- a DSA board
+	  • github.com/dutchmillbytes/openwrt, read through GitHub's API on
+	    2026-10-19: its release images, their device tree, and the board-data
+	    fix on its branches -- see the next section
+
+	Where a unit's OpenWrt comes from, as of 2026-10-19:
+	  • Upstream builds the M5 only as a snapshot. It reached main in
+	    c60be6e983 (2026-03-25), after the 25.12 branch was cut, and was not
+	    backported to 25.12 or 24.10.
+	  • github.com/dutchmillbytes/openwrt publishes release-based images for
+	    the v1, v2 and v3, from v24.10.2-deco to v25.12.5-deco (2026-09-23),
+	    built from an earlier version of the same support. To openUF the
+	    board is the same -- the same DSA ports, the same LED wiring, the
+	    v1 and v3 device trees identical -- except for which netdev carries
+	    the label MAC (see dev.conf.net below).
+	  • ⚠️ No image ships the M5's WiFi board data yet, upstream or forked:
+	    the package ipq-wifi-tplink_deco-m5 exists only on the fork's
+	    branches, added 2026-10-10 (ae7ea92b35). Without it ath10k does not
+	    find the board's calibration variant ("TP-Link-Deco-M5-v1", "-v3")
+	    and falls back to the generic QCA4019 board data, tuned for a
+	    reference board. The radios should still come up; judge a mesh
+	    link's quality with that in mind.
 
 	Three revisions, one map. Each has its own compatible string and ubus
 	reports whichever the unit is, so all three are claimed; board.d handles
@@ -88,10 +109,14 @@ dev.openwrt_boards = {"tplink,deco-m5-v1", "tplink,deco-m5-v2", "tplink,deco-m5-
 --      member -- not the kernel's lowest-address rule -- and keeps following
 --      that "primary" member. Members sort by name, so that is "lan": alone
 --      at first boot, beside "wan" after setup.sh's AP conversion. "lan"
---      has no mac-address cell of its own and inherits the DSA conduit's,
---      eth0's, which is the label MAC (DTS: label-mac-device = &gmac,
---      macaddr_gmac0 +0); "wan" carries +1. So br-lan IS the label MAC --
---      for as long as "lan" is a member.
+--      carries the label MAC (macaddr_gmac0 +0) and "wan" +1, by one of two
+--      routes. Upstream's DTS puts the address on the DSA conduit eth0
+--      (label-mac-device = &gmac) and "lan", having no cell of its own,
+--      inherits it. The dutchmillbytes images give "lan" the cell itself
+--      (label-mac-device = &swport4) and leave eth0 without one, so eth0
+--      takes a RANDOM address at every boot (the ipqess driver,
+--      ipqess.c:1135-1140). Either way br-lan IS the label MAC -- for as
+--      long as "lan" is a member.
 --      ⚠️ That last clause is a live hazard, not a footnote. A controller
 --      Native-VLAN assignment on port 2 ("lan") while the uplink sits in
 --      "wan" moves "lan" OUT of br-lan (switchvlan.dsa_apply rewrites the
@@ -99,11 +124,12 @@ dev.openwrt_boards = {"tplink,deco-m5-v1", "tplink,deco-m5-v2", "tplink,deco-m5-
 --      becomes +1, and every inform afterwards carries a MAC the controller
 --      never adopted: HTTP 400 forever (CLAUDE.md, lan_cpueth). Pin the
 --      address BEFORE the first adoption, so that membership can never move
---      it again:
+--      it again. Check first that `cat /sys/class/net/br-lan/address`
+--      matches the sticker, then copy br-lan's OWN address -- never eth0's,
+--      which is random on the dutchmillbytes images:
 --        BR=$(uci show network | sed -n "s/^network\.\([^.]*\)\.name='br-lan'$/\1/p")
---        uci set network.$BR.macaddr="$(cat /sys/class/net/eth0/address)"
+--        uci set network.$BR.macaddr="$(cat /sys/class/net/br-lan/address)"
 --        uci commit network && /etc/init.d/network reload
---      then confirm `cat /sys/class/net/br-lan/address` matches the sticker.
 --      Changing it after adoption means Forget and re-adopt.
 --   2. MANAGEMENT ADDRESS. netconfig.lua runs `ip addr`/`udhcpc` straight
 --      on this netdev for a controller-pushed IP Settings change, and the
