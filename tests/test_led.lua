@@ -3,7 +3,7 @@
 
 local led = dofile("openuf/led.lua")
 
-local function with_capture(fn, trigger)
+local function with_capture(fn, trigger, max)
 	local writes = {}
 	local orig_w, orig_r = led._write_file, led._read_file
 	led._write_file = function(path, contents)
@@ -11,9 +11,11 @@ local function with_capture(fn, trigger)
 		return true
 	end
 	-- What sysfs really returns: every available trigger, the active one in
-	-- brackets. `trigger` nil means the file could not be read at all.
+	-- brackets, and the LED's max_brightness. nil means the file could not
+	-- be read at all.
 	led._read_file = function(path)
 		if trigger and path:find("/trigger", 1, true) then return trigger end
+		if max and path:find("/max_brightness", 1, true) then return max end
 		return nil
 	end
 	led._saved_trigger = {}
@@ -71,8 +73,13 @@ return {
 		end
 	},
 	{
-		name = "led: set_enabled(true) writes trigger=none and brightness=1",
+		name = "led: set_enabled(true) writes trigger=none and the LED's own max_brightness",
 		fn = function()
+			-- "1" used to be hardcoded, which is full scale on a GPIO LED and
+			-- 0.4 % on the Deco M5's lp5521 (max_brightness 255): the case
+			-- light went dark the moment openUF took the LED over, and Locate
+			-- blinked at the same level since the timer trigger blinks at the
+			-- current brightness. The ceiling is read from sysfs.
 			with_capture(function(writes)
 				local ok = led.set_enabled("/sys/class/leds/test", true)
 				assert_true(ok, "set_enabled returns true")
@@ -80,8 +87,28 @@ return {
 				assert_eq(writes[1].path, "/sys/class/leds/test/trigger", "trigger path")
 				assert_eq(writes[1].contents, "none", "trigger cleared")
 				assert_eq(writes[2].path, "/sys/class/leds/test/brightness", "brightness path")
-				assert_eq(writes[2].contents, "1", "brightness on")
+				assert_eq(writes[2].contents, "255", "brightness is the LED's full scale")
+			end, nil, "255\n")
+		end
+	},
+	{
+		name = "led: set_enabled(true) falls back to brightness=1 when max_brightness is unreadable",
+		fn = function()
+			-- A GPIO LED answers 1 and gets 1; a sysfs with no readable
+			-- ceiling, or a garbage one, keeps the old GPIO full-scale value
+			-- rather than writing nothing.
+			with_capture(function(writes)
+				led.set_enabled("/sys/class/leds/test", true)
+				assert_eq(writes[2].contents, "1", "brightness on, GPIO scale")
 			end)
+			with_capture(function(writes)
+				led.set_enabled("/sys/class/leds/test", true)
+				assert_eq(writes[2].contents, "1", "a non-numeric ceiling is ignored")
+			end, nil, "lots\n")
+			with_capture(function(writes)
+				led.set_enabled("/sys/class/leds/test", true)
+				assert_eq(writes[2].contents, "1", "a GPIO LED's own 1 is 1")
+			end, nil, "1\n")
 		end
 	},
 	{

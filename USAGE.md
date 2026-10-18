@@ -407,6 +407,10 @@ dev = dofile("modelmap/tl-wr1043ndv2.lua")
 -- presents as a UAP-IW-HD -- see "Device identity" below):
 dev = dofile("modelmap/archer-a7-v5.lua")
 
+-- For TP-Link Deco M5 v1 / v2 / v3 (IPQ4019 / ipq40xx — a DSA board; one map for all three,
+-- presents as a UAP-AC-HD -- see "Device identity" below):
+dev = dofile("modelmap/deco-m5.lua")
+
 -- For JioRouter AX6000 JIDU6101 (MT7986A / filogic — a DSA board):
 dev = dofile("modelmap/jiorouter-ax6000-jidu6101.lua")
 
@@ -674,6 +678,15 @@ no model prefix) and must track the catalog.  When the controller shows a spurio
 Available" for the device, re-read the catalog URL in the file's header and update `fw.ver`.
 ⚠️ No controller has adopted a device under this identity yet; if adoption stalls, set
 `ufmodel = "u6iw"` in the modelmap and report what the controller did.
+
+The Deco M5 profile selects `ufmodel/u7hd.lua`: the **UAP-AC-HD**, the WiFi 5 Wave 2 ceiling
+AP with **two** GbE sockets (Main and Secondary), chosen because both in-wall identities carry
+five sockets and a two-port board reporting either leaves three rows in the controller's Ports
+view that never link up.  `platform`/`model` are `U7HD` and `fw.ver` (`6.8.2.15592`) is the
+catalog's release entry for that platform, subject to the same bare-version rule.  The UAP-AC-HD
+also has a USB-C socket Ubiquiti marks "reserved for future use"; no inform field describes it,
+so openUF reports nothing and the controller sees it as it would on a real unit.  ⚠️ Equally
+unadopted so far; the same fallback applies.
 
 ### `/etc/config/openuf` (package installs)
 

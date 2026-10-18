@@ -477,4 +477,56 @@ return {
 			assert_eq(#dev.openuf.uap.hwassign, 2, "both radios reported")
 		end
 	},
+	{
+		name = "modelmap: deco-m5 pins the two-socket IPQ4019 DSA board for all three revisions",
+		fn = function()
+			-- Board-specific regression guard, from the OpenWrt tree rather
+			-- than a live unit (none has run openUF yet). One .dtsi gives the
+			-- v1, v2 and v3 the same two DSA sockets ("lan" = swport4, "wan" =
+			-- swport5) and board.d one case arm; the revisions differ only in
+			-- how the single RGB LED is wired, which the map resolves at load.
+			local dev = dofile(MODELMAP_DIR .. "/deco-m5.lua")
+
+			-- DSA: the bridge is the identity / trunk netdev, the uplink is
+			-- measured, and there is no swconfig map to drift.
+			assert_eq(dev.conf.net.lan_cpueth, "br-lan", "the LAN bridge, per the DSA rule")
+			assert_eq(dev.conf.net.uplink_detect, "fdb", "uplink is detected, never declared")
+			assert_nil(dev.conf.vlan, "no swconfig port map on a DSA board")
+
+			-- Three compatible strings, one board as far as openUF reads.
+			local boards = {}
+			for _, b in ipairs(dev.openwrt_boards) do boards[#boards + 1] = b end
+			table.sort(boards)
+			assert_eq(table.concat(boards, " "),
+				"tplink,deco-m5-v1 tplink,deco-m5-v2 tplink,deco-m5-v3",
+				"claims all three Deco M5 revisions, which share one .dtsi")
+
+			-- Two sockets and nothing else: no CPU netdev row, no static
+			-- uplink, no swconfig port.
+			local ports = dev.conf.net.ports
+			assert_eq(#ports, 2, "one port per socket -- the board has two")
+			local names = {}
+			for _, p in ipairs(ports) do
+				assert_nil(p.uplink, "port " .. p.idx .. " is not statically flagged uplink")
+				assert_nil(p.swport, "port " .. p.idx .. " carries no swconfig port")
+				names[#names + 1] = p.ifname
+			end
+			table.sort(names)
+			assert_eq(table.concat(names, ","), "lan,wan", "the board's real DSA port names")
+
+			-- The LED is resolved from /sys/class/leds at load: the lp5521's
+			-- chan-name on v1/v2, the gpio-leds color:function on v3. On a
+			-- build host neither exists and the map must fall back to nil (a
+			-- no-op), never to a guessed name.
+			local led = dev.conf.led
+			assert_true(led == nil or led == "power:green" or led == "green:power",
+				"led is one of the two revision names or nil, got " .. tostring(led))
+
+			-- The two-socket WiFi 5 identity. If this ever goes back to u6iw
+			-- it should be because a controller refused U7HD, and the map
+			-- header should say so.
+			assert_eq(dev.openuf.uap.ufmodel, "u7hd", "presents as a UAP-AC-HD")
+			assert_eq(#dev.openuf.uap.hwassign, 2, "both radios reported")
+		end
+	},
 }

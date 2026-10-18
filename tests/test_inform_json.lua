@@ -2731,6 +2731,32 @@ return {
 		end
 	},
 	{
+		name = "inform json: the u7hd identity reaches the wire as model, platform and bare version",
+		fn = function()
+			-- Same guard as the uhdiw case above, for the two-socket WiFi 5
+			-- identity the Deco M5 map selects.
+			inject_sysinfo(false, false, false, false)
+			local uap = dofile("openuf/ufmodel/u7hd.lua")
+			local st = {
+				authkey    = state.DEFAULT_KEY,
+				adopted    = true,
+				cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform",
+				mac        = "aa:bb:cc:dd:ee:ff",
+				ip         = "192.168.1.100",
+				hostname   = "testap",
+			}
+			local d = cjson.decode(inform.build_json(st, nil, {uap = uap}))
+			assert_eq(d.model, "U7HD", "model is the UAP-AC-HD's code")
+			assert_eq(d.platform, "U7HD", "platform too")
+			assert_eq(d.version, uap.fw.ver, "version is the identity's fw.ver, unprefixed")
+			assert_true(d.version:match("^%d+%.%d+%.%d+%.%d+$") ~= nil,
+				"and it is bare M.m.p.build: " .. tostring(d.version))
+			assert_eq(d.required_version, uap.required_version, "required_version passes through")
+			assert_eq(d.bootrom_version, "", "bootrom_version is the identity's empty bootver")
+		end
+	},
+	{
 		-- A connection event names its BSS by the hostapd netdev; the
 		-- controller resolves it against vap_table `name`. build_json is the
 		-- one place that knows both, so it records the mapping -- and the

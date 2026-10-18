@@ -123,6 +123,25 @@ function M.locate_stop(led, prev)
 	return true
 end
 
+-- The LED's full-scale value, from its own sysfs `max_brightness`.
+--
+-- "1" was hardcoded here, and it was right on every board that had an LED:
+-- a GPIO LED's max_brightness IS 1. The Deco M5 (v1/v2) drives its case
+-- light through an lp5521, an 8-bit current driver with max_brightness 255,
+-- on which "1" is 0.4 % -- the light went DARK the moment openUF took the
+-- LED over at startup, and Locate blinked at the same level, because the
+-- timer trigger blinks at whatever brightness the LED had. The kernel would
+-- clamp an over-range value, but a PWM LED's ceiling can exceed 255 as well,
+-- so the file is the only right answer. Unreadable or not a number (a
+-- harness, a sysfs without the file) keeps the old "1" rather than writing
+-- nothing.
+local function full_brightness(led_path)
+	local s = M._read_file(led_path .. "/max_brightness")
+	local d = type(s) == "string" and s:match("^%s*(%d+)") or nil
+	if d and tonumber(d) > 0 then return d end
+	return "1"
+end
+
 -- Set the steady-state LED on/off, per the controller's "Manage > LED"
 -- toggle (mgmt_cfg's led_enabled key). Distinct from the locate blink above
 -- -- this is the device's normal/idle LED state, not a transient identify
@@ -131,7 +150,7 @@ function M.set_enabled(led, enabled)
 	local led_path = _resolve(led)
 	if not led_path then return false end
 	M._write_file(led_path .. "/trigger", "none")
-	M._write_file(led_path .. "/brightness", enabled and "1" or "0")
+	M._write_file(led_path .. "/brightness", enabled and full_brightness(led_path) or "0")
 	return true
 end
 

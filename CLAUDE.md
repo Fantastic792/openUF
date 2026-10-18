@@ -11,8 +11,8 @@ Two orthogonal concepts, constantly confused:
   sockets, switch geometry, status LED.
 - **ufmodel** (`openuf/ufmodel/*.lua`) — *the UniFi identity presented to the controller*.
   `u6iw` is the only one validated end-to-end. `uhdiw` (UAP-IW-HD: WiFi 5, the same five
-  sockets) is sourced from Ubiquiti's firmware catalog but has never adopted -- see
-  "Adding a UniFi identity" below.
+  sockets) and `u7hd` (UAP-AC-HD: WiFi 5, two sockets, for the Deco M5) are sourced from
+  Ubiquiti's firmware catalog but have never adopted -- see "Adding a UniFi identity" below.
 
 `openuf/conf.lua` picks one of each and holds runtime options. It is the file users
 hand-edit on the device, so it (and `modelmap/*`) keep their comments when packaged.
@@ -186,7 +186,8 @@ and the map needs a ⚠️ rather than silence.
 ### 2. Write the file
 
 `openuf/modelmap/<vendor>-<model>.lua`. Copy the closest existing map:
-`jiorouter-ax6000-jidu6101.lua` for DSA, `archer-c5-v1.lua` for swconfig with two CPU
+`jiorouter-ax6000-jidu6101.lua` for DSA (`deco-m5.lua` for a two-socket DSA board whose LED name
+varies by revision), `archer-c5-v1.lua` for swconfig with two CPU
 netdevs, `archer-a7-v5.lua` for swconfig with one tagged CPU trunk (`0@eth0`).
 
 ```lua
@@ -235,7 +236,9 @@ Then set:
   showing a radio that never comes up. `"uhdiw"` (UAP-IW-HD) is the WiFi 5 dual-band
   choice -- the controller then offers 802.11ac modes instead of HE ones the hardware
   cannot run -- but it is unvalidated until a controller adopts under it. The
-  `archer-a7-v5` map is the first to use it, and names `u6iw` as the fallback.
+  `archer-a7-v5` map is the first to use it, and names `u6iw` as the fallback. `"u7hd"` (UAP-AC-HD)
+  is the WiFi 5 choice for a TWO-socket board -- both in-wall identities carry five -- and is
+  equally unvalidated; the `deco-m5` map uses it.
 
 ### 3. `lan_cpueth` decides the device's IDENTITY
 
@@ -305,7 +308,7 @@ Three places name the profiles and will drift silently:
 [ ] swconfig: dev.conf.vlan with verified physical port numbers
 [ ] led = an LED no DTS alias drives (or nil)
 [ ] hwassign, with a comment saying which radio is which band
-[ ] ufmodel: u6iw dual-band (uhdiw for WiFi 5 hardware, once validated), uapg1-lr single-radio
+[ ] ufmodel: u6iw dual-band (uhdiw five-socket / u7hd two-socket for WiFi 5 hardware, once validated), uapg1-lr single-radio
 [ ] ⚠️ marks on everything not confirmed on real hardware
 [ ] board-specific test added to tests/test_modelmap.lua
 [ ] lua tests/run_tests.lua passes
@@ -681,6 +684,20 @@ factory reset.
   lldpd.config.cid_interface=lan`) or the controller shows the wrong Parent Device: lldpd
   otherwise picks the lowest-numbered interface, which the gateway then learns under an ID
   matching no adopted device.
+- **A DSA bridge's MAC follows its FIRST member, not the lowest address** (netifd `bridge.c`,
+  `bridge_reset_primary`): with no `macaddr` on the bridge's `config device` section, br-lan
+  takes the MAC of its alphabetically-first present port and re-picks whenever that port
+  leaves. On a board whose `board.d` sets no LAN MAC (the Deco M5) a map with
+  `lan_cpueth = "br-lan"` therefore has an identity that `switchvlan.dsa_apply` can move: a
+  Native-VLAN push on that first socket takes it out of br-lan and the next inform arrives
+  under a MAC the controller never adopted. Pin the address in UCI before adopting (the
+  `deco-m5` header has the three lines). The JioRouters escape it because `board.d` sets
+  `lan`'s MAC for them, the AX3000T because its map names a socket.
+- **`led.set_enabled` writes the LED's own `max_brightness`, read from sysfs, not a literal 1.**
+  A GPIO LED's ceiling is 1, so the literal was invisible on every board until the Deco M5's
+  lp5521 (ceiling 255), where 1 is 0.4 %: the case light went dark the moment openUF started,
+  Locate included, since the timer trigger blinks at the current brightness. Unreadable or
+  non-numeric falls back to 1.
 - **VLAN ids must be below the switch's VLAN table size** (16 on some boards) — netifd has
   no `vid` option, so the id doubles as the table slot.
 - **8 MB flash is not enough** from a stock image: `lua-openssl` pulls in `libopenssl3`

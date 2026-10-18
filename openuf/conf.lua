@@ -15,6 +15,7 @@
 	  tl-wdr3500-v1.lua                  TP-Link TL-WDR3500 v1  (swconfig, 2-band)
 	  tl-wr1043ndv2.lua                  TP-Link WR1043ND v2    (swconfig, 1-band)
 	  archer-a7-v5.lua                   TP-Link Archer A7 v5 / C7 v4 / C7 v5 (swconfig, 2-band; ⚠️ unverified)
+	  deco-m5.lua                        TP-Link Deco M5 v1 / v2 / v3 (DSA, 2-band, 2 sockets; ⚠️ unverified)
 	  jiorouter-ax6000-jidu6101.lua      JioRouter AX6000       (DSA, 2-band)
 	  jiorouter-ax6000-jidu6j01.lua      JioRouter AX6000 J-fam (DSA, 2-band)
 	  xiaomi-ax3000t.lua                 Xiaomi Mi Router AX3000T (DSA, 2-band)
@@ -36,6 +37,8 @@
 	  u6iw.lua  — presents as U6-InWall (U6IW)  ← default for AP emulation
 	  uhdiw.lua — presents as UAP-IW-HD (UHDIW), the WiFi 5 in-wall with the
 	              same five sockets ← the Archer A7/C7 map; ⚠️ not yet adopted
+	  u7hd.lua  — presents as UAP-AC-HD (U7HD), the WiFi 5 ceiling AP with
+	              two sockets ← the Deco M5 map; ⚠️ not yet adopted
 	  uapg1.lua — presents as UAP Gen1
 	  uapg2-ac-lr.lua — presents as UAP-AC-LR
 

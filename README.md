@@ -129,6 +129,17 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   a stock image fits. The first profile to present a **WiFi 5 identity** — `ufmodel/uhdiw.lua`,
   the UAP-IW-HD, five sockets like the board — which no controller has adopted under yet; the
   header says how to fall back to `u6iw`
+- **TP-Link Deco M5 v1 / v2 / v3** (dual-band 802.11ac Wave 2, 2x2, IPQ4019 / ipq40xx, DSA) — use
+  `modelmap/deco-m5.lua`, **one profile for all three revisions**: OpenWrt builds them from one
+  `.dtsi` with the same two sockets (the DSA netdevs `wan` and `lan`) and the same radios; they
+  differ only in how the single RGB LED is wired (an lp5521 on v1/v2, GPIOs on v3), and the
+  profile resolves that name at load time. ⚠️ **Not yet run on the hardware**: derived from the
+  OpenWrt DTS and `board.d`; the header flags what to check first (pin the bridge MAC to the
+  label **before adopting** — netifd otherwise follows the bridge's first member, and a per-port
+  VLAN push can change that — plus the radio order and the LED name). Presents a **two-socket WiFi 5 identity** —
+  `ufmodel/u7hd.lua`, the UAP-AC-HD — which no controller has adopted under yet; the header says
+  how to fall back to `u6iw`. The USB-C socket is power only on the Deco and "reserved for
+  future use" on the UAP-AC-HD, so nothing is reported for it
 - **Xiaomi Mi Router AX3000T** (dual-band 802.11ax, 2x2, MT7981 / mediatek-filogic) — use
   `modelmap/xiaomi-ax3000t.lua`. Profile adopted from upstream (jonasevcik/openUF), where
   it is verified on the hardware: HE on both bands, 160 MHz on 5 GHz, DSA. Its four sockets
@@ -176,7 +187,7 @@ report the whole LAN, gateway included, as hosts plugged into it:
 | Per-port VLAN assignment | supported (`switch_vlan` sections) | supported (the socket moves into the VLAN's bridge; Native VLAN only) |
 | `dev.conf.vlan` | required | must be **absent** |
 
-The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
+The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `ufmodel/u7hd.lua` (UAP-AC-HD, the WiFi 5 ceiling AP with **two** sockets) is selected by the Deco M5 profile for the same reason and to match that board's socket count; its facts come from the same catalog and it is equally unadopted so far.  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
 
 ## Quick start
 
