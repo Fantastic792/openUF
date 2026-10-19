@@ -243,6 +243,19 @@ hardware profile filled in from what the board reports, an export of that profil
 to contribute, and the conversion into an AP (WAN off, DHCP and firewall off) as a button;
 from the shell that is `openuf-convert`.
 
+From the reboot after `luci-app-openuf` is installed, the device's address opens openUF's own
+**device page** instead of LuCI, the way an adopted Ubiquiti or Omada device sends you to its
+controller: an *Overview* anyone on the network can see (adoption state, the controller's
+address, the device facts it already broadcasts) and *Local Settings* behind the root
+password. LuCI is one hidden step away: the Konami code (↑ ↑ ↓ ↓ ← → ← → B A), or seven taps
+on the device picture on a phone, offers it, and LuCI's header then carries *Exit LuCI mode*.
+`uci set openuf.web.portal=0` (or the switch on either settings page) turns the page off.
+Inside LuCI the app adds a **dashboard** as the landing page: health checks, the path from the
+gateway through the device to its radios and networks, live throughput, radios, clients and
+the controller's view of the device. **`luci-theme-halo`** is a full LuCI theme in the same style -- a sidebar of sections with their pages nested under them, cards, switches, meters, light
+and dark -- usable without openUF too; `openuf deps --install` adds it only where LuCI is
+installed and the flash has room to spare. See USAGE.md § "The device page".
+
 One command on the device, over SSH:
 
 ```sh
@@ -253,7 +266,14 @@ wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh
 cannot know, and does everything in an order chosen so a failure never leaves the
 device unreachable.
 
-1. **Interview** — every question first, before anything is changed.
+1. **Interview** — every question first, before anything is changed. One of them is
+   whether to install the **web interface**: the default installs the OpenWrt packages
+   `openuf` and `luci-app-openuf` (LuCI's dashboard, openUF's pages and the device page)
+   from the latest release, and offers the Halo theme where the flash has room; a
+   **headless** install puts the daemon alone under `/opt/openuf` and adds nothing to LuCI.
+   Never both: a device carrying the file install and the package has two copies of
+   openUF, and a controller has shown such a device as two devices, so `install.sh` now
+   refuses beside the package and the package warns beside a file install.
 2. **Access-point conversion** — a device still acting as a router fights the real
    gateway for DHCP and NAT, so the router role goes: no WAN interface, the WAN
    socket folded into the LAN side, DHCP server off, `firewall`/`dnsmasq`/`odhcpd`

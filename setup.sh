@@ -16,7 +16,12 @@
 #
 #   1. interview     every question, before anything is changed
 #   2. packages      needs working internet, so it MUST precede step 4
-#   3. openUF        files, service, conf.lua, adoption account
+#   3. openUF        the OpenWrt packages (openuf, luci-app-openuf, and the
+#                    Halo theme if wanted) from the latest release, or --
+#                    headless -- the daemon alone as files under /opt/openuf;
+#                    then the configuration and the adoption account. One or
+#                    the other: a device carrying both copies has shown up in
+#                    a controller as two devices
 #   4. AP conversion tears down WAN/DHCP/firewall -- the internet may go with
 #                    it (this device stops being the router), which is exactly
 #                    why no download is left to do by now
@@ -30,7 +35,7 @@
 
 set -u
 
-VERSION="1.0"
+VERSION="1.1"
 
 # ── Where to get openUF from ────────────────────────────────────────────────
 # Overridable so a fork, a branch or a local checkout can be installed without
@@ -42,9 +47,16 @@ OPENUF_REF=${OPENUF_REF:-main}
 OPENUF_SRC=${OPENUF_SRC:-}
 OPENUF_TARBALL_URL=${OPENUF_TARBALL_URL:-"https://codeload.github.com/$OPENUF_REPO/tar.gz/$OPENUF_REF"}
 OPENUF_SELF_URL=${OPENUF_SELF_URL:-"https://raw.githubusercontent.com/$OPENUF_REPO/$OPENUF_REF/setup.sh"}
-export OPENUF_REPO OPENUF_REF OPENUF_TARBALL_URL OPENUF_SELF_URL
+# The packages (a web install) come from the latest GitHub release: its JSON
+# names the .apk and .ipk files. OPENUF_RELEASE_URL points at another release
+# (.../releases/tags/v0.1.8); OPENUF_PKG_DIR=/path uses package files already
+# on the device instead of downloading any.
+OPENUF_RELEASE_URL=${OPENUF_RELEASE_URL:-"https://api.github.com/repos/$OPENUF_REPO/releases/latest"}
+OPENUF_PKG_DIR=${OPENUF_PKG_DIR:-}
+export OPENUF_REPO OPENUF_REF OPENUF_TARBALL_URL OPENUF_SELF_URL OPENUF_RELEASE_URL
 
-INSTALL_DIR=/opt/openuf
+INSTALL_DIR=/opt/openuf      # the headless (file) install
+PKG_DIR=/usr/lib/openuf      # where the openuf package installs
 STATE_DIR=/etc/openuf
 
 # ─── Output ─────────────────────────────────────────────────────────────────
@@ -165,6 +177,8 @@ OPT_BOOTSTRAP=""       # ""=ask 1=yes 0=no
 OPT_EXCLUSIVE=""       # ""=ask 1=yes 0=no  (conf.use_only_unifi_wlan)
 OPT_L2=""              # ""=derive 1=on 0=off
 OPT_COUNTRY=""         # ""=ask; "none" or a 2-letter code
+HEADLESS=""            # ""=ask 1=daemon only, as files  0=the packages, with LuCI
+OPT_THEME=""           # ""=ask 1=yes 0=no  (luci-theme-halo; web install only)
 DO_REBOOT=""           # ""=ask 1=yes 0=no
 KEEP_WORK=0
 
@@ -205,12 +219,21 @@ is asked interactively (or takes its default under --yes).
       --l2-announce / --no-l2-announce
                             L2 discovery broadcasts (default: derived — see
                             the "Adoption path" note during the run)
+      --web / --headless    install the OpenWrt packages -- openuf and the
+                            LuCI app with its dashboard and device page --
+                            from the latest release (default), or only the
+                            daemon as files under /opt/openuf, nothing added
+                            to LuCI (headless)
+      --theme / --no-theme  with --web: also the Halo LuCI theme (default:
+                            yes with 4 MB free on the flash, else no)
       --reboot / --no-reboot
                             reboot when done (default: yes)
       --keep-work           leave the downloaded tree in /tmp for inspection
   -h, --help                this text
 
-Environment: OPENUF_REPO, OPENUF_REF, OPENUF_SRC, OPENUF_TARBALL_URL
+Environment: OPENUF_REPO, OPENUF_REF, OPENUF_SRC, OPENUF_TARBALL_URL,
+             OPENUF_RELEASE_URL (which release the packages come from),
+             OPENUF_PKG_DIR (package files already on the device)
 EOF
 }
 
@@ -239,6 +262,10 @@ while [ $# -gt 0 ]; do
 		--no-country)        OPT_COUNTRY=none ;;
 		--l2-announce)       OPT_L2=1 ;;
 		--no-l2-announce)    OPT_L2=0 ;;
+		--web|--luci)        HEADLESS=0 ;;
+		--headless)          HEADLESS=1 ;;
+		--theme)             OPT_THEME=1 ;;
+		--no-theme)          OPT_THEME=0 ;;
 		--reboot)            DO_REBOOT=1 ;;
 		--no-reboot)         DO_REBOOT=0 ;;
 		--keep-work)         KEEP_WORK=1 ;;
@@ -314,7 +341,10 @@ command -v uci >/dev/null 2>&1 || die "uci not found; cannot configure this devi
 if command -v apk >/dev/null 2>&1; then
 	PKG=apk
 	PKG_ADD="apk add"
-	pkg_installed() { apk info -e "$1" >/dev/null 2>&1; }
+	# `apk info -e NAME` is also true for a package that PROVIDES the name
+	# (wpad-basic-mbedtls answers for hostapd); `apk list -I NAME` prints the
+	# real package line, "NAME-version ...", or nothing.
+	pkg_installed() { apk list -I "$1" 2>/dev/null | grep -q "^$1-[0-9]"; }
 	pkg_add()       { apk add "$@" >/dev/null 2>&1; }
 	# Same install, output left on screen: for the REQUIRED set the manager's
 	# own error ("unable to select packages", a 404 on the feed) is the only
@@ -421,13 +451,33 @@ if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt 2000 ]; then
 	warn "package step to fail; bake the crypto into a custom image instead."
 fi
 
+# LuCI: luci-app-openuf pulls luci-base in where it is missing, which is a
+# cost worth naming on a small flash.
+HAS_LUCI=0
+if pkg_installed luci-base || [ -d /www/luci-static/resources ]; then HAS_LUCI=1; fi
+say "  luci       $([ "$HAS_LUCI" = 1 ] && echo installed || echo 'not installed')"
+
+# Two ways openUF can already be here: the openuf package (/usr/lib/openuf) or
+# a file install (/opt/openuf). Both at once is the state this script refuses
+# to produce -- see the "Web interface" question.
+FILES_INSTALLED=0
+[ -f "$INSTALL_DIR/inform.lua" ] && FILES_INSTALLED=1
+PKG_INSTALLED=0
+if pkg_installed openuf || [ -f "$PKG_DIR/inform.lua" ]; then PKG_INSTALLED=1; fi
 ALREADY_INSTALLED=0
-[ -d "$INSTALL_DIR" ] && ALREADY_INSTALLED=1
+[ "$FILES_INSTALLED" = 1 ] || [ "$PKG_INSTALLED" = 1 ] && ALREADY_INSTALLED=1
 ADOPTED=0
 if [ -f "$STATE_DIR/state.json" ] && grep -q '"adopted":true' "$STATE_DIR/state.json" 2>/dev/null; then
 	ADOPTED=1
 fi
-[ "$ALREADY_INSTALLED" = 1 ] && say "  openUF     already installed$([ "$ADOPTED" = 1 ] && echo ' and ADOPTED')"
+if [ "$ALREADY_INSTALLED" = 1 ]; then
+	_how=""
+	[ "$PKG_INSTALLED" = 1 ] && _how="the openuf package"
+	[ "$FILES_INSTALLED" = 1 ] && _how="${_how:+$_how AND }files under $INSTALL_DIR"
+	say "  openUF     already installed ($_how)$([ "$ADOPTED" = 1 ] && echo ', ADOPTED')"
+	[ "$PKG_INSTALLED" = 1 ] && [ "$FILES_INSTALLED" = 1 ] && \
+		warn "two copies of openUF: the service runs $PKG_DIR and ignores $INSTALL_DIR/conf.lua"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 1a — get the openUF source, so the interview can read the real
@@ -556,7 +606,7 @@ fi
 # Phase 1b — the interview
 # ═══════════════════════════════════════════════════════════════════════════
 
-head1 "1/6  Access-point conversion"
+head1 "1/7  Access-point conversion"
 say "  openUF emulates a UniFi ACCESS POINT. A device still acting as a router"
 say "  fights the real gateway for DHCP and NAT, so this step strips the router"
 say "  role: no WAN interface, no DHCP server, no firewall, everything bridged."
@@ -601,7 +651,7 @@ if [ "$DO_AP_MODE" = 1 ]; then
 	esac
 fi
 
-head1 "2/6  Hardware profile (modelmap)"
+head1 "2/7  Hardware profile (modelmap)"
 say "  The profile describes YOUR board: radio names, ethernet sockets, status"
 say "  LED. The UniFi identity presented to the controller is separate: the"
 say "  profile picks it (U6-InWall for most; the Archer A7/C7 profile presents"
@@ -662,7 +712,7 @@ if [ "$MODELMAP" = auto ] && [ "$IS_DSA" != 1 ]; then
        correct dev.conf.vlan by hand, per openuf/modelmap/*.lua."
 fi
 
-head1 "3/6  Controller"
+head1 "3/7  Controller"
 say "  Leave blank to be discovered on this LAN (the controller's Devices page"
 say "  shows the AP by itself). Give an address when the controller is on"
 say "  another subnet, or to skip discovery entirely."
@@ -678,7 +728,7 @@ case "$OPT_CONTROLLER" in
 esac
 [ -n "$INFORM_URL" ] && ok "inform URL: $INFORM_URL"
 
-head1 "4/6  Adoption account"
+head1 "4/7  Adoption account"
 say "  L2 adoption works by the controller SSHing in and running"
 say "  'syswrapper.sh set-adopt'. Real Ubiquiti hardware ships an ubnt/ubnt"
 say "  login for exactly this; openUF can create a locked-down copy of it --"
@@ -693,7 +743,7 @@ if [ -z "$OPT_BOOTSTRAP" ]; then
 	fi
 fi
 
-head1 "5/6  SSIDs"
+head1 "5/7  SSIDs"
 say "  openUF only ever creates, edits or deletes wireless sections it named"
 say "  'openuf_*' -- your hand-made SSIDs are never rewritten. The question is"
 say "  whether they keep BROADCASTING alongside the controller's."
@@ -764,7 +814,51 @@ if [ -z "$OPT_L2" ]; then
 	fi
 fi
 
-head1 "6/6  Summary"
+head1 "6/7  Web interface"
+say "  openUF can be managed from LuCI: a dashboard as LuCI's landing page,"
+say "  openUF's own pages (overview, settings, log) and the device page that"
+say "  fronts LuCI with the access point's status. That is the OpenWrt packages"
+say "  openuf and luci-app-openuf, fetched from the latest openUF release and"
+say "  installed with $PKG, so later upgrades are package upgrades too."
+say ""
+say "  A HEADLESS install skips all of it: the daemon alone, as files under"
+say "  $INSTALL_DIR, nothing added to LuCI -- for a device without LuCI or"
+say "  without the flash for it (luci-app-openuf is small, but it pulls in"
+say "  luci-base where there is none)."
+say ""
+say "  One or the other, never both. A device that carries the file install"
+say "  AND the package has two copies of openUF, each with its own idea of the"
+say "  configuration, and a controller has shown such a device as two devices."
+if [ -z "$HEADLESS" ]; then
+	if ask_yn "  Headless install (daemon only, nothing added to LuCI)?" N; then
+		HEADLESS=1
+	else
+		HEADLESS=0
+	fi
+fi
+if [ "$HEADLESS" = 1 ]; then
+	[ "$PKG_INSTALLED" = 1 ] && die "the openuf package is installed. A headless install would put a second
+       copy under $INSTALL_DIR. Either keep the packages (run again and answer
+       the headless question with N) or remove them first:
+         $([ "$PKG" = apk ] && echo 'apk del' || echo 'opkg remove') luci-app-openuf openuf"
+	OPT_THEME=0
+	ok "headless: the daemon as files under $INSTALL_DIR"
+else
+	[ "$HAS_LUCI" = 1 ] || info "LuCI is not installed; luci-app-openuf brings luci-base and uhttpd with it"
+	[ "$FILES_INSTALLED" = 1 ] && info "the file install under $INSTALL_DIR is removed once the packages are in (its state in $STATE_DIR stays)"
+	say ""
+	say "  The Halo theme restyles all of LuCI in the device page's look (light"
+	say "  and dark). It is cosmetic and about 130 KB on the flash; the device"
+	say "  has ${FREE_KB:-?} KB free."
+	if [ -z "$OPT_THEME" ]; then
+		_tdef=N
+		[ -n "$FREE_KB" ] && [ "$FREE_KB" -ge 4096 ] && _tdef=Y
+		if ask_yn "  Install the Halo theme for LuCI?" "$_tdef"; then OPT_THEME=1; else OPT_THEME=0; fi
+	fi
+	ok "web install: the openuf and luci-app-openuf packages$([ "$OPT_THEME" = 1 ] && echo ' and the Halo theme')"
+fi
+
+head1 "7/7  Summary"
 say "  AP conversion     $([ "$DO_AP_MODE" = 1 ] && echo yes || echo 'no (left as a router)')"
 if [ "$DO_AP_MODE" = 1 ]; then
 	say "    WAN -> LAN      $([ "$AP_ABSORB_WAN" = 1 ] && echo yes || echo no)"
@@ -777,6 +871,11 @@ say "  Bootstrap account $([ "$OPT_BOOTSTRAP" = 1 ] && echo 'yes (ubnt/ubnt, sel
 say "  Controller WLANs  $([ "$OPT_EXCLUSIVE" = 1 ] && echo 'exclusive' || echo 'alongside existing SSIDs')"
 say "  L2 discovery      $([ "$OPT_L2" = 1 ] && echo on || echo 'off (L3 adoption)')"
 say "  Regdomain         $([ "$OPT_COUNTRY" = none ] && echo "the controller's" || echo "$OPT_COUNTRY (override; controller still told its own)")"
+if [ "$HEADLESS" = 1 ]; then
+	say "  Install           headless: files under $INSTALL_DIR, nothing in LuCI"
+else
+	say "  Install           packages openuf + luci-app-openuf$([ "$OPT_THEME" = 1 ] && echo ' + luci-theme-halo') (the LuCI dashboard and device page)"
+fi
 if [ "$OPT_L2" = 0 ] && [ -z "$INFORM_URL" ]; then
 	warn "L2 discovery is off and no controller address was given, so nothing"
 	warn "will reach a controller. Set one later with:"
@@ -875,10 +974,12 @@ done
 # The replacement keeps the SAME crypto library the device already has
 # (mbedtls stays mbedtls), so the swap costs no extra flash and does not drag
 # a second TLS stack onto an 8 MB board.
-WPAD_FULL="wpad wpad-wolfssl wpad-openssl wpad-mbedtls hostapd hostapd-wolfssl hostapd-openssl hostapd-mbedtls"
+# Decided by the binary, as the init script decides it: wnm_sleep_mode is
+# compiled in only with WNM (802.11v). Not by package name -- on apk, `apk
+# info -e hostapd` says yes for wpad-basic-mbedtls, which PROVIDES hostapd,
+# and that false yes skipped the swap on every 25.12 device (found 2026-10-19).
 wpad_have_full() {
-	for p in $WPAD_FULL; do pkg_installed "$p" && return 0; done
-	return 1
+	[ -x /usr/sbin/hostapd ] && grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/dev/null
 }
 if wpad_have_full; then
 	ok "a full wpad/hostapd build is already installed"
@@ -1102,78 +1203,234 @@ fi
 # Phase 4 — configure and install openUF
 # ═══════════════════════════════════════════════════════════════════════════
 
-head1 "Configuring openUF"
+if [ "$HEADLESS" = 1 ]; then
+	head1 "Configuring openUF"
 
-CONF="$SRC/openuf/conf.lua"
-[ -f "$CONF" ] || die "$CONF is missing"
+	CONF="$SRC/openuf/conf.lua"
+	[ -f "$CONF" ] || die "$CONF is missing"
 
-# conf.lua is edited in the SOURCE tree, before install.sh copies it: it is one
-# of the two files install.sh deliberately does not comment-strip, and doing it
-# here means a re-run of setup.sh reproduces the whole configuration rather
-# than layering edits onto whatever is already on the device.
-conf_set() {   # conf_set <key> <lua value>
-	sed -i "s|^\([[:space:]]*\)$1[[:space:]]*=[[:space:]]*.*|\1$1 = $2,|" "$CONF"
-	grep -q "^[[:space:]]*$1[[:space:]]*=[[:space:]]*$(
-		printf '%s' "$2" | sed 's/[].[^$*\\/]/\\&/g')," "$CONF" \
-		|| die "could not set $1 in $CONF (unexpected file layout)"
-}
+	# conf.lua is edited in the SOURCE tree, before install.sh copies it: it is one
+	# of the two files install.sh deliberately does not comment-strip, and doing it
+	# here means a re-run of setup.sh reproduces the whole configuration rather
+	# than layering edits onto whatever is already on the device.
+	conf_set() {   # conf_set <key> <lua value>
+		sed -i "s|^\([[:space:]]*\)$1[[:space:]]*=[[:space:]]*.*|\1$1 = $2,|" "$CONF"
+		grep -q "^[[:space:]]*$1[[:space:]]*=[[:space:]]*$(
+			printf '%s' "$2" | sed 's/[].[^$*\\/]/\\&/g')," "$CONF" \
+			|| die "could not set $1 in $CONF (unexpected file layout)"
+	}
 
-sed -i "s|^dev = dofile(\"modelmap/.*\")|dev = dofile(\"modelmap/$MODELMAP.lua\")|" "$CONF"
-grep -q "^dev = dofile(\"modelmap/$MODELMAP.lua\")" "$CONF" \
-	|| die "could not select the modelmap in $CONF"
-ok "modelmap        $MODELMAP"
+	sed -i "s|^dev = dofile(\"modelmap/.*\")|dev = dofile(\"modelmap/$MODELMAP.lua\")|" "$CONF"
+	grep -q "^dev = dofile(\"modelmap/$MODELMAP.lua\")" "$CONF" \
+		|| die "could not select the modelmap in $CONF"
+	ok "modelmap        $MODELMAP"
 
-if [ "$OPT_EXCLUSIVE" = 1 ]; then
-	conf_set use_only_unifi_wlan true
-	ok "controller WLANs are exclusive"
+	if [ "$OPT_EXCLUSIVE" = 1 ]; then
+		conf_set use_only_unifi_wlan true
+		ok "controller WLANs are exclusive"
+	else
+		conf_set use_only_unifi_wlan false
+		ok "hand-configured SSIDs keep broadcasting"
+	fi
+
+	if [ "$OPT_L2" = 1 ]; then
+		conf_set l2_announce true
+		ok "L2 discovery broadcasts on"
+	else
+		conf_set l2_announce false
+		ok "L2 discovery broadcasts off (adopt over L3)"
+	fi
+
+	if [ -n "$INFORM_URL" ]; then
+		conf_set inform_url "\"$INFORM_URL\""
+		ok "inform_url      $INFORM_URL"
+	fi
+
+	if [ "$OPT_COUNTRY" = none ]; then
+		conf_set country_override nil
+		ok "regdomain       the controller's (no override)"
+	else
+		conf_set country_override "\"$OPT_COUNTRY\""
+		ok "regdomain       $OPT_COUNTRY programmed into the driver"
+	fi
+
+	head1 "Installing openUF"
+
+	BOOTSTRAP_ARG=""
+	[ "$OPT_BOOTSTRAP" = 1 ] && BOOTSTRAP_ARG="--bootstrap-adopt"
+	# install.sh reads openuf/, tools/strip.lua and install.sh by relative path.
+	# --replace-conf: on its own, install.sh keeps a device's existing conf.lua
+	# (a bare reinstall must not move an adopted device's modelmap); this script
+	# has just written conf.lua from the interview and means for it to land.
+	( cd "$SRC" && sh install.sh install $BOOTSTRAP_ARG --replace-conf ) \
+		|| die "install.sh failed. Nothing about the network has been touched yet,
+	       so this device is still a working router. Some files may have been
+	       copied into $INSTALL_DIR -- 'sh install.sh uninstall' clears them."
+
+	# conf.lua is the marker, not the shell hook: it is copied unconditionally,
+	# while the hook's executable bit comes from git and is not guaranteed in
+	# every checkout. install.sh reports its own copy failure, but an overlay
+	# that filled up mid-copy has been seen to leave a "successful" install with
+	# no /opt/openuf at all.
+	[ -f "$INSTALL_DIR/conf.lua" ] \
+		|| die "install.sh reported success but $INSTALL_DIR/conf.lua is missing
+	       (out of space on /overlay?)"
+	ok "installed to $INSTALL_DIR"
 else
-	conf_set use_only_unifi_wlan false
-	ok "hand-configured SSIDs keep broadcasting"
+	head1 "Installing openUF (packages)"
+
+	PKG_WORK=${WORK:-/tmp/openuf-setup-$$}
+	mkdir -p "$PKG_WORK" || die "cannot create $PKG_WORK"
+	case "$PKG" in apk) PKG_EXT=apk ;; *) PKG_EXT=ipk ;; esac
+
+	# The one file for a package among the release's: "openuf-0.1.8-r1.apk" /
+	# "openuf_0.1.8-r1_all.ipk" -- a version right after the name, so that
+	# openuf-crypto-* and luci-app-openuf-* do not match "openuf".
+	pick_pkg() {   # pick_pkg <name> <dir> -> the file, or status 1
+		for _f in "$2"/"$1"[-_][0-9]*."$PKG_EXT"; do
+			[ -f "$_f" ] && { printf '%s' "$_f"; return 0; }
+		done
+		return 1
+	}
+
+	if [ -n "$OPENUF_PKG_DIR" ]; then
+		SRC_PKG_DIR=$(CDPATH= cd -- "$OPENUF_PKG_DIR" 2>/dev/null && pwd) \
+			|| die "OPENUF_PKG_DIR=$OPENUF_PKG_DIR is not a directory"
+		info "package files from $SRC_PKG_DIR"
+	else
+		info "$OPENUF_RELEASE_URL"
+		fetch "$OPENUF_RELEASE_URL" "$PKG_WORK/release.json" \
+			|| die "could not read the release list. Check the device's internet access
+       and DNS; or download the .$PKG_EXT files yourself and re-run with
+       OPENUF_PKG_DIR=/path/to/them sh setup.sh"
+		# The release JSON names every attached file; only the packages in
+		# this device's format are fetched, and the theme only when wanted.
+		# The API serves the JSON on one line to a plain client, so it is
+		# split at the commas first (an URL carries none) -- a line-wise sed
+		# on the whole thing kept only the last file.
+		_urls=$(tr ',' '\n' < "$PKG_WORK/release.json" \
+			| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\.'"$PKG_EXT"'\)".*/\1/p')
+		[ -n "$_urls" ] || die "the release at $OPENUF_RELEASE_URL has no .$PKG_EXT packages attached"
+		for _u in $_urls; do
+			_f=$(basename "$_u")
+			case "$_f" in
+				openuf[-_][0-9]*|luci-app-openuf[-_]*) ;;
+				luci-theme-halo[-_]*) [ "$OPT_THEME" = 1 ] || continue ;;
+				*) continue ;;
+			esac
+			info "fetching $_f"
+			fetch "$_u" "$PKG_WORK/$_f" || die "download failed: $_u"
+		done
+		SRC_PKG_DIR=$PKG_WORK
+	fi
+
+	P_OPENUF=$(pick_pkg openuf "$SRC_PKG_DIR") \
+		|| die "no openuf .$PKG_EXT package in $SRC_PKG_DIR"
+	P_APP=$(pick_pkg luci-app-openuf "$SRC_PKG_DIR") \
+		|| die "no luci-app-openuf .$PKG_EXT package in $SRC_PKG_DIR"
+	P_THEME=""
+	if [ "$OPT_THEME" = 1 ]; then
+		P_THEME=$(pick_pkg luci-theme-halo "$SRC_PKG_DIR") \
+			|| warn "this release ships no luci-theme-halo package; LuCI keeps its current theme"
+	fi
+
+	# One transaction, so luci-app-openuf's dependency on openuf resolves to
+	# the file beside it; everything else (lua, luci-base...) comes from the
+	# feeds refreshed in the packages phase. The files are unsigned, hence
+	# --allow-untrusted for apk (opkg takes a local file as it is).
+	info "$PKG_ADD $(basename "$P_OPENUF") $(basename "$P_APP")${P_THEME:+ $(basename "$P_THEME")}"
+	case "$PKG" in
+		apk)  pkg_add_v --allow-untrusted "$P_OPENUF" "$P_APP" ${P_THEME:+"$P_THEME"} ;;
+		*)    pkg_add_v "$P_OPENUF" "$P_APP" ${P_THEME:+"$P_THEME"} ;;
+	esac || die "the package install failed (its output is above). Nothing about the
+       network has been touched yet, so this device is still a working router."
+	[ -f "$PKG_DIR/inform.lua" ] \
+		|| die "the package manager reported success but $PKG_DIR/inform.lua is missing"
+	ok "installed openuf and luci-app-openuf${P_THEME:+ and luci-theme-halo}"
+
+	head1 "Configuring openUF"
+
+	# The package's /etc/config/openuf carries a `main` section, which puts
+	# UCI in charge of the daemon (conf.lua is then only the shipped default);
+	# the interview's answers go there, where LuCI's settings page edits them.
+	uci -q get openuf.main >/dev/null 2>&1 || uci set openuf.main=openuf
+	if [ "$MODELMAP" = autodetected ]; then
+		# The generated profile as UCI -- the shape the settings page's custom
+		# device form writes -- rather than a file in the package directory,
+		# which the next package upgrade would replace.
+		uci -q delete openuf.custom
+		while uci -q delete 'openuf.@port[0]'; do :; done
+		uci set openuf.custom=device
+		uci set "openuf.custom.lan_cpueth=$GEN_CPUETH"
+		uci set openuf.custom.lan_name=lan
+		uci set openuf.custom.lan_vlanid=1
+		uci set "openuf.custom.wan_cpueth=${GEN_WAN:-wan}"
+		uci set openuf.custom.uplink_detect=fdb
+		[ -n "$GEN_LED" ] && uci set "openuf.custom.led=$GEN_LED"
+		uci set openuf.custom.ufmodel=u6iw
+		for r in $RADIOS; do uci add_list "openuf.custom.hwassign=$r"; done
+		[ -n "$BOARD" ] && uci add_list "openuf.custom.openwrt_board=$BOARD"
+		_i=0
+		for _p in $GEN_PORTS; do
+			_i=$((_i + 1))
+			uci add openuf port >/dev/null
+			uci set "openuf.@port[-1].idx=$_i"
+			uci set "openuf.@port[-1].ifname=$_p"
+		done
+		uci set openuf.main.modelmap=custom
+		ok "modelmap        custom (the generated profile, as UCI)"
+	else
+		uci set "openuf.main.modelmap=$MODELMAP"
+		ok "modelmap        $MODELMAP"
+	fi
+	uci set openuf.main.ufmodel=auto
+	if [ "$OPT_EXCLUSIVE" = 1 ]; then
+		uci set openuf.main.use_only_unifi_wlan=1
+		ok "controller WLANs are exclusive"
+	else
+		uci set openuf.main.use_only_unifi_wlan=0
+		ok "hand-configured SSIDs keep broadcasting"
+	fi
+	if [ "$OPT_L2" = 1 ]; then
+		uci set openuf.main.l2_announce=1
+		ok "L2 discovery broadcasts on"
+	else
+		uci set openuf.main.l2_announce=0
+		ok "L2 discovery broadcasts off (adopt over L3)"
+	fi
+	if [ -n "$INFORM_URL" ]; then
+		uci set "openuf.main.inform_url=$INFORM_URL"
+		ok "inform_url      $INFORM_URL"
+	fi
+	if [ "$OPT_COUNTRY" = none ]; then
+		uci -q delete openuf.main.country_override
+		ok "regdomain       the controller's (no override)"
+	else
+		uci set "openuf.main.country_override=$OPT_COUNTRY"
+		ok "regdomain       $OPT_COUNTRY programmed into the driver"
+	fi
+	uci commit openuf
+	ok "written to /etc/config/openuf"
+
+	if [ "$OPT_BOOTSTRAP" = 1 ]; then
+		sh "$PKG_DIR/hook/openuf-bootstrap.sh" --dir "$PKG_DIR" \
+			|| warn "the bootstrap account could not be created; run 'openuf bootstrap-account' later"
+	fi
+
+	# A file install left from before: the init script already ignores it in
+	# favour of the package, so all it can do now is confuse. Its state (the
+	# adoption, in $STATE_DIR) is shared with the package and stays.
+	if [ "$FILES_INSTALLED" = 1 ]; then
+		rm -rf "$INSTALL_DIR"
+		ok "removed the file install under $INSTALL_DIR (state in $STATE_DIR kept)"
+	fi
+
+	# The package's install started the service with the shipped defaults;
+	# it reads the configuration again on the restart.
+	/etc/init.d/openuf enable >/dev/null 2>&1
+	/etc/init.d/openuf restart >/dev/null 2>&1 || true
+	INSTALL_DIR=$PKG_DIR
 fi
-
-if [ "$OPT_L2" = 1 ]; then
-	conf_set l2_announce true
-	ok "L2 discovery broadcasts on"
-else
-	conf_set l2_announce false
-	ok "L2 discovery broadcasts off (adopt over L3)"
-fi
-
-if [ -n "$INFORM_URL" ]; then
-	conf_set inform_url "\"$INFORM_URL\""
-	ok "inform_url      $INFORM_URL"
-fi
-
-if [ "$OPT_COUNTRY" = none ]; then
-	conf_set country_override nil
-	ok "regdomain       the controller's (no override)"
-else
-	conf_set country_override "\"$OPT_COUNTRY\""
-	ok "regdomain       $OPT_COUNTRY programmed into the driver"
-fi
-
-head1 "Installing openUF"
-
-BOOTSTRAP_ARG=""
-[ "$OPT_BOOTSTRAP" = 1 ] && BOOTSTRAP_ARG="--bootstrap-adopt"
-# install.sh reads openuf/, tools/strip.lua and install.sh by relative path.
-# --replace-conf: on its own, install.sh keeps a device's existing conf.lua
-# (a bare reinstall must not move an adopted device's modelmap); this script
-# has just written conf.lua from the interview and means for it to land.
-( cd "$SRC" && sh install.sh install $BOOTSTRAP_ARG --replace-conf ) \
-	|| die "install.sh failed. Nothing about the network has been touched yet,
-       so this device is still a working router. Some files may have been
-       copied into $INSTALL_DIR -- 'sh install.sh uninstall' clears them."
-
-# conf.lua is the marker, not the shell hook: it is copied unconditionally,
-# while the hook's executable bit comes from git and is not guaranteed in
-# every checkout. install.sh reports its own copy failure, but an overlay
-# that filled up mid-copy has been seen to leave a "successful" install with
-# no /opt/openuf at all.
-[ -f "$INSTALL_DIR/conf.lua" ] \
-	|| die "install.sh reported success but $INSTALL_DIR/conf.lua is missing
-       (out of space on /overlay?)"
-ok "installed to $INSTALL_DIR"
 
 # state.json wins over conf.lua for the inform URL once it exists, so a device
 # that has run openUF before would keep pointing at the old controller. Write
@@ -1507,11 +1764,24 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 
 head1 "Done"
-say "  Check the daemon:        logread -e openuf"
-say "  Hardware profile:       $INSTALL_DIR/modelmap/$MODELMAP.lua"
-say "  Configuration:          $INSTALL_DIR/conf.lua"
+say "  Check the daemon:        logread -e openuf   /   openuf status"
+if [ "$HEADLESS" = 1 ]; then
+	say "  Hardware profile:       $INSTALL_DIR/modelmap/$MODELMAP.lua"
+	say "  Configuration:          $INSTALL_DIR/conf.lua"
+else
+	say "  Hardware profile:       $MODELMAP (/etc/config/openuf)"
+	say "  Configuration:          /etc/config/openuf, or LuCI: Services -> openUF -> Settings"
+fi
 say "  State (authkey etc):    $STATE_DIR/state.json"
 say ""
+if [ "$HEADLESS" = 0 ]; then
+	say "  Web: after the reboot the device's address opens openUF's page (status"
+	say "  for anyone on the network, settings behind the root password). LuCI is"
+	say "  one step behind it -- the Konami code, or seven taps on the device"
+	say "  picture -- and opens on its new dashboard. 'uci set openuf.web.portal=0'"
+	say "  makes the address open LuCI directly."
+	say ""
+fi
 if [ -n "$INFORM_URL" ]; then
 	say "  In the controller: the AP appears as Pending under Devices -> click Adopt."
 else
@@ -1523,7 +1793,11 @@ if [ "$OPT_BOOTSTRAP" = 1 ]; then
 	say "  once the device is adopted and comes back on a factory reset."
 fi
 say ""
-say "  To undo: sh install.sh uninstall  (state dir is preserved)"
+if [ "$HEADLESS" = 1 ]; then
+	say "  To undo: sh install.sh uninstall  (state dir is preserved)"
+else
+	say "  To undo: $([ "$PKG" = apk ] && echo 'apk del' || echo 'opkg remove') luci-app-openuf openuf$([ -n "${P_THEME:-}" ] && echo ' luci-theme-halo')  (state dir is preserved)"
+fi
 
 if [ "$DO_AP_MODE" = 1 ]; then
 	say ""

@@ -110,12 +110,28 @@ default answer for everything.
 | `--exclusive-wlan` / `--shared-wlan` | `use_only_unifi_wlan` | exclusive |
 | `--country CC` / `--no-country` | regulatory-domain override, 2-letter ISO code | none |
 | `--l2-announce` / `--no-l2-announce` | L2 discovery broadcasts | derived (see below) |
+| `--web` / `--headless` | the packages `openuf` + `luci-app-openuf` from the latest release (LuCI dashboard and device page), or the daemon alone as files under `/opt/openuf` | web |
+| `--theme` / `--no-theme` | with `--web`: the Halo LuCI theme too | yes with 4 MB free, else no |
 | `--reboot` / `--no-reboot` | reboot at the end? | yes |
 | `-y`, `--yes` | take every default, ask nothing | — |
 | `--keep-work` | leave the downloaded tree in `/tmp` | — |
 
 `OPENUF_REPO=owner/repo`, `OPENUF_REF=branch-or-tag` and `OPENUF_SRC=/path/to/checkout`
-point it at a different source.
+point it at a different source. The packages of a web install come from the latest
+GitHub release; `OPENUF_RELEASE_URL=https://api.github.com/repos/owner/repo/releases/tags/vX.Y.Z`
+picks another release, and `OPENUF_PKG_DIR=/path` uses `.apk`/`.ipk` files already on the
+device (your own build, or a device without internet).
+
+**Web or headless.** A web install writes the interview's answers to `/etc/config/openuf`
+(the `main` section, which puts UCI in charge of the daemon; LuCI's *Services → openUF →
+Settings* edits the same file), creates the adoption account with `openuf
+bootstrap-account`, and removes a file install left under `/opt/openuf` from an earlier
+run -- the adoption state in `/etc/openuf` is shared and stays. A headless install is the
+file install described in § 2, driven by `install.sh`, with `conf.lua` as its
+configuration. The two never coexist: the init script would run the package's copy and
+ignore `/opt/openuf/conf.lua`, and a device in that state has appeared in a controller as
+two devices. `install.sh` refuses when the package is present; the package's install
+warns when `/opt/openuf` is.
 
 **The derived L2 setting.** `l2_announce` ships `true` and that is what makes the AP
 appear in the controller by itself — but a controller that discovered a device over L2
@@ -388,6 +404,44 @@ restart` while the backup still exists — `/tmp` is tmpfs, so that means until 
 reboot.
 
 ---
+
+### The device page (`luci-app-openuf`)
+
+Once `luci-app-openuf` is installed and the device has rebooted, opening its address in a
+browser shows openUF's **device page**, not LuCI. Like an adopted Ubiquiti or Omada device,
+an openUF access point belongs to its controller, and the page says so:
+
+- **Overview** -- visible to anyone who can reach the device: whether a controller manages
+  it, a link to that controller, and the facts the access point already broadcasts in its
+  UniFi discovery packets (model, MAC, firmware, uptime, last contact). No SSIDs, keys or
+  configuration.
+- **Local Settings** -- after the device's root password: the inform URL, *Forget
+  controller*, the hardware profile and the UniFi model to present (locked while adopted),
+  the WiFi behaviour switches, the page switch below, and restarting openUF or the device.
+  On a tarball install (`install.sh`, no `main` section in `/etc/config/openuf`) openUF's
+  own fields are shown read-only: they live in `conf.lua` there.
+
+**Getting to LuCI.** On the device page type the Konami code -- ↑ ↑ ↓ ↓ ← → ← → B A -- or,
+on a phone, tap the picture of the device seven times. A prompt offers LuCI; accept and
+LuCI asks for the root password as usual. LuCI then shows *Exit LuCI mode* next to its own
+*Refreshing* indicator: it signs out of LuCI and returns to the device page. The page comes
+back on its own when the LuCI session ends (log out, or the session times out).
+
+**Turning it off.** `uci set openuf.web.portal=0 && uci commit openuf`, or the switch
+under *Local Settings* (*This page*) or in LuCI (*Services → openUF → Settings → Device
+page*). It takes effect on the next page load. `luci-app-openuf`'s removal puts LuCI back
+at once.
+
+This is presentation, not a lock: LuCI keeps its own login, and the page never offers more
+than the root password already allows.
+
+**The Halo theme.** `luci-theme-halo` restyles all of LuCI in the same language as the
+device page: a sidebar with icons, cards, switches for on/off options, a floating
+*Save & Apply* bar, and light and dark (*Halo* follows the browser, *Halo Dark* and *Halo
+Light* pin one; pick under *System → System → Language and Style*). It works on any LuCI
+install, openUF or not. `openuf deps --install` adds it only where LuCI is installed and at
+least 4 MB of flash is free (`--no-theme` skips it; `openuf deps --check` reports the
+decision under `theme`), so a small-flash device never spends space on looks.
 
 ## 3. Configuration
 
@@ -709,6 +763,10 @@ On a package install the configuration is UCI, and whenever `/etc/config/openuf`
 `main` section it replaces `conf.lua`'s `dev` and `config` tables (`uciconf.lua`).
 Options the section leaves out keep `conf.lua`'s defaults, so a package upgrade that adds
 an option needs no migration. LuCI's "Save & Apply" on this file restarts the daemons.
+
+`openuf.web.portal` (`1` by default, its own `web` section so that creating it never puts
+UCI in charge of the daemon) chooses between the device page and LuCI at the device's
+address; see § 2, "The device page".
 
 | `openuf.main` option | Meaning |
 |---|---|

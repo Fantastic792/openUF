@@ -1,0 +1,25 @@
+#!/bin/sh
+# Register Halo with LuCI: Halo follows the browser's light/dark setting,
+# Halo Dark and Halo Light pin one. A fresh install makes Halo the active
+# theme (as luci-theme-bootstrap does for itself); an upgrade leaves the
+# user's choice alone.
+changed=0
+
+set_opt() {
+	if ! uci -q get "luci.$1" >/dev/null 2>&1; then
+		uci set "luci.$1=$2"
+		changed=1
+	fi
+}
+
+set_opt themes.Halo /luci-static/halo
+
+if [ "$PKG_UPGRADE" != 1 ] && [ $changed = 1 ]; then
+	uci set luci.main.mediaurlbase=/luci-static/halo
+fi
+
+set_opt themes.HaloDark /luci-static/halo-dark
+set_opt themes.HaloLight /luci-static/halo-light
+
+[ $changed = 1 ] && uci commit luci
+exit 0

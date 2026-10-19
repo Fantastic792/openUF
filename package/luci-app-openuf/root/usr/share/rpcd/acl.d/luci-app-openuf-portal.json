@@ -1,0 +1,10 @@
+{
+	"unauthenticated": {
+		"description": "openUF's locked portal: the device's public status, before any login",
+		"read": {
+			"ubus": {
+				"luci.openuf": [ "getPublic" ]
+			}
+		}
+	}
+}

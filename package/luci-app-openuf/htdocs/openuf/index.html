@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+	<meta name="color-scheme" content="light dark">
+	<meta name="darkreader-lock">
+	<title>Access Point</title>
+	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23006fff'/%3E%3Ccircle cx='16' cy='16' r='6' fill='none' stroke='white' stroke-width='2.5'/%3E%3C/svg%3E">
+	<link rel="stylesheet" href="portal.css">
+</head>
+<body>
+	<div class="app" id="app">
+		<header class="topbar">
+			<div class="brand" id="brand" title="">
+				<svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14"/><circle cx="16" cy="16" r="6" class="ring"/></svg>
+				<span class="brand-name" id="brand-name">Access Point</span>
+			</div>
+			<nav class="segmented" role="tablist" aria-label="Sections">
+				<button role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true">Overview</button>
+				<button role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false">Local Settings</button>
+			</nav>
+			<div class="topbar-end" id="session-slot"></div>
+		</header>
+
+		<main>
+			<section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+				<div class="hero card">
+					<div class="device-art" id="device-art" aria-hidden="true">
+						<svg viewBox="0 0 120 120">
+							<defs>
+								<radialGradient id="puck" cx="50%" cy="38%" r="65%">
+									<stop offset="0" class="puck-hi"/>
+									<stop offset="1" class="puck-lo"/>
+								</radialGradient>
+								<filter id="glow-white" x="-50%" y="-50%" width="200%" height="200%">
+									<feDropShadow dx="0" dy="0" stdDeviation="1.2" flood-color="#000" flood-opacity=".28"/>
+									<feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#fff" flood-opacity=".9"/>
+								</filter>
+								<filter id="glow-blue" x="-50%" y="-50%" width="200%" height="200%">
+									<feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#1a7dff" flood-opacity=".75"/>
+								</filter>
+							</defs>
+							<ellipse cx="60" cy="104" rx="38" ry="5" class="shadow"/>
+							<circle cx="60" cy="58" r="44" fill="url(#puck)" class="puck"/>
+							<circle cx="60" cy="58" r="44" class="puck-edge"/>
+							<circle cx="60" cy="58" r="15" class="led-track"/>
+							<circle cx="60" cy="58" r="15" class="led-ring" id="led-ring"/>
+						</svg>
+					</div>
+					<div class="hero-text">
+						<div class="status-pill" id="status-pill"><span class="dot"></span><span id="status-label">Checking…</span></div>
+						<h1 id="hero-title">This device is managed by UniFi</h1>
+						<p class="lead" id="hero-lead">Reading the device's state…</p>
+						<div class="hero-actions" id="hero-actions"></div>
+					</div>
+				</div>
+
+				<div class="grid" id="facts"></div>
+				<p class="footnote" id="updated"></p>
+			</section>
+
+			<section class="panel" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+				<div id="settings-root"></div>
+			</section>
+		</main>
+	</div>
+
+	<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+	<div class="scrim" id="scrim" hidden>
+		<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" id="dialog"></div>
+	</div>
+
+	<script src="portal.js"></script>
+</body>
+</html>

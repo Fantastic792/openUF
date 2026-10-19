@@ -30,7 +30,8 @@ INIT_SCRIPT=/etc/init.d/openuf
 # the REQUIRED install below wants apk's own error text on screen.
 if command -v apk >/dev/null 2>&1; then
 	PKG_CMD="apk add"
-	pkg_installed() { apk info -e "$1" >/dev/null 2>&1; }
+	# exact name: `apk info -e` is also true for a package that PROVIDES it
+	pkg_installed() { apk list -I "$1" 2>/dev/null | grep -q "^$1-[0-9]"; }
 	pkg_add()       { apk add "$@"; }
 elif command -v opkg >/dev/null 2>&1; then
 	PKG_CMD="opkg install"
@@ -62,6 +63,18 @@ case "$ACTION" in
 
 	# ────────────────────────────────────────────────────────────────────────
 	install)
+		# The openuf package installs to /usr/lib/openuf, and the init script
+		# runs that copy whenever it exists -- so a file install beside it
+		# would be a second, ignored openUF whose conf.lua means nothing, and
+		# a controller has shown a device in that state as two devices. One
+		# or the other.
+		if [ -f /usr/lib/openuf/inform.lua ]; then
+			echo "ERROR: openUF is installed as the openuf package (/usr/lib/openuf)." >&2
+			echo "  Upgrade it with the package manager ($PKG_CMD ./openuf-<version>.*)," >&2
+			echo "  or remove the package first; a file install beside it would be a" >&2
+			echo "  second copy, and the controller has shown such a device twice." >&2
+			exit 1
+		fi
 		echo "Installing openUF to $INSTALL_DIR ..."
 
 		# Free space on the filesystem holding $INSTALL_DIR, in KB. Used to
@@ -368,65 +381,13 @@ case "$ACTION" in
 		# inform.lua's M._sync_bootstrap_account). See USAGE.md.
 		if [ "$BOOTSTRAP_ADOPT" = 1 ]; then
 			echo "Setting up SSH bootstrap adoption account (ubnt/ubnt) ..."
-
-			ALREADY_ADOPTED=0
-			if [ -f "$STATE_DIR/state.json" ] \
-				&& grep -q '"adopted":true' "$STATE_DIR/state.json"; then
-				ALREADY_ADOPTED=1
-			fi
-
-			if [ "$ALREADY_ADOPTED" = "1" ]; then
-				echo "  Device is already adopted -- skipping account creation."
-			elif grep -q "^ubnt:" /etc/passwd 2>/dev/null; then
-				echo "  ubnt account already exists -- leaving as-is."
-			else
-				# Dedicated group so $STATE_DIR can be made group-writable by
-				# the bootstrap account without granting it anything else.
-				BA_GID=900
-				while grep -q "^[^:]*:[^:]*:$BA_GID:" /etc/group 2>/dev/null; do
-					BA_GID=$((BA_GID + 1))
-				done
-				echo "openuf:x:$BA_GID:" >> /etc/group
-
-				BA_UID=900
-				while awk -F: -v id="$BA_UID" \
-					'$3==id{f=1} END{exit !f}' /etc/passwd 2>/dev/null; do
-					BA_UID=$((BA_UID + 1))
-				done
-
-				ADOPT_SHELL="$INSTALL_DIR/hook/adopt-shell.sh"
-				chmod +x "$ADOPT_SHELL"
-
-				echo "ubnt:x:$BA_UID:$BA_GID:openuf bootstrap adoption:$STATE_DIR:$ADOPT_SHELL" \
-					>> /etc/passwd
-				HASH=$(openssl passwd -6 ubnt)
-				echo "ubnt:$HASH:::::::" >> /etc/shadow
-
-				chgrp "$BA_GID" "$STATE_DIR"
-				chmod g+w "$STATE_DIR"
-
-				# Group-writable directory alone only covers *creating* a new
-				# state.json. If one somehow already exists owned by root
-				# (e.g. an admin ran `syswrapper.sh reset-inform` by hand
-				# before ever using this account), ubnt can't write to it --
-				# opening an existing file for writing needs permission on
-				# the file itself, not just the directory. Pre-create it
-				# group-writable so this works regardless of which side
-				# (root or ubnt) writes to it first and thereafter.
-				[ -f "$STATE_DIR/state.json" ] || : > "$STATE_DIR/state.json"
-				chgrp "$BA_GID" "$STATE_DIR/state.json"
-				chmod 664 "$STATE_DIR/state.json"
-
-				# Tell the running daemon this account exists and should be
-				# locked/unlocked to track adopted state.
-				sed -i 's/bootstrap_adopt_user = nil/bootstrap_adopt_user = "ubnt"/' \
-					"$INSTALL_DIR/conf.lua"
-
-				echo "  Created non-root 'ubnt' account (password: ubnt),"
-				echo "  restricted to running 'syswrapper.sh set-adopt' only."
-				echo "  It self-locks once the device is adopted and"
-				echo "  re-enables on factory reset."
-			fi
+			# hook/openuf-bootstrap.sh, the same account the package install
+			# creates (`openuf bootstrap-account`): skips an adopted device or an
+			# existing account, hashes the password with what the image has and
+			# never leaves it empty, and records the user in conf.lua here (no
+			# UCI `main` section on a file install).
+			sh "$INSTALL_DIR/hook/openuf-bootstrap.sh" --dir "$INSTALL_DIR" \
+				|| echo "WARNING: the bootstrap account is not usable; see the message above."
 		fi
 
 		echo "Done.  Check status with: logread -e openuf"

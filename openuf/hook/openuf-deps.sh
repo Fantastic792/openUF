@@ -8,15 +8,20 @@
 #                  "suggested":"wpad-mbedtls","choices":["wpad-mbedtls",...]},
 #          "packages":[{"pkg":"nftables","present":true,"required":false,
 #                       "unlocks":"..."},...],
-#          "missing":["kmod-nft-bridge"],"ok":false}
-#   openuf-deps --install [--wpad mbedtls|openssl|wolfssl] [--only-wpad]
+#          "missing":["kmod-nft-bridge"],"ok":false,
+#          "theme":{"package":"luci-theme-halo","installed":false,"luci":true,
+#                   "free_kb":5120,"min_free_kb":4096,"wanted":true}}
+#   openuf-deps --install [--wpad mbedtls|openssl|wolfssl] [--only-wpad] [--no-theme]
 #       Installs the missing packages, then replaces a basic wpad/hostapd
 #       with a full build -- the same crypto library the basic one used, so
 #       no second TLS library lands on the flash, unless --wpad names
 #       another -- brings the radios back up on the new build and restarts
 #       openUF so it re-probes what hostapd can do. The radios are down for
 #       about ten seconds in between: run this over a cable, not over WiFi.
-#       Exit status 0 once the device has everything.
+#       Exit status 0 once the device has everything. The Halo LuCI theme
+#       (luci-theme-halo, the look openUF's device page shares) comes along
+#       only where LuCI is installed and the flash has room to spare; it is
+#       cosmetic, never counts as missing, and --no-theme skips it.
 #
 # Why the wpad swap is a command and not a package dependency. Any full
 # build will do (wpad-openssl, wpad-wolfssl, wpad-mbedtls, wpad-mesh-*), but
@@ -35,22 +40,28 @@ set -u
 
 HOSTAPD=${OPENUF_HOSTAPD:-/usr/sbin/hostapd}   # overridable by the tests only
 MODDIR=${OPENUF_MODDIR:-/lib/modules}
+LUCIDIR=${OPENUF_LUCIDIR:-/usr/share/ucode/luci}
+OVERLAY=${OPENUF_OVERLAY:-/overlay}
 
 if command -v apk >/dev/null 2>&1; then
 	PKG_ADD="apk add"
-	pkg_installed() { apk info -e "$1" >/dev/null 2>&1; }
+	# exact name: `apk info -e` is also true for a package that PROVIDES it
+	pkg_installed() { apk list -I "$1" 2>/dev/null | grep -q "^$1-[0-9]"; }
+	pkg_available() { apk list "$1" 2>/dev/null | grep -q "^$1-[0-9]"; }
 	pkg_add()       { apk add "$@"; }
 	pkg_del()       { apk del "$@"; }
 	pkg_update()    { apk update; }
 elif command -v opkg >/dev/null 2>&1; then
 	PKG_ADD="opkg install"
 	pkg_installed() { opkg list-installed "$1" 2>/dev/null | grep -q "^$1 "; }
+	pkg_available() { opkg list "$1" 2>/dev/null | grep -q "^$1 "; }
 	pkg_add()       { opkg install "$@"; }
 	pkg_del()       { opkg remove "$@"; }
 	pkg_update()    { opkg update; }
 else
 	PKG_ADD="(no package manager: neither apk nor opkg)"
 	pkg_installed() { return 1; }
+	pkg_available() { return 1; }
 	pkg_add()       { echo "no package manager found (neither apk nor opkg)" >&2; return 1; }
 	pkg_del()       { return 1; }
 	pkg_update()    { return 1; }
@@ -159,6 +170,52 @@ full_for() {   # full_for <installed> <requested library or empty>
 	esac
 }
 
+# ── the Halo theme ──────────────────────────────────────────────────────────
+# luci-theme-halo is the LuCI theme openUF's device page is styled after. It
+# is cosmetic, so it goes where it costs nothing that matters: a box with
+# LuCI on it and the flash to spare (THEME_MIN_FREE_KB on the overlay before
+# installing, many times the theme's own size, so the room openUF's state and
+# a later upgrade need is never what it eats). Elsewhere it is skipped, with
+# the reason, and never reported as missing.
+THEME_PKG=luci-theme-halo
+THEME_MIN_FREE_KB=${OPENUF_THEME_MIN_FREE_KB:-4096}
+
+overlay_free_kb() {
+	for d in "$OVERLAY" /; do
+		kb=$(df -k "$d" 2>/dev/null | awk 'NR==2 {print $4}')
+		[ -n "$kb" ] && { printf '%s' "$kb"; return 0; }
+	done
+	printf 0
+}
+
+luci_present() { [ -d "$LUCIDIR/template" ]; }
+theme_present() { pkg_installed "$THEME_PKG" || [ -d "${OPENUF_WWW:-/www}/luci-static/halo" ]; }
+
+# Prints nothing; status 0 when the theme should be installed now.
+theme_wanted() {
+	luci_present || return 1
+	theme_present && return 1
+	[ "$(overlay_free_kb)" -ge "$THEME_MIN_FREE_KB" ]
+}
+
+install_theme() {
+	luci_present || return 0
+	if theme_present; then
+		say "  the Halo theme is installed"
+		return 0
+	fi
+	free=$(overlay_free_kb)
+	if [ "$free" -lt "$THEME_MIN_FREE_KB" ]; then
+		say "  skipping the Halo theme: ${free} KB free on the flash, it is only installed with ${THEME_MIN_FREE_KB} KB to spare"
+		return 0
+	fi
+	if ! pkg_available "$THEME_PKG"; then
+		say "  the Halo theme is not in this device's package feeds"
+		return 0
+	fi
+	add_one "$THEME_PKG"
+}
+
 # ── --check ─────────────────────────────────────────────────────────────────
 json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n'; }
 
@@ -192,7 +249,12 @@ PKGS
 		first=0
 		printf '"%s"' "$m"
 	done
-	printf '],"ok":%s}\n' "$( [ "$full" = true ] && [ -z "$(missing_packages)" ] && printf true || printf false )"
+	printf '],"ok":%s,' "$( [ "$full" = true ] && [ -z "$(missing_packages)" ] && printf true || printf false )"
+	if luci_present; then l=true; else l=false; fi
+	if theme_present; then t=true; else t=false; fi
+	if theme_wanted; then w=true; else w=false; fi
+	printf '"theme":{"package":"%s","installed":%s,"luci":%s,"free_kb":%s,"min_free_kb":%s,"wanted":%s}}\n' \
+		"$THEME_PKG" "$t" "$l" "$(overlay_free_kb)" "$THEME_MIN_FREE_KB" "$w"
 }
 
 # ── --install ───────────────────────────────────────────────────────────────
@@ -210,8 +272,8 @@ add_one() {   # add_one <package>
 	return 1
 }
 
-install() {   # install <only-wpad 0|1> <library or empty>
-	only_wpad=$1; lib=$2
+install() {   # install <only-wpad 0|1> <library or empty> <theme 0|1>
+	only_wpad=$1; lib=$2; theme=${3:-1}
 	changed=0
 	missing=""
 	[ "$only_wpad" = 1 ] || missing=$(missing_packages)
@@ -225,6 +287,9 @@ install() {   # install <only-wpad 0|1> <library or empty>
 		else
 			say "every package openUF uses is installed"
 		fi
+		# Cosmetic, after everything openUF needs, so a full flash costs the
+		# theme and never a feature.
+		[ "$theme" = 1 ] && install_theme
 	fi
 	if hostapd_full; then
 		cur=$(wpad_installed) || cur="a build not from a package"
@@ -271,12 +336,13 @@ install() {   # install <only-wpad 0|1> <library or empty>
 }
 
 # ── main ────────────────────────────────────────────────────────────────────
-MODE=""; LIB=""; ONLY_WPAD=0
+MODE=""; LIB=""; ONLY_WPAD=0; THEME=1
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--check)     MODE=check ;;
 		--install)   MODE=install ;;
 		--only-wpad) ONLY_WPAD=1 ;;
+		--no-theme)  THEME=0 ;;
 		--wpad)
 			shift; [ $# -gt 0 ] || die "--wpad needs a value: mbedtls, openssl or wolfssl"
 			case "$1" in
@@ -285,13 +351,13 @@ while [ $# -gt 0 ]; do
 				*) die "--wpad: mbedtls, openssl or wolfssl, not '$1'" ;;
 			esac
 			;;
-		-h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) die "unknown option: $1" ;;
 	esac
 	shift
 done
 case "$MODE" in
 	check)   check ;;
-	install) [ "$(id -u)" = 0 ] || die "must run as root"; install "$ONLY_WPAD" "$LIB" ;;
-	*)       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+	install) [ "$(id -u)" = 0 ] || die "must run as root"; install "$ONLY_WPAD" "$LIB" "$THEME" ;;
+	*)       sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

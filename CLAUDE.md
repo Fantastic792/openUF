@@ -707,6 +707,25 @@ factory reset.
   lp5521 (ceiling 255), where 1 is 0.4 %: the case light went dark the moment openUF started,
   Locate included, since the timer trigger blinks at the current brightness. Unreadable or
   non-numeric falls back to 1.
+- **The device page is a uhttpd ucode handler that uhttpd loads ONCE, at start.**
+  `luci-app-openuf`'s uci-defaults puts `/cgi-bin/luci=/usr/share/ucode/openuf/gate.uc` into
+  `uhttpd.*.ucode_prefix` (replacing LuCI's own line, or adding it where stock 25.12 serves
+  LuCI as the `/www/cgi-bin/luci` CGI script -- a ucode prefix wins over the CGI file). A
+  changed `gate.uc` does nothing until uhttpd restarts; the package's postinst restarts it only
+  when uhttpd is already running the gate (an upgrade), so a first install takes over at the
+  reboot, as asked. The gate fails OPEN to LuCI on any error. `openuf.web.portal` is read per
+  request and needs no restart.
+- **uhttpd's ucode handler passes no `DOCUMENT_ROOT`, and LuCI breaks quietly without it**:
+  `L.env.documentroot` is null, LuCI lists `null/luci-static/resources/preload`, rpcd refuses,
+  and no preload script (ours: *Exit LuCI mode*) ever loads. `gate.uc` supplies uhttpd's
+  `home` before dispatching. Anyone running LuCI's own `uhttpd.uc` handler has the same gap.
+- **The page switch is `openuf.web.portal`, never `openuf.main.*`.** A `main` section is what
+  makes UCI replace `conf.lua` (uciconf.lua); creating one on a tarball install to hold a web
+  option would move the identity MAC. The portal therefore writes `main` only where it
+  already exists and shows openUF's fields read-only otherwise.
+- **A LuCI MultiValue/ListValue with no choices throws and blanks the whole page**
+  (`Cannot convert undefined or null to object` in ui.js): build such an option only when
+  there is something to choose (settings.js' radio picker on a board with no radio).
 - **VLAN ids must be below the switch's VLAN table size** (16 on some boards) — netifd has
   no `vid` option, so the id doubles as the table slot.
 - **8 MB flash is not enough** from a stock image: `lua-openssl` pulls in `libopenssl3`
@@ -908,7 +927,9 @@ openuf/
                     (/usr/sbin/openuf-deps, `openuf deps`: what openUF needs
                     installed as JSON, and the basic-to-full wpad swap)
   etc/init.d/openuf procd service: announce + inform instances; finds either prefix
-package/            the OpenWrt feed: openuf (net/) and luci-app-openuf (see PACKAGING.md)
+package/            the OpenWrt feed: openuf (net/), luci-app-openuf (the LuCI pages, the device
+                    page htdocs/openuf/ and its gate root/usr/share/ucode/openuf/gate.uc) and
+                    luci-theme-halo (see PACKAGING.md)
 setup.sh            guided installer: AP conversion + deps + install
 install.sh          file/service install and dependency resolution
 update.sh           on-device updater (installed as openuf-update): backup, install keeping

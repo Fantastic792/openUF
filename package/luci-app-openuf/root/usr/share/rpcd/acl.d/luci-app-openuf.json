@@ -2,31 +2,91 @@
 	"luci-app-openuf": {
 		"description": "Grant access to LuCI app openUF",
 		"read": {
-			"cgi-io": [ "exec" ],
+			"cgi-io": [
+				"exec"
+			],
 			"ubus": {
-				"luci.openuf": [ "getStatus", "listPresets", "discover", "exportPreset", "getConvertState" ],
-				"file": [ "exec" ]
+				"luci.openuf": [
+					"getStatus",
+					"listPresets",
+					"discover",
+					"exportPreset",
+					"getConvertState"
+				],
+				"file": [
+					"exec"
+				],
+				"system": [
+					"board",
+					"info"
+				],
+				"luci-rpc": [
+					"getNetworkDevices",
+					"getWirelessDevices",
+					"getHostHints"
+				],
+				"network.interface": [
+					"dump"
+				],
+				"network.device": [
+					"status"
+				],
+				"network.wireless": [
+					"status"
+				],
+				"iwinfo": [
+					"info",
+					"assoclist"
+				]
 			},
 			"file": {
-				"/sbin/logread -e *": [ "exec" ],
-				"/usr/bin/openuf deps --check": [ "exec" ],
-				"/etc/init.d/openuf restart": [ "exec" ],
-				"/etc/init.d/openuf start": [ "exec" ],
-				"/etc/init.d/openuf stop": [ "exec" ],
-				"/usr/bin/openuf reset-inform": [ "exec" ],
-				"/usr/bin/openuf 11k-scan": [ "exec" ]
+				"/sbin/logread -e *": [
+					"exec"
+				],
+				"/usr/bin/openuf deps --check": [
+					"exec"
+				],
+				"/etc/init.d/openuf restart": [
+					"exec"
+				],
+				"/etc/init.d/openuf start": [
+					"exec"
+				],
+				"/etc/init.d/openuf stop": [
+					"exec"
+				],
+				"/usr/bin/openuf reset-inform": [
+					"exec"
+				],
+				"/usr/bin/openuf 11k-scan": [
+					"exec"
+				],
+				"/proc/cpuinfo": [
+					"read"
+				]
 			},
-			"uci": [ "openuf" ]
+			"uci": [
+				"openuf"
+			]
 		},
 		"write": {
 			"ubus": {
-				"luci.openuf": [ "convert", "revert" ]
+				"luci.openuf": [
+					"convert",
+					"revert"
+				]
 			},
 			"file": {
-				"/usr/bin/openuf deps --install": [ "exec" ],
-				"/usr/bin/openuf deps --install *": [ "exec" ]
+				"/usr/bin/openuf deps --install": [
+					"exec"
+				],
+				"/usr/bin/openuf deps --install *": [
+					"exec"
+				]
 			},
-			"uci": [ "openuf" ]
+			"uci": [
+				"openuf"
+			]
 		}
 	}
 }

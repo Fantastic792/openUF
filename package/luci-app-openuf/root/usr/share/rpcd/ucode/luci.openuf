@@ -2,7 +2,8 @@
 
 'use strict';
 
-import { popen, access, glob } from 'fs';
+import { popen, access, glob, readfile } from 'fs';
+import { cursor } from 'uci';
 
 // Everything about the configuration comes from the daemon's own probe
 // (`openuf probe`, hook/probe.lua): which preset `auto` resolved to, what a
@@ -85,7 +86,63 @@ function reboot_soon() {
 	popen('(sleep 4; reboot) >/dev/null 2>&1 &', 'r');
 }
 
+// The controller's host, from an inform URL: what the portal names in "manage
+// this device from ...". Host only, never the path or credentials.
+function inform_host(url) {
+	const m = match(url ?? '', /^[a-zA-Z]+:\/\/(\[[0-9a-fA-F:.]+\]|[^\/:?#@]+)(:([0-9]+))?/);
+	return m ? { host: m[1], port: m[3] ? int(m[3]) : null } : null;
+}
+
+function first_line(path) {
+	const s = readfile(path);
+	return s ? trim(split(s, '\n')[0]) : null;
+}
+
+// What the locked portal shows to anyone who opens the device's address,
+// before any login: the facts this AP already broadcasts in its UniFi
+// discovery packets (model, MAC, address, firmware) plus where it is managed
+// from, which is the point of the page. No SSIDs, no keys, no configuration.
+// Cached for a few seconds: this is callable without a session, and every
+// fresh answer costs a `openuf probe status` run.
+let public_cache = null, public_at = 0;
+function public_status() {
+	if (public_cache && (time() - public_at) < 5)
+		return public_cache;
+
+	const s = probe('status') ?? {};
+	const st = s.state ?? {}, h = s.health ?? {}, id = s.identity ?? {};
+	const sys = cursor().get_all('system', '@system[0]') ?? {};
+	const up = first_line('/proc/uptime');
+	const url = st.inform_url ?? s.config?.inform_url;
+	const ctl = inform_host(url);
+
+	public_cache = {
+		hostname: sys.hostname ?? null,
+		model: first_line('/tmp/sysinfo/model'),
+		board: s.board ?? first_line('/tmp/sysinfo/board_name'),
+		presented: { model: id.model ?? null, title: id.title ?? null },
+		mac: st.mac ?? h.mac ?? null,
+		version: s.version ?? null,
+		adopted: (st.adopted == true || h.adopted == 'true'),
+		controller: ctl ? { host: ctl.host, port: ctl.port } : null,
+		last_contact: h.last_ok ?? null,
+		last_failure: h.last_fail ?? null,
+		now: s.now ?? time(),
+		uptime: up ? int(split(up, ' ')[0]) : null,
+		running: shell_ok('/etc/init.d/openuf running'),
+		configured: s.config_error == null
+	};
+	public_at = time();
+	return public_cache;
+}
+
 const methods = {
+	getPublic: {
+		call: function() {
+			return public_status();
+		}
+	},
+
 	getStatus: {
 		call: function() {
 			let s = probe('status');

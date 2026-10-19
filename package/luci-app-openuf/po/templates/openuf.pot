@@ -1,6 +1,29 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:313
+msgid "%d SSIDs · %d clients"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:404
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:520
+msgid "%d clients"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:527
+msgid "%d connected"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:573
+msgid "%d cores"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:515
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:516
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:542
+msgid "%d dBm"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:32
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:23
 msgid "%d hours ago"
@@ -11,13 +34,38 @@ msgstr ""
 msgid "%d minutes ago"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:312
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:502
+msgid "%d of %d up"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:92
 msgid "%d on a switch chip"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:451
+msgid "%d radios"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:29
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:20
 msgid "%d seconds ago"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:400
+msgid "%d things need attention"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:322
+msgid "%d weak"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:306
+msgid "%d%% available"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:331
+msgid "%d%% used"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:91
@@ -26,9 +74,41 @@ msgid ""
 "cable"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:226
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:230
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:42
+msgid "%dd %dh"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:43
+msgid "%dh %dm"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:44
+msgid "%dm %ds"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:291
+msgid "%ds ago"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:586
+msgid "%s ago"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:244
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:248
 msgid "%s failed: %s"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:331
+msgid "%s free"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:278
+msgid "%s has no carrier"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:574
+msgid "%s in use · %s available of %s"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:128
@@ -36,6 +116,14 @@ msgid ""
 "%s is removed and %s installed. The radios are down for about ten seconds in "
 "between, then brought back up on the new build, and openUF is restarted. Do "
 "this over a cable, not over WiFi."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:275
+msgid "%s link"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:575
+msgid "%s used · %s free of %s"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:89
@@ -50,15 +138,40 @@ msgstr ""
 msgid "/etc/config/openuf (the Settings page)"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:479
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:404
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:520
+msgid "1 client"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:527
+msgid "1 connected"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:573
+msgid "1 core"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:451
+msgid "1 radio"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:400
+msgid "1 thing needs attention"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:498
 msgid "2.4 GHz radio: what \"Auto\" means on this board"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:479
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:498
 msgid "5 GHz radio: what \"Auto\" means on this board"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:517
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:484
+msgid "5 min ago"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:536
 msgid "6.0.0 when empty."
 msgstr ""
 
@@ -68,14 +181,14 @@ msgid ""
 "roaming assistant"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:531
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:550
 msgid ""
 "A custom identity keeps the shipped profile's mapping. To change the "
 "mapping, choose \"Custom profile\" above: it starts from what this board "
 "reports."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:192
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:210
 msgid ""
 "A missing mandatory package stops openUF from running; a missing optional "
 "one leaves that feature off. Everything is installed from the OpenWrt "
@@ -86,6 +199,10 @@ msgstr ""
 msgid ""
 "A two-letter country code programmed into the radios instead of the one the "
 "controller sends. Leave empty to follow the controller."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:463
+msgid "A wired-only device: nothing hangs off it over the air."
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:78
@@ -110,6 +227,13 @@ msgid ""
 "set above."
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:290
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:291
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:588
+msgid "Adopted"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:588
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:71
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:49
 msgid "Adoption"
@@ -120,6 +244,18 @@ msgid ""
 "After the reboot the device will most likely have a different address. Find "
 "it in your router's DHCP client list or through the controller once it is "
 "adopted; this page will not reconnect on its own."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:323
+msgid "All above %d dBm"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:322
+msgid "All good"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:312
+msgid "All radios down"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:359
@@ -150,11 +286,11 @@ msgstr ""
 msgid "Automatic (this board: %s)"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:207
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:225
 msgid "BSSID"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:509
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:528
 msgid "Bare, as 6.8.2.15592."
 msgstr ""
 
@@ -162,7 +298,7 @@ msgstr ""
 msgid "Board"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:519
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:538
 msgid "Boot loader version"
 msgstr ""
 
@@ -177,34 +313,60 @@ msgid ""
 "network and the address above is set."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:455
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:298
+msgid "CPU"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:474
 msgid "CPU port of the LAN"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:457
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:476
 msgid "CPU port of the WAN"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:131
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:242
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:272
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:260
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:290
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:197
 msgid "Cancel"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:497
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:454
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:511
+msgid "Ch %s"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:516
 msgid "Channels allowed for automatic selection"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:326
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:371
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:514
+msgid "Clients"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:137
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:546
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:565
 msgid "Close"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:288
+msgid "Configuration does not load"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:101
 msgid "Configured through"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:549
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:555
+msgid "Connected"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:292
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:589
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:259
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:51
 msgid "Controller"
@@ -219,11 +381,11 @@ msgstr ""
 msgid "Controller configuration"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:304
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:322
 msgid "Controller connection"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:312
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:330
 msgid "Controller features not supported yet"
 msgstr ""
 
@@ -239,23 +401,27 @@ msgstr ""
 msgid "Convert to an access point and reboot"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:516
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:535
 msgid "Cosmetic, as above."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:515
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:534
 msgid "Cosmetic, reaches only the discovery broadcast. Written as YYMMDD.HHMM."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:517
+msgid "Country"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:345
 msgid "Country code override"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:502
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:521
 msgid "Custom UniFi identity"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:373
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:383
 msgid "Custom hardware profile"
 msgstr ""
 
@@ -269,8 +435,16 @@ msgid ""
 "openuf)"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:436
+msgid "DNS %s"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:187
 msgid "DNS servers, space separated"
+msgstr ""
+
+#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:3
+msgid "Dashboard"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:268
@@ -280,8 +454,30 @@ msgid ""
 "refuses to start rather than guess if none was made for it."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:276
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:535
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:554
+msgid "Device"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:371
+msgid "Device page"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:512
+msgid "Disabled"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:294
 msgid "Done. The device is ready to be adopted again."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:277
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:512
+msgid "Down"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:494
+msgid "Download"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:170
@@ -302,8 +498,12 @@ msgstr ""
 msgid "Ethernet sockets"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:428
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:447
 msgid "Ethernet sockets as the controller lists them"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:400
+msgid "Everything looks healthy"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/log.js:40
@@ -312,11 +512,15 @@ msgid ""
 "every five seconds."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:551
+#: package/luci-app-openuf/htdocs/luci-static/resources/preload/openuf_exit.js:14
+msgid "Exit LuCI mode"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:570
 msgid "Export the saved custom profile as a file"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:516
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:535
 msgid "Factory firmware version"
 msgstr ""
 
@@ -327,36 +531,40 @@ msgid ""
 "what it sees (802.11k)."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:398
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:408
 msgid "Find the uplink socket from where the cable is"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:515
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:570
+msgid "Firmware"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:534
 msgid "Firmware build time"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:514
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:533
 msgid "Firmware name prefix"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:509
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:528
 msgid "Firmware version"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:294
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:312
 msgid ""
 "Fix it on the Settings page or in /etc/config/openuf and restart openUF."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:445
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:464
 msgid "Fixed uplink"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:505
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:524
 msgid "For example U6IW or UHDIW."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:514
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:533
 msgid ""
 "For example U6IW. (with the dot). Empty means the model code plus a dot."
 msgstr ""
@@ -368,17 +576,17 @@ msgid ""
 "reboot) and empty this field when done."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:275
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:277
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:280
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:293
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:295
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:298
 msgid "Forget the controller"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:269
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:287
 msgid "Forget the controller?"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:512
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:531
 msgid "Four numbers separated by dots, for example 6.8.2.15592"
 msgstr ""
 
@@ -386,8 +594,13 @@ msgstr ""
 msgid "Full build to install:"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:434
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:186
 msgid "Gateway"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:368
+msgid "Gateway, this device, its radios and networks"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:143
@@ -406,6 +619,7 @@ msgstr ""
 msgid "Hardware and identity"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:593
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:95
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:267
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:53
@@ -429,6 +643,10 @@ msgid "IP address and hostname"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:124
+msgid "Install the Halo theme"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:124
 msgid "Install the missing packages"
 msgstr ""
 
@@ -444,30 +662,42 @@ msgstr ""
 msgid "Interface the controller identifies the device by"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:386
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:396
 msgid "Interface whose address identifies the device"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:299
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:317
 msgid ""
 "It has no 802.11v support, which every network from the controller needs. "
 "Replace it with the full build under \"Software openUF needs\" below."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:483
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:502
 msgid "Keep automatic channel selection off DFS channels"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:423
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:571
+msgid "Kernel"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:442
 msgid "LAN VLAN id"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:420
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:439
 msgid "LAN network name"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:464
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:483
 msgid "Label"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:590
+msgid "Last contact"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:290
+msgid "Last contact %s ago"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:72
@@ -479,8 +709,28 @@ msgstr ""
 msgid "Last failed contact"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:591
+msgid "Last failure"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:195
 msgid "Leave the WAN socket out of the LAN (keep it unused)"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:407
+msgid "Live · %s"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:573
+msgid "Load"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:300
+msgid "Load %s · %d cores"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:300
+msgid "Load average, 1 minute"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:264
@@ -491,8 +741,12 @@ msgid ""
 "first, then change it and adopt again."
 msgstr ""
 
-#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:33
+#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:46
 msgid "Log"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:363
+msgid "Manage openUF"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:193
@@ -503,15 +757,20 @@ msgstr ""
 msgid "Maximum size of that file (bytes)"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:305
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:574
+msgid "Memory"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:78
 msgid "Message encryption"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:517
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:536
 msgid "Minimum controller version"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:507
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:526
 msgid "Model code"
 msgstr ""
 
@@ -519,7 +778,7 @@ msgstr ""
 msgid "Must be a web address starting with http:// or https://"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:487
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:506
 msgid "Narrowest channel width to use"
 msgstr ""
 
@@ -527,39 +786,112 @@ msgstr ""
 msgid "Needed"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:204
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:539
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:554
+msgid "Network"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:222
 msgid "Network name"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:368
+msgid "Network path"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:529
+msgid "No client is connected right now."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:282
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:436
+msgid "No default route"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:282
+msgid "No interface has a gateway"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:492
+msgid "No interface to measure."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:459
+msgid "No network"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:436
+msgid ""
+"No radio was found on this board: check that its WiFi driver is loaded "
+"(`wifi status`)."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:316
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:463
+msgid "No radios"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:529
+msgid "No radios, so no wireless clients."
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:144
 msgid "No shipped profile is selected."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:201
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:326
+msgid "No station on any radio"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:516
+msgid "Noise"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:435
+msgid "None"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:326
+msgid "None connected"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:219
 msgid ""
 "None yet. The controller sends its WiFi networks once the device is adopted."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:540
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:289
+msgid "Not adopted"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:588
+msgid "Not adopted yet"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:559
 msgid "Nothing to export: %s"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:247
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:265
 msgid "Nothing was changed:"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:399
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:454
+msgid "Off"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:409
 msgid ""
 "On a board with one interface per socket the uplink is detected at runtime, "
 "so the cable can be in any socket. Off for switch-chip boards, which have no "
 "such per-socket view."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:208
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:226
 msgid "On air"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:536
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:555
 msgid ""
 "Once saved, the custom profile can be exported as a profile file for the "
 "openUF project, so the next owner of this board gets it as a shipped "
@@ -567,7 +899,7 @@ msgid ""
 "maintainers."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:429
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:448
 msgid ""
 "One line per RJ45 socket on the case. The port number is what the controller "
 "shows and keys per-port settings on, so pick it once and never renumber. The "
@@ -575,7 +907,11 @@ msgid ""
 "order on the case but not always."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:379
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:374
+msgid "Open the device page instead of LuCI"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:389
 msgid "OpenWrt board name"
 msgstr ""
 
@@ -585,14 +921,14 @@ msgid ""
 "enabled even with the option above ticked."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:480
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:499
 msgid ""
 "Overrides the controller where the board needs it: widths the driver "
 "advertises but cannot run, DFS channels to leave to ACS. Leave empty to "
 "follow the controller."
 msgstr ""
 
-#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:15
+#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:28
 msgid "Overview"
 msgstr ""
 
@@ -600,11 +936,11 @@ msgstr ""
 msgid "Package"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:467
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:486
 msgid "Physical port"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:505
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:524
 msgid "Platform code"
 msgstr ""
 
@@ -612,14 +948,15 @@ msgstr ""
 msgid "Port in the controller"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:434
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:453
 msgid "Port number"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:530
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:549
 msgid "Ports, radios and LED of the selected shipped profile"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:592
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:52
 msgid "Presented as"
 msgstr ""
@@ -628,22 +965,31 @@ msgstr ""
 msgid "Presented to the controller as"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:543
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:595
+msgid "Problem"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:562
 msgid "Profile file %s"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:484
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:503
 msgid ""
 "Radar-detection channels take a minute of silence before use and can be "
 "vacated at any time."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:205
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:223
 msgid "Radio"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:370
+msgid "Radios"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:98
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:413
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:428
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:435
 msgid "Radios reported to the controller"
 msgstr ""
 
@@ -651,7 +997,12 @@ msgstr ""
 msgid "Radios reported: %s. Status LED: %s. Identity interface: %s."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:250
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:544
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:555
+msgid "Rate"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:268
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:210
 msgid "Rebooting"
 msgstr ""
@@ -664,15 +1015,15 @@ msgstr ""
 msgid "Replace hostapd with the full build and install the missing packages"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:261
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:279
 msgid "Restart"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:263
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:281
 msgid "Restart openUF"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:253
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:271
 msgid "Restore the router configuration and reboot"
 msgstr ""
 
@@ -684,7 +1035,7 @@ msgstr ""
 msgid "SSH account for adoption"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:265
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:283
 msgid "Scan"
 msgstr ""
 
@@ -692,17 +1043,17 @@ msgstr ""
 msgid "Scan for nearby networks every (seconds)"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:267
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:285
 msgid "Scan for nearby networks now"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:266
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:284
 msgid ""
 "Scan requested. openUF sweeps every radio within the next ten seconds and "
 "reports the result to the controller; clients notice a short pause."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:206
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:224
 msgid "Security"
 msgstr ""
 
@@ -710,71 +1061,101 @@ msgstr ""
 msgid "Service"
 msgstr ""
 
-#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:24
+#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:37
 msgid "Settings"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:535
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:554
 msgid "Share this profile"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:321
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:540
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:554
+msgid "Signal"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:156
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:438
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:457
 msgid "Socket"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:332
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:350
 msgid "Software openUF needs"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:548
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:555
+msgid "Standard"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:99
 msgid "Status LED"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:404
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:414
 msgid "Status LED used for Locate"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:450
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:330
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:575
+msgid "Storage"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:469
 msgid "Switch chip"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:453
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:472
 msgid "Switch device"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:443
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:462
 msgid "Switch port label"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:459
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:478
 msgid "Switch port labels"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:372
+msgid "System"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:515
+msgid "TX power"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:177
 msgid "Take an address from the network's DHCP server (recommended)"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:303
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:321
 msgid ""
 "Testing overrides are active in conf.lua (debug_caps or "
 "debug_payload_extra): the device is telling the controller it supports "
 "things it may not. Clear them when the test is done."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:405
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:203
+msgid ""
+"The Halo look for LuCI, matching the device page; installed only on devices "
+"with flash to spare"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:415
 msgid ""
 "The LED the controller's Locate blinks. Pick one nothing else drives; the "
 "ones OpenWrt itself uses at boot or for WiFi activity are marked."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:420
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:439
 msgid ""
 "The OpenWrt network the identity interface belongs to; \"lan\" on a stock "
 "configuration."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:333
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:351
 msgid ""
 "The OpenWrt packages openUF works through, and the hostapd build. The openuf "
 "package brings every one of them in except the hostapd build, which OpenWrt "
@@ -789,7 +1170,7 @@ msgid ""
 "single-radio model."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:423
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:442
 msgid ""
 "The VLAN of the LAN on the switch chip; 1 unless the board tags its CPU port."
 msgstr ""
@@ -801,7 +1182,7 @@ msgid ""
 "notice as a short pause."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:240
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:258
 msgid ""
 "The configuration files backed up when the device was converted are put back "
 "and the services that were enabled then are enabled again, then the device "
@@ -809,7 +1190,7 @@ msgid ""
 "conversion is lost."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:387
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:397
 msgid ""
 "The controller adopts the device under this interface's MAC address, and a "
 "pushed IP setting lands on it. On a board with one interface per socket this "
@@ -817,12 +1198,12 @@ msgid ""
 "the LAN."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:314
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:332
 msgid ""
 "The controller has not sent anything this version of openUF does not handle."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:313
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:331
 msgid ""
 "The controller has sent %d kinds of setting or command that this version of "
 "openUF does not act on. That is normal: openUF records them in %s (passwords "
@@ -834,7 +1215,7 @@ msgstr ""
 msgid "The conversion was refused, nothing was changed:"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:270
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:288
 msgid ""
 "The device forgets its adoption and the controller's address, and the "
 "controller shows it as disconnected until it is adopted again. The device is "
@@ -842,7 +1223,7 @@ msgid ""
 "start."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:251
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:269
 msgid "The device reboots now and comes back as a router."
 msgstr ""
 
@@ -870,7 +1251,7 @@ msgid ""
 "account or by address."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:380
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:390
 msgid ""
 "The name OpenWrt reports for this board (vendor,model). \"Automatic\" "
 "matches shipped profiles by it."
@@ -882,19 +1263,27 @@ msgid ""
 "openUF is restarted. The device needs internet access for this."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:393
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:288
+msgid "The service is not running"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:403
 msgid ""
 "The socket a router uses for its uplink. Listed so it can be reported like "
 "the others; openUF never assumes the cable is in it."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:327
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:345
 msgid ""
 "This OpenWrt device presents itself to a UniFi Network Application as a "
 "Ubiquiti access point. This page refreshes every ten seconds."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:305
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:444
+msgid "This access point"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:323
 msgid "This device"
 msgstr ""
 
@@ -903,6 +1292,14 @@ msgid ""
 "This device has no /etc/config/openuf file yet, so saving here would fail. "
 "Create it once with `touch /etc/config/openuf` (newer installers do this) "
 "and reload this page."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:316
+msgid "This device has no wireless hardware"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:504
+msgid "This device has no wireless radios."
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:291
@@ -929,7 +1326,11 @@ msgid ""
 "be undone from the Overview page."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:414
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:369
+msgid "Throughput"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:429
 msgid ""
 "Tick the radios openUF should present and manage. A radio left out is never "
 "reported and never touched."
@@ -939,11 +1340,17 @@ msgstr ""
 msgid "Troubleshooting"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:256
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:274
 msgid "Turn back into a router"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:239
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:375
+msgid ""
+"Turn off to have the address open LuCI directly, as on any OpenWrt device. "
+"Takes effect on the next page load."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:257
 msgid "Turn this device back into a router?"
 msgstr ""
 
@@ -970,15 +1377,41 @@ msgstr ""
 msgid "UniFi access point (openUF)"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:363
+msgid "UniFi controller"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:280
 msgid "UniFi model to present"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:536
+msgid "Unknown device"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:512
+msgid "Up"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:276
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:282
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:488
+msgid "Uplink"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:495
+msgid "Upload"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:572
+msgid "Uptime"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:178
 msgid "Use a fixed address"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:503
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:522
 msgid ""
 "Used only while \"UniFi model to present\" above is \"Custom identity\". The "
 "model code and firmware version come from Ubiquiti's own firmware catalogue; "
@@ -986,7 +1419,7 @@ msgid ""
 "a \"+\" shows as a permanent \"Update available\"."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:374
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:384
 msgid ""
 "Used only while the hardware profile above is \"Custom profile\". Filled in "
 "from what this board reports about itself (%s, %s); check every line against "
@@ -994,11 +1427,11 @@ msgid ""
 "carries which label, and which LED is free for Locate."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:519
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:538
 msgid "Usually left empty."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:507
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:526
 msgid "Usually the same as the platform code."
 msgstr ""
 
@@ -1006,8 +1439,24 @@ msgstr ""
 msgid "Version"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:392
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:402
 msgid "WAN socket or interface"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:289
+msgid "Waiting for %s"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:289
+msgid "Waiting for a controller"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:372
+msgid ""
+"What a browser sees at this device's address. The device page shows the "
+"access point's state and where it is managed from, with openUF's settings "
+"behind the root password; LuCI is reached from there and offers \"Exit LuCI "
+"mode\" to go back."
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:295
@@ -1024,26 +1473,31 @@ msgid ""
 "of a few seconds and nothing else changes."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:460
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:479
 msgid "Which physical switch port carries which socket label."
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:451
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:470
 msgid ""
 "Which switch device carries the LAN and which of its ports are the CPU "
 "ports. Board truth: read it off the board's stock configuration, not from "
 "guesswork."
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:311
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:316
+msgid "Wi-Fi"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:260
 msgid "WiFi behaviour"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:306
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:324
 msgid "WiFi networks from the controller"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:492
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:511
 msgid "Widest channel width to use"
 msgstr ""
 
@@ -1051,7 +1505,7 @@ msgstr ""
 msgid "Write the controller's messages to a file"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:383
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:393
 msgid "Written as vendor,model"
 msgstr ""
 
@@ -1059,7 +1513,7 @@ msgstr ""
 msgid "a basic build"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:376
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:386
 msgid "a switch chip with a VLAN table"
 msgstr ""
 
@@ -1073,8 +1527,12 @@ msgstr ""
 msgid "all"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:389
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:399
 msgid "bridge"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:496
+msgid "collecting…"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:102
@@ -1099,6 +1557,10 @@ msgstr ""
 msgid "does not start at boot"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:592
+msgid "firmware %s"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:150
 msgid "fixed uplink"
 msgstr ""
@@ -1107,9 +1569,25 @@ msgstr ""
 msgid "for example SE"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:291
+msgid "in touch"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:458
+msgid "joined"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:520
+msgid "joined as a station"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:27
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:18
 msgid "just now"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:496
+msgid "last 5 minutes"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:177
@@ -1127,11 +1605,11 @@ msgstr ""
 msgid "no"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:493
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:512
 msgid "no cap"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:488
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:507
 msgid "no floor"
 msgstr ""
 
@@ -1139,14 +1617,15 @@ msgstr ""
 msgid "no: %s"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:591
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:73
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:89
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:161
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:394
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:404
 msgid "none"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:406
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:416
 msgid "none (Locate does nothing)"
 msgstr ""
 
@@ -1158,6 +1637,7 @@ msgstr ""
 msgid "none resolved"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:590
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:72
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:50
 msgid "none yet"
@@ -1176,20 +1656,37 @@ msgstr ""
 msgid "not from a package"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:516
+msgid "not reported"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:40
 msgid "not running: hostapd is a basic build, see Services → openUF"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:376
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:196
+msgid "not yet: the install button adds it"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:484
+msgid "now"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:458
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:520
+msgid "off"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:386
 msgid "one network interface per socket"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:326
-#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:3
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:344
+#: package/luci-app-openuf/root/usr/share/luci/menu.d/luci-app-openuf.json:16
 msgid "openUF"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:292
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:310
 msgid "openUF cannot start because its configuration does not load:"
 msgstr ""
 
@@ -1197,12 +1694,13 @@ msgstr ""
 msgid "openUF is not answering."
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:588
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:69
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:42
 msgid "openUF is not running"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:298
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:316
 msgid "openUF is not running: hostapd is a basic build (%s)."
 msgstr ""
 
@@ -1210,7 +1708,7 @@ msgstr ""
 msgid "openUF log"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:262
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:280
 msgid ""
 "openUF restarted. The controller sees a pause of a few seconds and nothing "
 "else changes."
@@ -1220,7 +1718,15 @@ msgstr ""
 msgid "openUF settings"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:190
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:288
+msgid "openUF stopped"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:594
+msgid "openUF version"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:208
 msgid ""
 "openUF will not start with a basic hostapd build: it rejects the 802.11v "
 "option every network from the controller carries and takes the radio down "
@@ -1228,8 +1734,17 @@ msgid ""
 "else on the device changes and no extra flash is used."
 msgstr ""
 
+#: package/luci-app-openuf/root/usr/share/rpcd/acl.d/luci-app-openuf-portal.json:3
+msgid "openUF's locked portal: the device's public status, before any login"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:184
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:201
 msgid "optional"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:480
+msgid "peak ↓ %s ↑ %s"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:75
@@ -1240,7 +1755,11 @@ msgstr ""
 msgid "running"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:389
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:198
+msgid "skipped: %d KB free, needs %d KB"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:399
 msgid "socket"
 msgstr ""
 
@@ -1252,7 +1771,7 @@ msgstr ""
 msgid "stopped"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:376
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:386
 msgid "switch layout unknown"
 msgstr ""
 
@@ -1264,7 +1783,7 @@ msgstr ""
 msgid "the basic build"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:410
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:420
 msgid "trigger %s"
 msgstr ""
 
@@ -1272,11 +1791,15 @@ msgstr ""
 msgid "unknown"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:375
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:385
 msgid "unknown board"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:409
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:446
+msgid "up %s"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:419
 msgid "used by %s"
 msgstr ""
 
