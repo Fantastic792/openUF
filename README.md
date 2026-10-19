@@ -58,7 +58,7 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | WiFi Speed Limit | ⚠️ Wire protocol confirmed live (top-level `qos.vap.<m>.*`, joined on devname; kbps). **Per client**, as the UniFi firmware does it (upstream's reading of 4.0.15, adopted 2026-10-18): one queue per station in each direction, upload queued on an IFB device (`kmod-ifb`; policing without it), and the controller's per-client `rate-update` honoured for one association. Needs a speed-limit profile to exist in site settings before the per-WLAN toggle emits anything. No hostapd/OpenWrt option expresses a throughput cap, so it is enforced with `tc` — HTB on egress for downlink, ingress policing for uplink. The generated commands are verified against real `tc`, but the on-air throughput is not (no real radios available). The qdiscs are rebuilt from UCI on every start, so the cap survives a reboot |
 | Roaming Assistant | ✅ Adopted from upstream 2026-09-28, **verified on real hardware there**: a client stuck at −80 dBm on one AP was moved to the other (−61 dBm) and stayed for the 30 min watched. ⚠️ Not yet exercised between AP1 and AP2 here. Per WLAN, 5 GHz (`wireless.<n>.btm_disassoc.*`, needs `wifi_caps2` bit `0x20`). A weak client gets an 802.11v request toward an AP that hears it at least `roam_assist_diff_db` (8) dB louder, then a disassociation with a short ban if it stays; a client with no better AP is left alone. Decided in `roamassist.lua`, not by usteer's device-wide roam trigger; needs `usteer` on every AP for the cross-AP signal table (see USAGE § 6) |
 | Minimum RSSI | ✅ Working — per **radio**, not per WLAN. Since 2026-10-18 it is the firmware's two halves (upstream's reading of 4.0.15): hostapd refuses probes and authentication 3 dB above the threshold, and a client already on is kicked only after 30 s below it, so a weak client no longer loops kick → rejoin (a one-shot kick, not a persistent block). Disabling it in the controller stops the enforcement (the wire signals disable by omitting the whole `stamgr.<n>` block) |
-| Wireless uplink / mesh | ✅ **Working — verified end to end 2026-10-03** on two MT7986 boards against a real UCG Ultra: an AP whose cable is pulled joins a parent's hidden 4-address WDS downlink within ~20 s, keeps its address, informs over the hop, and its VLAN-tagged SSIDs keep reaching their networks; the controller shows the wireless uplink, the parent and the topology hop. UniFi's mesh is 4-address WDS, not 802.11s (PROTOCOL-VALIDATION § Wireless uplink). The station is enabled only while the wired uplink socket has no link, so a wired AP never bridges two uplinks. Claimed (`wifi_caps` `0x1`/`0x800`) by default on DSA boards; swconfig boards are not claimed because their VLAN bridges would not carry a child's tagged traffic. The wire coming back disables the station on the next heartbeat (verified). Not yet exercised: more than one hop |
+| Wireless uplink / mesh | ✅ **Working — verified end to end 2026-10-03** on two MT7986 boards against a real UCG Ultra: an AP whose cable is pulled joins a parent's hidden 4-address WDS downlink within ~20 s, keeps its address, informs over the hop, and its VLAN-tagged SSIDs keep reaching their networks; the controller shows the wireless uplink, the parent and the topology hop. UniFi's mesh is 4-address WDS, not 802.11s (PROTOCOL-VALIDATION § Wireless uplink). The station is enabled only while the wired uplink socket has no link, so a wired AP never bridges two uplinks. Claimed (`wifi_caps` `0x1`/`0x800`) by default on every board. swconfig boards claim it since 2026-10-18: their uplink policy reads the socket's link from the switch, and tagged SSIDs cross the hop through a guarded `br-lan.<vid>` port (USAGE § 6b). First run on one 2026-10-19, a Deco M4R v1 (user, a shallow test): with the cable pulled it came up online over the wireless uplink; the cable coming back and a tagged SSID across the hop are not yet confirmed there. The wire coming back disables the station on the next heartbeat (verified). Not yet exercised: more than one hop |
 | Show Access Point Name in Beacon | ❌ **Not implemented on the OpenWrt side.** The wire protocol and its `wifi_caps2` bit `0x40` gating are confirmed live, and openUF writes `wps_device_name`/`ap_setup_locked` — but a beacon never carries the name. OpenWrt emits the whole WPS/WSC block, `device_name` included, only when `config_methods` is non-empty, which needs `wps_pushbutton` or `wps_label`; openUF sets neither, so WPS never activates. Upstream verified this 2026-09-10 on an Archer C5 and an AX3000T (both 25.12.5): the gate is `/usr/share/ucode/wifi/ap.uc:227`, and no live BSS config carries a single WPS key. Enabling WPS to broadcast a name is a real security surface for a cosmetic feature, so this is left unimplemented deliberately |
 | WLAN Schedule | ⚠️ **Implemented 2026-10-18** from upstream (`wlansched.lua`, confirmed on their hardware, unit-tested here): the controller's on-time blocks (`wireless.<n>.schedule_<day>[.<i>]`, `fw_caps` `0x1000` claimed) are stored per SSID and checked every heartbeat; outside them the SSID's netdev goes down, inside them it comes back with its beacon restarted. Nothing moves until the clock is trusted (a controller answer's time within a minute of the local clock) — the firmware keeps every SSID up until NTP has set the time, and so does this. Previously: Two `fw_caps` bits change that wire format and are deliberately not claimed until the schedule is built: `0x1000` (several time blocks per day as `schedule_<day>.<i>`; without it, blocks collapse onto one key and the last one wins) and `0x400000` (`schedule_invert`; without it the controller inverts the schedule itself). See PROTOCOL-VALIDATION.md § Capability bitmasks |
 | SAE Anti-clogging / SAE Sync Time | ❌ **Not applicable on OpenWrt.** The wire keys (`aaa.<n>.sae.anti_clogging` / `.sae.sync`) are real and emitted only for a genuine WPA3/SAE WLAN, but `sae_anti_clogging_threshold` and `sae_sync` are hostapd keys with **no** wifi-iface UCI option behind them — upstream checked the wifi-iface schema, `/usr/share/ucode/wifi/` and `hostapd.sh`'s `config_add_*` lists on two boards (25.12.5) and found neither. openUF used to write them; UCI stored them and the generator dropped them in silence. Removed, along with the parser fields nothing could consume |
@@ -137,16 +137,24 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   OpenWrt DTS and `board.d`; the header flags what to check first (pin the bridge MAC to the
   label **before adopting** — netifd otherwise follows the bridge's first member, and a per-port
   VLAN push can change that — plus the radio order and the LED name). Presents a **two-socket WiFi 5 identity** —
-  `ufmodel/u7hd.lua`, the UAP-AC-HD — which no controller has adopted under yet; the header says
-  how to fall back to `u6iw`. The USB-C socket is power only on the Deco and "reserved for
-  future use" on the UAP-AC-HD, so nothing is reported for it
+  `ufmodel/u7hd.lua`, the UAP-AC-HD — first adopted by a live controller on a Deco M4R v1
+  (2026-10-18, user); the header says what that left open and how to fall back to `u6iw`. The
+  USB-C socket is power only on the Deco and "reserved for future use" on the UAP-AC-HD, so nothing
+  is reported for it. ⚠️ **Upstream OpenWrt has it in snapshots only**: the M5 reached main on
+  2026-03-25 and is in no release. Release-based images, 24.10.2 to 25.12.5, come from
+  [dutchmillbytes/openwrt](https://github.com/dutchmillbytes/openwrt/releases); they put the label
+  MAC on `lan` instead of `eth0`, which leaves `eth0` random, so the header's pin command copies
+  `br-lan`'s own address and works on both. ⚠️ **No image ships the M5's WiFi board data yet**
+  (`ipq-wifi-tplink_deco-m5`, so far only on that fork's branches): the radios run on the generic
+  IPQ4019 data until one does
 - **TP-Link Deco M4R v1 / v2** (dual-band 802.11n + 802.11ac Wave 2, 2x2, QCA9563 + QCA9886, ath79,
   swconfig) — use `modelmap/deco-m4r-v1.lua`, **one profile for both revisions**: OpenWrt builds the
   v2 from the v1's DTS (same chips, same OEM firmware), so both report `tplink,deco-m4r-v1`. Two
   sockets on one tagged CPU trunk (`0@eth0`), physical ports 3 and 5, and **no WAN role at all** —
-  OpenWrt makes both sockets LAN, so the AP conversion has nothing to move. ⚠️ **Not yet run on the
-  hardware**: derived from the OpenWrt DTS and `board.d`; the header flags what to check first (which
-  hole is physical 3, the radio order, the LED name). 16 MB flash, so a stock image fits. Presents the
+  OpenWrt makes both sockets LAN, so the AP conversion has nothing to move. ⚠️ **Only a first,
+  shallow run on the hardware** (a v1, user: adopted 2026-10-18, meshed with the cable pulled
+  2026-10-19); the profile is derived from the OpenWrt DTS and `board.d`, and the header flags what
+  to check first (which hole is physical 3, the radio order, the LED name). 16 MB flash, so a stock image fits. Presents the
   same **two-socket WiFi 5 identity** as the Deco M5 (`ufmodel/u7hd.lua`), with the same fallback
 - **TP-Link Deco M4R v4** (dual-band 802.11n + 802.11ac Wave 2, 2x2, MT7621 + MT7603 + MT7613,
   ramips / mt7621, DSA) — use `modelmap/deco-m4r-v4.lua`. A different board from the v1/v2 (MediaTek
@@ -184,6 +192,18 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   ⚠️ **Not yet confirmed on the hardware**: derived from the OpenWrt DTS plus the
   JIDU6101 profile, which is the same SoC and the same MT7976 radios. It inherits that
   board’s measured `dev.conf.radio` policy; the header flags what to re-check first
+- **Dynalink DL-WRX36** (dual-band 802.11ax, IPQ8072A / qualcommax-ipq807x) — use
+  `modelmap/dynalink-dl-wrx36.lua`. Presents as a **U6-InWall**, like the JioRouter profiles: WiFi 6
+  on two bands and five sockets, four GbE LAN and a 2.5 GbE WAN. Every socket is its own netdev, so
+  the profile uses the bridge and detects the uplink, as on every DSA board here. OpenWrt main drives
+  the switch as DSA (the PPE driver); 24.10 and 25.12 still use the NSS dataplane, which presents
+  the same five netdevs. ⚠️ **Not yet run on the hardware**: derived from the OpenWrt DTS and
+  `board.d`; the header flags what to check first (the radio order, the reverse of the JioRouters',
+  and the LED name `blue:`). ⚠️ **Pin the bridge MAC before adopting**: `board.d` sets none, so
+  `br-lan` follows `lan1`, and a port VLAN on Port 1 would change the identity; the header has the
+  three commands. It carries the JioRouters' 80 MHz floor on 5 GHz, which answers the U6-InWall's
+  40 MHz default, but not their DFS and 160 MHz limits, which answer a MediaTek driver. NAND flash,
+  so space is a non-issue
 
 Anything else: `modelmap/generic-dualband-ap.lua` or `modelmap/generic-singleband-ap.lua`,
 or let `setup.sh` generate a profile from the running device (DSA boards only, where every
@@ -204,7 +224,7 @@ report the whole LAN, gateway included, as hosts plugged into it:
 | Per-port VLAN assignment | supported (`switch_vlan` sections) | supported (the socket moves into the VLAN's bridge; Native VLAN only) |
 | `dev.conf.vlan` | required | must be **absent** |
 
-The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `ufmodel/u7hd.lua` (UAP-AC-HD, the WiFi 5 ceiling AP with **two** sockets) is selected by the Deco M5 and both Deco M4R profiles for the same reason and to match those boards' socket count; its facts come from the same catalog and it is equally unadopted so far.  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
+The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `ufmodel/u7hd.lua` (UAP-AC-HD, the WiFi 5 ceiling AP with **two** sockets) is selected by the Deco M5 and both Deco M4R profiles for the same reason and to match those boards' socket count; its facts come from the same catalog, and a controller has adopted it once so far, on a Deco M4R v1 (2026-10-18).  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
 
 ## Quick start
 
@@ -308,7 +328,8 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 
 # 2. Download and install (no git client or scp needed). This is the source
 #    tree; install.sh comment-strips it on the way in. A tagged release
-#    (vX.Y.Z) publishes a pre-stripped openuf.tar.gz under Releases instead.
+#    (vX.Y.Z) publishes a pre-stripped openuf-X.Y.Z.tar.gz under Releases
+#    instead; it unpacks to openuf-X.Y.Z/ and installs the same way.
 wget -O openuf-src.tar.gz https://codeload.github.com/yesrab/openUF/tar.gz/main
 tar xzf openuf-src.tar.gz && cd openUF-main
 sh install.sh install

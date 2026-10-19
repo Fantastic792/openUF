@@ -333,16 +333,30 @@ local function dt_string(path)
 	return s
 end
 
+-- The kernel's own rule (drivers/leds/led-core.c, led_compose_name(), read
+-- at v6.12 and v6.18): a label is the name as it stands; otherwise a colour
+-- and/or a function make "<colour>:<function>", either half empty when
+-- absent, with "-<enumerator>" only beside a function; with neither, the
+-- node's own name, without its unit address. A colour alone therefore names
+-- the LED "<colour>:" -- the Dynalink DL-WRX36's two status LEDs are "blue:"
+-- and "red:" -- and a colour id the kernel does not know counts as none.
+-- This used to need both halves, so such an LED never showed as procd's.
 local function dt_led_name(node)
 	local label = dt_string(node .. "/label")
 	if label then return label end
 	local fn = dt_string(node .. "/function")
 	local raw = M._read_file(node .. "/color")
-	if not fn or not raw or #raw < 4 then return nil end
-	local a, b, c, d = raw:byte(1, 4)
-	local colour = DT_COLOURS[((a * 256 + b) * 256 + c) * 256 + d]
-	local name = (colour or "?") .. ":" .. fn
-	local enum = M._read_file(node .. "/function-enumerator")
+	local colour = nil
+	if raw and #raw >= 4 then
+		local a, b, c, d = raw:byte(1, 4)
+		colour = DT_COLOURS[((a * 256 + b) * 256 + c) * 256 + d]
+	end
+	if not (fn or colour) then
+		local base = node:match("([^/]+)$")
+		return base and (base:gsub("@.*$", "")) or nil
+	end
+	local name = (colour or "") .. ":" .. (fn or "")
+	local enum = fn and M._read_file(node .. "/function-enumerator")
 	if enum and #enum >= 4 then
 		local e1, e2, e3, e4 = enum:byte(1, 4)
 		name = name .. "-" .. tostring(((e1 * 256 + e2) * 256 + e3) * 256 + e4)

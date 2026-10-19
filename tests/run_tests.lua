@@ -185,6 +185,7 @@ local test_files = {
 	"tests/test_roamassist.lua",
 	"tests/test_airtime.lua",
 	"tests/test_backhaul.lua",
+	"tests/test_meshvlan.lua",
 	"tests/test_uciconf.lua",
 	"tests/test_probe.lua",
 }

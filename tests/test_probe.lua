@@ -290,10 +290,43 @@ return {
 		end
 	},
 	{
+		name = "probe: discover() names a colour-only LED node as the kernel does, so procd's LEDs show as taken",
+		fn = function()
+			-- The Dynalink DL-WRX36's DTS: two gpio-leds nodes with a colour and
+			-- neither a function nor a label, which the kernel names "blue:" and
+			-- "red:". Both are procd's. A node with none of the three is named
+			-- after itself, unit address dropped.
+			with_device({
+				board = fixture("board_json_dsa.json"), board_name = "dynalink,dl-wrx36\n",
+				leds = {["blue:"] = {trigger = "none"}, ["red:"] = {trigger = "none"},
+					status = {trigger = "none"}},
+				aliases = {["led-boot"] = "/leds/system-red", ["led-failsafe"] = "/leds/system-red",
+					["led-running"] = "/leds/system-blue", ["led-upgrade"] = "/leds/system-red",
+					["led-extra"] = "/leds/status@0"},
+				dt = {["/leds/system-blue"] = {color = 3}, ["/leds/system-red"] = {color = 1},
+					["/leds/status@0"] = {}},
+				net = {["br-lan"] = {mac = "00:00:5e:00:53:50", bridge = true},
+					lan1 = {mac = "00:00:5e:00:53:51", dsa = true}},
+				radios = {}, iw = {},
+			}, function()
+				local d = probe.discover()
+				local by = {}
+				for _, l in ipairs(d.leds) do by[l.name] = l end
+				assert_eq(table.concat(by["blue:"].used_by, ","), "led-running", "blue: is procd's running LED")
+				assert_eq(table.concat(by["red:"].used_by, ","), "led-boot,led-failsafe,led-upgrade",
+					"red: carries boot, failsafe and upgrade")
+				assert_eq(table.concat(by.status.used_by, ","), "led-extra", "no colour, function or label: the node name")
+				assert_nil(d.draft.led, "every LED is taken, so the draft offers none")
+			end)
+		end
+	},
+	{
 		name = "probe: export_modelmap() writes a loadable preset that passes the daemon's own checks",
 		fn = function()
 			local uciconf = dofile("openuf/uciconf.lua")
-			for _, name in ipairs({"archer-c5-v1", "jiorouter-ax6000-jidu6101", "archer-a7-v5"}) do
+			-- dynalink-dl-wrx36: an LED name that ends in its colon ("blue:").
+			for _, name in ipairs({"archer-c5-v1", "jiorouter-ax6000-jidu6101", "archer-a7-v5",
+					"dynalink-dl-wrx36"}) do
 				local dev = dofile("openuf/modelmap/" .. name .. ".lua")
 				local text, filename = probe.export_modelmap(dev)
 				assert_contains(text, "return dev", name .. ": a modelmap file")

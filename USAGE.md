@@ -291,9 +291,10 @@ tar xzf openuf-src.tar.gz && cd openUF-main
 sh install.sh install
 ```
 
-Releases are tagged `vX.Y.Z`; each tag push builds and publishes a pre-stripped
-`openuf.tar.gz` plus its `.sha256` via GitHub Actions under
-`https://github.com/yesrab/openUF/releases`, and those install the same way. If you're
+Releases are tagged `vX.Y.Z`; each one publishes a pre-stripped `openuf-X.Y.Z.tar.gz`
+plus its `.sha256` via GitHub Actions under `https://github.com/yesrab/openUF/releases`.
+It is the archive the OpenWrt package builds from, it unpacks to `openuf-X.Y.Z/`, and it
+installs the same way. If you're
 working from a git checkout instead (e.g. for development), the old transfer-then-install
 flow still works:
 
@@ -360,7 +361,8 @@ openuf-update --check                     # what is installed: build stamp, mode
                                           # identity, last inform, whether the daemons run
 openuf-update                             # fetch main from GitHub and upgrade in place
 openuf-update --ref v1.2.0                # a tag or branch instead
-openuf-update --from /tmp/openuf.tar.gz   # a tarball already on the device
+openuf-update --from /tmp/openuf-X.Y.Z.tar.gz
+                                          # a release archive already on the device
 ```
 
 It backs up `/opt/openuf` and `/etc/openuf` to a tarball in `/tmp`, runs `install.sh
@@ -478,6 +480,10 @@ dev = dofile("modelmap/jiorouter-ax6000-jidu6101.lua")
 
 -- For JioRouter AX6000 JIDU6J01 / 6201 / 6401 / 6601 / 6701 (one map, all five):
 dev = dofile("modelmap/jiorouter-ax6000-jidu6j01.lua")
+
+-- For Dynalink DL-WRX36 (IPQ8072A / qualcommax — five sockets, one netdev each; presents as
+-- a U6-InWall like the JioRouters; pin br-lan's MAC before adopting, see the file's header):
+dev = dofile("modelmap/dynalink-dl-wrx36.lua")
 
 -- For Xiaomi Mi Router AX3000T (MT7981 / filogic — DSA; adopted from upstream):
 dev = dofile("modelmap/xiaomi-ax3000t.lua")
@@ -747,8 +753,9 @@ five sockets and a two-port board reporting either leaves three rows in the cont
 view that never link up.  `platform`/`model` are `U7HD` and `fw.ver` (`6.8.2.15592`) is the
 catalog's release entry for that platform, subject to the same bare-version rule.  The UAP-AC-HD
 also has a USB-C socket Ubiquiti marks "reserved for future use"; no inform field describes it,
-so openUF reports nothing and the controller sees it as it would on a real unit.  ⚠️ Equally
-unadopted so far; the same fallback applies.
+so openUF reports nothing and the controller sees it as it would on a real unit.  ⚠️ Adopted
+once so far, a Deco M4R v1 on 2026-10-18; the port questions in the file's header are still
+open, and the same fallback applies.
 
 ### `/etc/config/openuf` (package installs)
 
@@ -1502,9 +1509,33 @@ downlink is kept out of the L2 hardening rules (a child's tagged frames and BPDU
 design). The per-VLAN bridges need nothing extra on a DSA board: `br-lan.<vid>` sits on top
 of `br-lan`, which is where both backhaul netdevs land.
 
+A swconfig board needs more, and gets it from `meshvlan.lua` (since 2026-10-18; **a tagged
+SSID across the hop is not yet confirmed on hardware**, though the untagged mesh ran on a Deco
+M4R v1 on 2026-10-19, and the guard and the port were checked on an OpenWrt 25.12 kernel in a
+VM, with veth stand-ins for the wired and the wireless port). Its per-VLAN bridge rides `eth0.<vid>`, the CPU trunk's sub-device, which
+reaches the switch and nothing else. So while a mesh is configured, each tagged SSID's bridge
+`br-openuf<vid>` also gets `br-lan.<vid>` as a second uplink, the one DSA has by design. That
+port alone would be a loop: a tagged frame `br-lan` hands to its wired port `eth0.1` leaves
+double-tagged, and the switch puts it back on the wire as an ordinary VLAN frame. So it only
+ever exists behind a guard, nft table `bridge openuf_meshvlan`: a VLAN-tagged frame may enter
+or leave `br-lan` only through a wireless port (`phy*`, `wlan*`, `ath*`), never a wired one.
+The port is runtime state, never UCI. openUF adds it after the guard is in, re-installs the
+guard once a minute, and deletes the port the moment the guard cannot be installed (no
+`kmod-nft-bridge`, say); a reboot clears both and openUF rebuilds them in that order. Learning
+is off on it, so neither uplink keeps the gateway learnt after the device moves between wire
+and air. One limit: a swconfig parent carries a child's tagged traffic only on VLANs it has a
+tagged SSID of its own on, since its switch drops a VLAN it has no entry for.
+
 **The uplink policy** (`backhaul.lua`, one decision per heartbeat) is wired-first. openUF
-remembers which socket the gateway was last seen behind (`state.json`
-`backhaul_wired_port`). When that socket's link goes away for two heartbeats the station is
+remembers which socket the gateway was last seen behind: `state.json` `backhaul_wired_port`
+names the netdev on a DSA board. On a swconfig board, `br-lan` only ever sees the CPU trunk's
+sub-device `eth0.1`, whose link is the internal one and never drops, so the switch is asked
+instead. `backhaul_wired_phys` is the physical switch port its address table has the gateway
+on, and that port's link in `swconfig dev switch0 show` is what counts. When the uplink moves
+between wire and air, a swconfig board also makes its bridges forget what they learnt on
+wired ports, and for a few heartbeats after the wire comes back it flushes the switch's
+address table if that still has the gateway on the CPU port; the CPU link never goes down, so
+the kernel would not clear either. When that socket's link goes away for two heartbeats the station is
 enabled and the radio reloads; while the station is enabled the AP SSIDs on that radio start
 only once it has joined a parent, on the parent's channel — the behaviour of a real mesh
 child. The moment the socket's link is back the station is disabled again. The two uplinks
@@ -1519,12 +1550,29 @@ tagged with the parent's MAC, and the downlink is an entry of usage `downlink` l
 children. The controller then shows the wireless uplink, the parent, the signal and rates,
 and the topology hop; the parent lists the child as a wireless downlink.
 
-**What you need for it:** nothing on a DSA board — openUF claims `wifi_caps` `0x1`/`0x800`
-there, the controller turns the device's mesh-connect flag on by itself, and the push
-carries both entries. On a swconfig board the bits are not claimed: its VLAN bridges sit on
-the CPU port's sub-devices and a child's tagged traffic would not reach them. A parent on a
-DFS channel worked in the lab (channel 100); if a child never associates, check
-`iw dev phy1-sta0 info` says `4addr: on` and compare the two sections' keys.
+**What you need for it:** nothing. openUF claims `wifi_caps` `0x1`/`0x800` on every board,
+the controller turns the device's mesh-connect flag on by itself, and the push carries both
+entries. Verified end to end on DSA boards. swconfig boards claim it since 2026-10-18; the
+first run on one, a Deco M4R v1 on 2026-10-19 (user, shallow), came up online over the
+wireless uplink with its cable pulled. The cable coming back and a tagged SSID across the hop
+are not yet confirmed there. A parent on a DFS channel worked in the lab
+(channel 100); if a child never associates, check `iw dev phy1-sta0 info` says `4addr: on`
+and compare the two sections' keys.
+
+**Checking a swconfig board** (the first M4R v1 run). With the cable in, then pulled:
+
+```sh
+swconfig dev switch0 show | grep -E "^Port|link:"   # the socket's link, and which port the ARL has
+logread | grep -E "backhaul|meshvlan"                # "wired uplink lost on switch port 3 -- enabling"
+iw dev phy0-sta0 info | grep 4addr                   # the 5 GHz radio is phy0 on an M4R; 4addr: on
+grep -E "backhaul_wired_phys|backhaul_mode|meshvlan" /etc/openuf/state.json
+nft list table bridge openuf_meshvlan                # only with a tagged SSID: two drop rules
+ip -d link show br-lan.20                            # vlan id 20, master br-openuf20
+```
+
+A client on a tagged SSID of the child should reach its own network over the hop, and a host
+plugged into the child's other socket should keep working. If the guard is missing,
+`logread` says why and the tagged SSIDs simply do not cross the hop; untagged ones still do.
 
 ## 6c. What the AP does on its own since 2026-10-18
 

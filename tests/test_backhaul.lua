@@ -34,6 +34,63 @@ local function fake_sysinfo(port)
 	}
 end
 
+-- A Deco M4R v1-shaped swconfig board: one CPU trunk (eth0, its LAN as
+-- eth0.1 in br-lan), two sockets on physical switch ports 3 and 5.
+local SWCFG = {
+	net  = {lan_cpueth = "eth0", lan_vlanid = 1,
+		ports = {{idx = 1, swport = "lan1"}, {idx = 2, swport = "lan2"}}},
+	vlan = {device = "switch0", cpu_lan = 0, cpu_wan = 0, ports = {lan1 = 3, lan2 = 5}},
+}
+
+-- sysinfo for a swconfig board. sw.gw is the physical port the ARL has the
+-- gateway on (nil: not learnt), sw.up the switch's per-port link, sw.fdb_port
+-- the LAN bridge port the gateway is learnt behind.
+local function fake_swsysinfo(sw)
+	return {
+		lan_bridge = function() return nil end,   -- the trunk is in no bridge itself
+		bridge_of = function(ifname) if ifname == "eth0.1" then return "br-lan" end end,
+		switch_status = function(dev)
+			sw.status_calls = (sw.status_calls or 0) + 1
+			local ports = {}
+			for n, up in pairs(sw.up) do ports[n] = {up = up} end
+			return {ports = ports, arl = {gw = sw.gw}}
+		end,
+		uplink_phys_port = function(arl) return arl.gw end,
+		uplink_bridge_port = function()
+			sw.fdb_calls = (sw.fdb_calls or 0) + 1
+			return sw.fdb_port
+		end,
+	}
+end
+
+-- Seams for the swconfig tests: sysfs reads from `files`, `ls` from `dirs`,
+-- every write and command recorded.
+local function with_sw_seams(files, dirs, fn)
+	local o = {backhaul._read_file, backhaul._popen, backhaul._log, backhaul._write_file, backhaul._exec}
+	local rec = {writes = {}, cmds = {}, logs = {}}
+	backhaul._read_file = function(path) return files[path] end
+	backhaul._popen = function(cmd)
+		local dir = cmd:match("^ls (%S+)$")
+		return dir and dirs[dir] or ""
+	end
+	backhaul._log = function(msg) rec.logs[#rec.logs + 1] = msg end
+	backhaul._write_file = function(path, v) rec.writes[#rec.writes + 1] = path .. "=" .. v; return true end
+	backhaul._exec = function(cmd) rec.cmds[#rec.cmds + 1] = cmd; return 0 end
+	backhaul._down_ticks = 0
+	backhaul._dirty = false
+	backhaul._arl_heal = 0
+	local ok, err = pcall(fn, rec)
+	backhaul._read_file, backhaul._popen, backhaul._log, backhaul._write_file, backhaul._exec =
+		o[1], o[2], o[3], o[4], o[5]
+	if not ok then error(err, 0) end
+end
+
+local function count(list, pattern)
+	local n = 0
+	for _, v in ipairs(list) do if v:find(pattern) then n = n + 1 end end
+	return n
+end
+
 local function with_seams(carrier_by_port, popen_out, fn)
 	local orig_read, orig_popen, orig_log = backhaul._read_file, backhaul._popen, backhaul._log
 	backhaul._read_file = function(path)
@@ -244,6 +301,142 @@ return {
 			assert_nil(backhaul.child_serialno("phy1-ap1.sta1", {}, {}, si), "no siblings known: nothing")
 			fdb["11:22:33:44:55:60"] = "phy1-ap1.sta1"
 			assert_nil(backhaul.child_serialno("phy1-ap1.sta1", scans, {}, si), "two siblings behind one netdev (multi-hop): refuse to guess")
+		end
+	},
+	{
+		name = "backhaul: lan_bridge() follows a swconfig trunk to the bridge its LAN sub-device sits in",
+		fn = function()
+			local si = fake_swsysinfo({up = {}})
+			assert_eq(backhaul.lan_bridge(SWCFG, si), "br-lan", "eth0 has no master; eth0.1 does")
+			local cfg = {net = {lan_cpueth = "eth0", lan_vlanid = 2}}
+			assert_nil(backhaul.lan_bridge(cfg, si), "the LAN's VLAN id decides which sub-device")
+			local dsa = {lan_bridge = function(i) return i == "br-lan" and "br-lan" or nil end}
+			assert_eq(backhaul.lan_bridge({net = {lan_cpueth = "br-lan"}}, dsa), "br-lan", "DSA: the bridge itself")
+			assert_nil(backhaul.lan_bridge({net = {}}, dsa), "nothing named: nothing")
+		end
+	},
+	{
+		name = "backhaul: tick() on swconfig follows the socket's switch link, not the CPU trunk's always-up carrier",
+		fn = function()
+			local files = {}
+			local dirs = {
+				["/sys/class/net"] = "br-lan\nbr-openuf20\neth0\neth0.1\neth0.20\nbr-lan.20\nphy0-ap0\nphy0-sta0\n",
+				["/sys/class/net/br-lan/brif"] = "eth0.1\nphy0-ap0\nphy0-sta0\n",
+				["/sys/class/net/br-openuf20/brif"] = "eth0.20\nbr-lan.20\nphy0-ap1\n",
+			}
+			with_sw_seams(files, dirs, function(rec)
+				local sw = {gw = 3, up = {[0] = true, [3] = true, [5] = false}, fdb_port = "eth0.1"}
+				local si = fake_swsysinfo(sw)
+				local st = {backhaul_mode = ""}
+				local secs = {{name = "openuf_bh_ul_radio0", radio = "radio0", ssid = MESH.essid, disabled = true}}
+				local uf = fake_ufuci(secs, "phy0-sta0")
+				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wired", "socket 3 has link")
+				assert_eq(st.backhaul_wired_phys, 3, "remembered the switch port the ARL has the gateway on")
+				assert_nil(st.backhaul_wired_port, "not the CPU trunk's sub-device")
+				assert_eq(sw.fdb_calls or 0, 0, "no bridge FDB dump: this board has no socket of its own outside the switch")
+				-- The cable goes. The driver flushes the port's ARL entries; eth0.1 stays up.
+				sw.gw, sw.up[3] = nil, false
+				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wired", "first tick: patience")
+				assert_eq(#uf.calls, 0, "station untouched")
+				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wireless", "second tick: wireless")
+				assert_eq(uf.calls[1], true, "station enabled")
+				assert_eq(st.backhaul_wired_phys, 3, "the socket is still remembered")
+				-- The switch forgot the gateway by itself; the bridges did not:
+				-- every wired port of br-lan and of the VLAN bridge is flushed,
+				-- no wireless one.
+				assert_eq(count(rec.writes, "^/sys/class/net/eth0%.1/brport/flush=1$"), 1, "eth0.1 flushed")
+				assert_eq(count(rec.writes, "^/sys/class/net/eth0%.20/brport/flush=1$"), 1, "eth0.20 flushed")
+				assert_eq(count(rec.writes, "^/sys/class/net/br%-lan%.20/brport/flush=1$"), 1, "br-lan.20 flushed")
+				assert_eq(count(rec.writes, "phy0%-"), 0, "wireless ports keep theirs")
+				-- On the air the ARL has the gateway on the CPU port (flooded in
+				-- from br-lan): not a socket, nothing changes.
+				sw.gw = 0
+				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wireless", "stays wireless")
+				assert_eq(st.backhaul_wired_phys, 3, "the CPU port is never taken for the socket")
+				assert_eq(count(rec.cmds, "flush_arl_table"), 0, "no ARL flush while wireless")
+				-- Cable back in socket 3, the station still up: the ARL still says
+				-- CPU port. Wired at once, and that stale entry is flushed.
+				sw.up[3] = true
+				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wired", "wired again at once")
+				assert_eq(uf.calls[#uf.calls], false, "station disabled")
+				assert_eq(count(rec.cmds, "^swconfig dev switch0 set flush_arl_table"), 1,
+					"the switch's address table flushed: the gateway sat on the CPU port")
+				backhaul.tick(st, SWCFG, uf, si, nil)
+				assert_eq(count(rec.cmds, "flush_arl_table"), 2, "and again while it still does")
+				sw.gw = 3
+				backhaul.tick(st, SWCFG, uf, si, nil)
+				assert_eq(count(rec.cmds, "flush_arl_table"), 2, "not once the gateway is behind the socket")
+				-- Past the window a CPU-port entry is left alone: a board with two
+				-- CPU ports lists the gateway there legitimately.
+				sw.gw = 0
+				for _ = 1, 4 do backhaul.tick(st, SWCFG, uf, si, nil) end
+				assert_eq(count(rec.cmds, "flush_arl_table"), 2, "only in the heartbeats right after the switch")
+				sw.gw = 3
+				-- A cable moved to the other socket is followed, as on DSA.
+				sw.gw, sw.up[5] = 5, true
+				backhaul.tick(st, SWCFG, uf, si, nil)
+				assert_eq(st.backhaul_wired_phys, 5, "socket 5 now")
+			end)
+		end
+	},
+	{
+		name = "backhaul: tick() on swconfig holds when the switch cannot be read",
+		fn = function()
+			with_sw_seams({}, {}, function()
+				local si = fake_swsysinfo({up = {}})   -- no ports: swconfig missing
+				local st = {backhaul_mode = "wired", backhaul_wired_phys = 3}
+				local secs = {{name = "openuf_bh_ul_radio0", radio = "radio0", ssid = MESH.essid, disabled = true}}
+				local uf = fake_ufuci(secs, "phy0-sta0")
+				for _ = 1, 4 do backhaul.tick(st, SWCFG, uf, si, nil) end
+				assert_eq(st.backhaul_mode, "wired", "unknown link is not a lost link")
+				assert_eq(#uf.calls, 0, "station untouched")
+			end)
+		end
+	},
+	{
+		name = "backhaul: tick() on swconfig asks the bridge only about a socket that is a netdev of its own",
+		fn = function()
+			-- TL-WDR3500 shape: four switch sockets and a WAN PHY outside the switch.
+			local cfg = {
+				net  = {lan_cpueth = "eth0", ports = {{idx = 1, swport = "lan1"}, {idx = 5, ifname = "eth1"}}},
+				vlan = {device = "switch0", cpu_lan = 0, cpu_wan = 0, ports = {lan1 = 1}},
+			}
+			local files = {["/sys/class/net/eth1/operstate"] = "up\n"}
+			with_sw_seams(files, {}, function()
+				local sw = {gw = 0, up = {[0] = true, [1] = false}, fdb_port = "eth1"}
+				local si = fake_swsysinfo(sw)
+				local st = {backhaul_mode = ""}
+				local secs = {{name = "openuf_bh_ul_radio0", radio = "radio0", ssid = MESH.essid, disabled = true}}
+				local uf = fake_ufuci(secs, "phy0-sta0")
+				assert_eq(backhaul.tick(st, cfg, uf, si, nil), "wired", "eth1 has carrier")
+				assert_eq(st.backhaul_wired_port, "eth1", "the own-PHY socket, from the bridge")
+				assert_nil(st.backhaul_wired_phys, "no switch port")
+				-- The CPU trunk's sub-device is never a socket.
+				local st2 = {backhaul_mode = ""}
+				sw.fdb_port = "eth0.1"
+				backhaul.tick(st2, cfg, uf, si, nil)
+				assert_nil(st2.backhaul_wired_port, "eth0.1 refused")
+				-- Gateway behind switch socket 1 now: the switch wins, the netdev is forgotten.
+				sw.gw, sw.up[1] = 1, true
+				backhaul.tick(st, cfg, uf, si, nil)
+				assert_eq(st.backhaul_wired_phys, 1, "switch socket")
+				assert_nil(st.backhaul_wired_port, "one remembered uplink at a time")
+			end)
+		end
+	},
+	{
+		name = "backhaul: child_serialno() finds a swconfig parent's LAN bridge through the trunk's sub-device",
+		fn = function()
+			local scans = {{name = "radio0", scan_table = {
+				{bssid = "ac:10:07:6f:c6:71", is_unifi = true, serialno = "ac:10:07:6f:c6:70"},
+			}}}
+			local si = fake_swsysinfo({up = {}})
+			si.bridge_fdb_ports = function(br)
+				assert_eq(br, "br-lan", "asked of the LAN bridge")
+				return {["ac:10:07:6f:c6:70"] = "phy0-ap1.sta1"}
+			end
+			assert_eq(backhaul.child_serialno("phy0-ap1.sta1", scans, SWCFG, si), "ac:10:07:6f:c6:70",
+				"the child behind the WDS netdev")
 		end
 	},
 }

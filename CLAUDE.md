@@ -239,8 +239,8 @@ Then set:
   choice -- the controller then offers 802.11ac modes instead of HE ones the hardware
   cannot run -- but it is unvalidated until a controller adopts under it. The
   `archer-a7-v5` map is the first to use it, and names `u6iw` as the fallback. `"u7hd"` (UAP-AC-HD)
-  is the WiFi 5 choice for a TWO-socket board -- both in-wall identities carry five -- and is
-  equally unvalidated; the `deco-m5` and both `deco-m4r` maps use it.
+  is the WiFi 5 choice for a TWO-socket board -- both in-wall identities carry five -- and has
+  been adopted once, on a Deco M4R v1 (2026-10-18); the `deco-m5` and both `deco-m4r` maps use it.
 
 ### 3. `lan_cpueth` decides the device's IDENTITY
 
@@ -800,6 +800,19 @@ factory reset.
   client cannot measure a 5 GHz class at all.
 - **WPA-Enterprise is unsupported and skipped**, not mis-provisioned: the wire protocol
   carries no RADIUS server, port or secret.
+- **On swconfig, mesh is two problems DSA does not have** (since 2026-10-18; first run on a
+  Deco M4R v1 on 2026-10-19: untagged, online over the air with the cable pulled). (1)
+  `br-lan`'s wired port is the CPU trunk's sub-device, whose carrier never
+  drops: the uplink policy must read the socket's link from the switch
+  (`st.backhaul_wired_phys`, `backhaul.tick`), and on a switch between wire and air the
+  bridges are flushed by hand. (2) The VLAN bridges ride `eth0.<vid>`, so a tagged SSID
+  needs `br-lan.<vid>` as a second uplink over the hop -- and that port next to `eth0.1` is
+  a loop (`br-lan` -> `eth0.1` double-tags, the switch strips the outer tag onto the
+  uplink). `meshvlan.lua` therefore keeps it runtime-only and strictly behind nft `bridge
+  openuf_meshvlan` (802.1Q in or out of `br-lan` through wireless ports only): guard in
+  before the port, port out before the guard, one atomic `nft -f` (not `util.nft_apply`,
+  whose fallback deletes the table first). Never move that port into UCI: netifd would
+  bring it up at boot, before any guard exists.
 
 ---
 
@@ -894,6 +907,10 @@ openuf/
                     /etc/crontabs/root (allow-listed commands only: `syswrapper.sh 11k-scan`)
   l2guard.lua       the ebtables.* block as nft `bridge openuf_l2guard`: BPDU and 802.1Q
                     drop on the AP VAPs only; intent + names in state.json for the reboot
+  backhaul.lua      the mesh (wireless uplink): plan of the WDS downlink/uplink sections,
+                    the wired-first policy (switch port link on swconfig), the `uplink` report
+  meshvlan.lua      swconfig only: a tagged SSID's VLAN over the mesh hop, as a runtime
+                    `br-lan.<vid>` port behind nft `bridge openuf_meshvlan`
   state.lua         /etc/openuf/state.json (authkey, adopted, cfgversion, inform_url)
   lib/lib.lua       globals every script expects; wraps `bit` so the same source runs
                     on the device's Lua 5.1 (luabitop) and a 5.3+ dev interpreter

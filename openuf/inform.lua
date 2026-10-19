@@ -51,6 +51,7 @@ local l2guard   = _require_sibling("l2guard")
 local roamassist = _require_sibling("roamassist")
 local airtime   = _require_sibling("airtime")
 local backhaul  = _require_sibling("backhaul")
+local meshvlan  = _require_sibling("meshvlan")
 local assoctrack = _require_sibling("assoctrack")
 local satisfaction = _require_sibling("satisfaction")
 local minrssi   = _require_sibling("minrssi")
@@ -93,6 +94,7 @@ M._l2guard    = l2guard
 M._roamassist = roamassist
 M._airtime    = airtime
 M._backhaul   = backhaul
+M._meshvlan   = meshvlan
 M._assoctrack = assoctrack
 M._satisfaction = satisfaction
 M._stun      = stun
@@ -2073,10 +2075,11 @@ function M.build_json(st, cfg, ufhw)
 		-- 0x1 the controller silently drops a device's mesh-connect flag, with
 		-- 0x1+0x800 its push carries the hidden WDS downlink and the 4-address
 		-- uplink station that backhaul.lua provisions (PROTOCOL-VALIDATION.md
-		-- § Wireless uplink; verified end to end 2026-10-03). Claimed only on
-		-- DSA boards: the per-VLAN bridges there ride `br-lan.<vid>`, which is
-		-- what carries a child's tagged traffic over the hop; a swconfig board's
-		-- VLAN bridges sit on the CPU port's sub-devices and would not.
+		-- § Wireless uplink; verified end to end 2026-10-03 on DSA). Claimed on
+		-- swconfig boards too since 2026-10-18 (first run 2026-10-19, an M4R v1): the uplink
+		-- policy reads the socket's link from the switch (backhaul.tick), and a
+		-- tagged SSID's VLAN crosses the hop through meshvlan.lua's guarded
+		-- `br-lan.<vid>` port, which DSA's per-VLAN bridges have by design.
 		-- Bit 0x10 (RF_SCAN) is the Airtime Scan: the frontend shows the
 		-- button only with it, and the device's share is the `spectrum-scan`
 		-- cmd below -- a forced sweep and the survey counters, which this
@@ -2084,7 +2087,7 @@ function M.build_json(st, cfg, ufhw)
 		wifi_caps        = (dbg_caps and tonumber(dbg_caps.wifi_caps))
 			or (0x1C + ((M._airtime and M._airtime.supported()) and 0x20 or 0)
 				+ ((M._sysinfo.ppsk_supported and M._sysinfo.ppsk_supported()) and 0x100000 or 0)
-				+ ((M._backhaul and not (cfg and cfg.vlan)) and 0x801 or 0)),
+				+ (M._backhaul and 0x801 or 0)),
 		-- Bit 0x40 (64): Device.supportAdvertisingDeviceNameInBeacon() in the
 		-- decompiled controller is exactly hasWifiCapability2(64) -- i.e. bit
 		-- 6 of a SECOND capability bitmask, wifi_caps2, entirely separate
@@ -3772,17 +3775,7 @@ function M.handle_response(json_str, st, cfg)
 					-- frames for a VID it has no entry for, so these need
 					-- trunking whether or not per-port VLAN is in use.
 					-- A private pre-shared key's VLAN counts the same.
-					local wireless_vlans, seen = {}, {}
-					for _, vap in ipairs(vap_table or {}) do
-						local vids = (ufuci and ufuci.vap_vlan_ids) and ufuci.vap_vlan_ids(vap)
-							or ((vap.vlan_enabled and vap.vlan) and {vap.vlan} or {})
-						for _, vid in ipairs(vids) do
-							if not seen[vid] then
-								seen[vid] = true
-								wireless_vlans[#wireless_vlans + 1] = vid
-							end
-						end
-					end
+					local wireless_vlans = M._wireless_vlans(vap_table)
 					-- Which socket the uplink cable is in, so a pushed port
 					-- VLAN can never be applied to it (see physical_port).
 					-- Asked of whichever source this board has: the switch's
@@ -3790,7 +3783,8 @@ function M.handle_response(json_str, st, cfg)
 					local uplink_phys, uplink_ifname = nil, nil
 					if cfg and cfg.vlan and cfg.vlan.ports then
 						local swst = M._sysinfo.switch_status(cfg.vlan.device)
-						uplink_phys = M._sysinfo.uplink_phys_port(swst.arl)
+						uplink_phys = M._mesh_uplink_phys(st, cfg,
+							M._sysinfo.uplink_phys_port(swst.arl))
 					else
 						uplink_ifname = dsa_uplink_port()
 					end
@@ -3856,6 +3850,20 @@ function M.handle_response(json_str, st, cfg)
 					-- cannot notice on its own.
 					if M._sysinfo.forget_uplink_cache then M._sysinfo.forget_uplink_cache() end
 				end)
+			end
+
+			-- A tagged SSID's VLAN over the mesh hop on a swconfig board
+			-- (meshvlan.lua). Decided only by a push that carried the WiFi
+			-- config -- the gate apply_config runs under, and the only push
+			-- that says whether there is a mesh at all -- so a partial push
+			-- never tears it down. After the WiFi pass, whose network reload
+			-- builds the VLAN bridges the ports go into.
+			if M._meshvlan and (#radio_table > 0 or #vap_table > 0) then
+				local ok_mv, err_mv = pcall(M._meshvlan_push, st, cfg, backhaul_plan,
+					M._wireless_vlans(vap_table))
+				if not ok_mv then
+					io.stderr:write("inform: meshvlan: " .. tostring(err_mv) .. "\n")
+				end
 			end
 
 			-- Controller-managed system settings: timezone, NTP servers and
@@ -4481,6 +4489,10 @@ end
 function M._forget_controller(prev, cfg)
 	prev = prev or {}
 	M._controller_interval = nil
+	-- Before anything else moves: the mesh VLAN ports, then their guard.
+	if M._meshvlan and type(prev.meshvlan) == "table" then
+		pcall(M._meshvlan.reconcile, nil, prev.meshvlan)
+	end
 	if M._switchvlan then pcall(M._switchvlan.restore, prev, cfg) end
 	if M._usteer then pcall(M._usteer.set_enabled, false, cfg, false) end
 	if M._ucihelper and M._ucihelper.forget then
@@ -4760,6 +4772,86 @@ M._l2guard_next = 0
 function M._backhaul_tick(st, cfg)
 	if not (M._backhaul and M._backhaul.tick) then return nil end
 	return M._backhaul.tick(st, cfg, M._ucihelper, M._sysinfo, M._state)
+end
+
+-- The VLANs a push's tagged SSIDs sit on, each once, in push order: the
+-- switch trunks them (switchvlan) and, on a swconfig mesh, meshvlan carries
+-- them over the hop. A private pre-shared key's VLAN counts the same.
+function M._wireless_vlans(vap_table)
+	local ufuci = M._ucihelper
+	local out, seen = {}, {}
+	for _, vap in ipairs(vap_table or {}) do
+		local vids = (ufuci and ufuci.vap_vlan_ids) and ufuci.vap_vlan_ids(vap)
+			or ((vap.vlan_enabled and vap.vlan) and {vap.vlan} or {})
+		for _, vid in ipairs(vids) do
+			if not seen[vid] then
+				seen[vid] = true
+				out[#out + 1] = vid
+			end
+		end
+	end
+	return out
+end
+
+-- The uplink socket a swconfig push should plan around. While the mesh
+-- station carries the uplink, the switch's ARL has the gateway on a CPU port:
+-- its frames arrive over the air and br-lan floods them into the switch.
+-- Taken at its word, a push handled then would trunk the tagged SSIDs' VLANs
+-- to no socket -- dead on the wire the moment the cable is back, until some
+-- later push -- and would accept a port VLAN on the very socket the wire
+-- returns to, stranding the device when it does. So the socket the uplink
+-- policy remembers (backhaul.tick) stands in for the CPU port. Only for a
+-- CPU port, which is positive evidence of the air path: a gateway learnt
+-- nowhere keeps today's answer (hold the trunk, refuse every port), since a
+-- stale mode must never steer a port VLAN onto the socket the cable is
+-- really in. Anything else is the live answer, unchanged.
+function M._mesh_uplink_phys(st, cfg, live)
+	if not (st and st.backhaul_mode == "wireless") then return live end
+	local remembered = tonumber(st.backhaul_wired_phys)
+	local n = tonumber(live)
+	if not (remembered and n) then return live end
+	local vlan = cfg and cfg.vlan or {}
+	if n == tonumber(vlan.cpu_lan) or n == tonumber(vlan.cpu_wan) then return remembered end
+	return live
+end
+
+-- A push's answer to "which VLANs ride br-lan.<vid>" on a swconfig board
+-- (meshvlan.lua): st.meshvlan, saved with the rest of the push, and the
+-- kernel brought to it -- guard first, ports after; ports first, guard after
+-- on the way out. Wanted only with a mesh plan and a tagged SSID; a DSA
+-- board's VLAN bridges have the port by design and never get a record.
+function M._meshvlan_push(st, cfg, plan, vids)
+	local prev = st.meshvlan
+	local rec = nil
+	if plan and cfg and cfg.vlan and cfg.vlan.ports and #(vids or {}) > 0 then
+		local br = M._backhaul and M._backhaul.lan_bridge
+			and M._backhaul.lan_bridge(cfg, M._sysinfo) or nil
+		if br then
+			rec = M._meshvlan.record(br, vids)
+		else
+			io.stderr:write("inform: meshvlan: cannot tell which bridge is the LAN -- tagged "
+				.. "SSIDs are not carried over the mesh hop\n")
+		end
+	end
+	if rec == nil and prev == nil then return false end
+	st.meshvlan = rec
+	M._meshvlan.reconcile(rec, prev)
+	return true
+end
+
+-- Once a heartbeat, and at startup: the guard back once a minute, any port a
+-- netifd reload took away re-attached. A record on a board that is no longer
+-- swconfig (the profile was changed) is torn down instead.
+function M._meshvlan_resync(st, cfg)
+	local rec = st and st.meshvlan
+	if not (M._meshvlan and type(rec) == "table") then return false end
+	if not (cfg and cfg.vlan and cfg.vlan.ports) then
+		M._meshvlan.reconcile(nil, rec)
+		st.meshvlan = nil
+		M._state.save(st)
+		return false
+	end
+	return M._meshvlan.resync(rec, M._time())
 end
 
 function M._l2guard_resync(st)
@@ -5707,6 +5799,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._rrm_tick, cfg, st)
 	pcall(M._l2guard_resync, st)
 	pcall(M._backhaul_tick, st, cfg)
+	pcall(M._meshvlan_resync, st, cfg)
 	pcall(M._hairpin_resync)
 	pcall(M._usteer_filter_resync)
 	pcall(M._block_resync, st)
@@ -5926,6 +6019,10 @@ function M.run(cfg, ufhw)
 			M._l2guard.reconcile(st.l2guard, names)
 		end)
 	end
+	-- So are the mesh VLAN ports and their guard (meshvlan.lua): guard first,
+	-- ports after, from state.json's record. A VLAN bridge netifd has not
+	-- built yet gets its port on a later heartbeat.
+	pcall(M._meshvlan_resync, st, cfg)
 
 	local socket = require("socket")
 	local ctx = {

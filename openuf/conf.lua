@@ -20,6 +20,7 @@
 	  deco-m4r-v4.lua                    TP-Link Deco M4R v4 (DSA, 2-band, 2 sockets named eth0/eth1; ⚠️ unverified)
 	  jiorouter-ax6000-jidu6101.lua      JioRouter AX6000       (DSA, 2-band)
 	  jiorouter-ax6000-jidu6j01.lua      JioRouter AX6000 J-fam (DSA, 2-band)
+	  dynalink-dl-wrx36.lua              Dynalink DL-WRX36      (DSA, 2-band, 5 sockets; ⚠️ unverified)
 	  xiaomi-ax3000t.lua                 Xiaomi Mi Router AX3000T (DSA, 2-band)
 	  generic-dualband-ap.lua            any other dual-band swconfig board
 	  generic-singleband-ap.lua          any other single-band swconfig board
@@ -40,7 +41,7 @@
 	  uhdiw.lua — presents as UAP-IW-HD (UHDIW), the WiFi 5 in-wall with the
 	              same five sockets ← the Archer A7/C7 map; ⚠️ not yet adopted
 	  u7hd.lua  — presents as UAP-AC-HD (U7HD), the WiFi 5 ceiling AP with
-	              two sockets ← the Deco M5 and M4R maps; ⚠️ not yet adopted
+	              two sockets ← the Deco M5 and M4R maps; ⚠️ adopted once (M4R v1)
 	  uapg1.lua — presents as UAP Gen1
 	  uapg2-ac-lr.lua — presents as UAP-AC-LR
 

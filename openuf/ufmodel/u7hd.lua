@@ -34,8 +34,12 @@
 	2x2 U6-InWall the other way round and nothing objects -- so the mismatch
 	only ever shows as "less than a UAP-AC-HD could do".
 
-	⚠️ NOT yet validated against a live controller; u6iw is. What the
-	controller checks is sourced, and what it does not is marked as such:
+	⚠️ Adopted by a live controller once so far; u6iw is the identity
+	validated end to end. The one: a Deco M4R v1 (user), listed by the
+	controller as a UAP-AC-HD on 2026-10-18, with its mesh setting offered,
+	and online over a mesh hop on 2026-10-19. Nothing from that run speaks
+	to the port questions below yet. What the controller checks is
+	sourced, and what it does not is marked as such:
 	  • model / platform "U7HD": the controller's own firmware catalog files
 	    this AP under that code --
 	      fw-update.ubnt.com/api/firmware-latest?filter=eq~~product~~unifi-firmware
@@ -67,9 +71,10 @@
 	    at all (Device.isSwitch(); PROTOCOL-VALIDATION.md, "port_table[]
 	    entry"). A real UAP-AC-HD bridges wired hosts on its Secondary socket
 	    and the controller lists them under the AP, which is what the
-	    registry has to encode for that to work -- the first adoption under
-	    this identity settles it. If a controller balks, the fallback is one
-	    line in the modelmap: ufmodel = "u6iw". The map keeps reporting its
+	    registry has to encode for that to work -- an adoption under this
+	    identity with a wired host on that socket settles it. If a
+	    controller balks, the fallback is one line in the modelmap:
+	    ufmodel = "u6iw". The map keeps reporting its
 	    two real sockets; the registry's three extra rows simply never link
 	    up, as the Xiaomi AX3000T map already lives with for four.
 ]]--

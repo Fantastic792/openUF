@@ -634,4 +634,51 @@ return {
 			assert_eq(#dev.openuf.uap.hwassign, 2, "both radios reported")
 		end
 	},
+	{
+		name = "modelmap: dynalink-dl-wrx36 pins the five-socket IPQ8072A board in the netdev shape",
+		fn = function()
+			-- Board-specific regression guard, from the OpenWrt tree rather
+			-- than a live unit (none has run openUF yet). The DTS labels its
+			-- switch ports lan4, lan3, lan2, lan1 (ports 1-4) and wan (port
+			-- 6); OpenWrt main drives them as DSA user ports, 24.10/25.12 as
+			-- nss-dp netdevs of the same names, and board.d gives
+			-- ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" "wan".
+			local dev = dofile(MODELMAP_DIR .. "/dynalink-dl-wrx36.lua")
+
+			assert_eq(#dev.openwrt_boards, 1, "exactly one compatible string")
+			assert_eq(dev.openwrt_boards[1], "dynalink,dl-wrx36", "the DTS compatible")
+
+			-- The netdev shape: the bridge is the identity / trunk netdev, the
+			-- uplink is measured, and there is no swconfig map.
+			assert_eq(dev.conf.net.lan_cpueth, "br-lan", "the LAN bridge, per the DSA rule")
+			assert_eq(dev.conf.net.uplink_detect, "fdb", "uplink is detected, never declared")
+			assert_nil(dev.conf.vlan, "no swconfig port map")
+			assert_eq(dev.conf.net.wan_cpueth, "wan", "OpenWrt's WAN role is the socket wan")
+
+			local ports = dev.conf.net.ports
+			assert_eq(#ports, 5, "one port per socket: four LAN and the 2.5G WAN")
+			local names = {}
+			for _, p in ipairs(ports) do
+				assert_nil(p.uplink, "port " .. p.idx .. " is not statically flagged uplink")
+				assert_nil(p.swport, "port " .. p.idx .. " carries no swconfig port")
+				names[#names + 1] = p.ifname
+			end
+			table.sort(names)
+			assert_eq(table.concat(names, ","), "lan1,lan2,lan3,lan4,wan", "every socket once")
+
+			-- The running LED, named by colour alone: the nodes lost their
+			-- "blue:system" label in 2e659930d3 and have no function, so the
+			-- kernel calls them "blue:" and "red:".
+			assert_eq(dev.conf.led, "blue:", "procd's running channel, by its colour-only name")
+
+			-- The identity's width floor, not a hardware measurement; the
+			-- mt7915-specific DFS and 160 MHz answers stay with the JioRouters.
+			assert_eq(dev.conf.radio.na.htmode_floor, "HE80", "the U6IW 40 MHz default raised")
+			assert_nil(dev.conf.radio.na.acs_exclude_dfs, "no DFS exclusion without evidence on ath11k")
+			assert_nil(dev.conf.radio.na.htmode_max, "no ceiling without evidence")
+
+			assert_eq(dev.openuf.uap.ufmodel, "u6iw", "presents as a U6-InWall, as the JioRouters do")
+			assert_eq(#dev.openuf.uap.hwassign, 2, "both radios reported")
+		end
+	},
 }

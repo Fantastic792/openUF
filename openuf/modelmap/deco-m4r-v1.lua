@@ -1,7 +1,9 @@
 --[[
 	TP-Link Deco M4R v1 / v2 hardware profile.
 
-	⚠️  NOT verified on real hardware -- openUF has never run on a Deco M4R.
+	⚠️  Only a first, shallow run on real hardware: a v1, adopted as a
+	UAP-AC-HD on 2026-10-18 and meshed on 2026-10-19 (user). None of the
+	per-fact checks below was part of it, so they stand as written.
 	Everything below is read from the OpenWrt source tree (ath79/generic,
 	kernel 6.18, read 2026-10-18), each fact with the file it came from so it
 	can be re-checked:
@@ -48,6 +50,15 @@
 	measured the PCIe ath10k first. Nothing here depends on it: band is read
 	from each radio's own UCI `band`/`hwmode`. Check `uci show wireless` on
 	the first unit anyway.
+
+	Mesh (wireless uplink): claimed here as on every board since 2026-10-18,
+	and the first swconfig board to run it. First run 2026-10-19 (user, a
+	shallow test on a v1): with the cable pulled the device came up online
+	over the wireless uplink, so the 4-address station on the 5 GHz radio
+	(ath10k-ct, QCA9888) works, and the uplink policy reads socket 3/5's
+	link from the switch rather than eth0.1's, as intended. Not yet tried:
+	the cable coming back, a tagged SSID across the hop. USAGE.md § 6b lists
+	what to look at.
 
 	Presented to the controller as a UAP-AC-HD (ufmodel/u7hd.lua): WiFi 5
 	like this hardware, TWO ethernet sockets like this hardware. That

@@ -25,6 +25,10 @@ inform._l2guard = {reconcile = function() return 0 end,
 	parse = function() return nil end, spec_from = function() return {} end}
 inform._sysconf = {parse = function() return nil end, apply = function() return {} end,
 	apply_cron = function() return false end}
+-- And the mesh VLAN guard and ports (nft, ip link); the tests that exercise
+-- them install their own.
+inform._meshvlan = {record = function() return nil end, reconcile = function() return true end,
+	resync = function() return true end}
 
 -- Deterministic IV for the TEST FILE's own crypto instance -- affects only
 -- tests that call crypto.* directly (e.g. the zlib round-trip). inform's
@@ -6626,6 +6630,117 @@ return {
 			inform._usteer_filter_built = orig.us_built
 			inform._ucihelper = orig.ucihelper
 			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: _mesh_uplink_phys keeps the socket the wire left from while the mesh station is the uplink",
+		fn = function()
+			local cfg = {vlan = {cpu_lan = 0, cpu_wan = 6, ports = {lan1 = 3, lan2 = 5}}}
+			local air = {backhaul_mode = "wireless", backhaul_wired_phys = 3}
+			assert_eq(inform._mesh_uplink_phys(air, cfg, 0), 3, "gateway on the CPU port while wireless: the remembered socket")
+			assert_eq(inform._mesh_uplink_phys(air, cfg, 6), 3, "either CPU port")
+			assert_nil(inform._mesh_uplink_phys(air, cfg, nil),
+				"nothing learnt: today's answer (hold the trunk, refuse every port), never a guess")
+			assert_eq(inform._mesh_uplink_phys(air, cfg, 5), 5, "a socket seen: the cable is back, live answer")
+			assert_eq(inform._mesh_uplink_phys({backhaul_mode = "wired", backhaul_wired_phys = 3}, cfg, 0), 0,
+				"wired: always the live answer")
+			assert_nil(inform._mesh_uplink_phys({backhaul_mode = "wireless"}, cfg, nil), "nothing remembered: live")
+			assert_eq(inform._mesh_uplink_phys({}, cfg, 0), 0, "no mesh: unchanged, CPU port and all")
+		end
+	},
+	{
+		name = "inform: a swconfig push with a mesh and a tagged SSID carries the VLAN over the hop; no mesh takes it back; DSA never",
+		fn = function()
+			local st = sample_state()
+			local real_mv = dofile("openuf/meshvlan.lua")
+			local orig = {uci = inform._ucihelper, sw = inform._switchvlan, mv = inform._meshvlan,
+				lb = inform._backhaul.lan_bridge, usteer = inform._usteer.set_enabled, stderr = io.stderr,
+				ss = inform._sysinfo.switch_status, up = inform._sysinfo.uplink_phys_port}
+			io.stderr = {write = function() end}
+			local calls = {}
+			inform._meshvlan = {record = real_mv.record,
+				reconcile = function(rec, prev) calls[#calls + 1] = {rec = rec, prev = prev}; return true end,
+				resync = function() return true end}
+			inform._ucihelper = {apply_config = function() end}
+			inform._switchvlan = {apply = function() end, restore = function() end}
+			inform._backhaul.lan_bridge = function() return "br-lan" end
+			inform._usteer.set_enabled = function() end
+			inform._sysinfo.switch_status = function() return {ports = {}, arl = {}} end
+			inform._sysinfo.uplink_phys_port = function() return nil end
+			local cfg = {net = {lan_cpueth = "eth0", lan_vlanid = 1, ports = {{idx = 1, swport = "lan1"}}},
+				vlan = {device = "switch0", cpu_lan = 0, cpu_wan = 0, ports = {lan1 = 3}}}
+			local wifi = "aaa.1.ssid=iot\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\naaa.1.wpa.psk=basepass123\n"
+				.. "aaa.1.br.devname=br0.20\n"
+				.. "wireless.1.ssid=iot\nwireless.1.parent=radio0\nwireless.1.mode=master\nwireless.1.usage=user\n"
+				.. "aaa.3.ssid=vwire-5f3369181f7fbab5\naaa.3.wpa=2\naaa.3.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "aaa.3.wpa.psk=backhaulsecret\naaa.3.hide_ssid=true\n"
+				.. "wireless.3.ssid=vwire-5f3369181f7fbab5\nwireless.3.parent=radio0\n"
+				.. "wireless.3.mode=master\nwireless.3.usage=downlink\nwireless.3.wds=enabled\n"
+			local mesh_on = "mesh.status=enabled\nmesh.version=3\nmesh.essid=vwire-5f3369181f7fbab5\n"
+				.. "mesh.psk=0123456789abcdef0123456789abcdef\n"
+			local function push(sys, c)
+				inform.handle_response(('{"_type":"setparam","system_cfg":"%s"}'):format(sys:gsub("\n", "\\n")),
+					st, c or cfg)
+			end
+			local ok, err = pcall(function()
+				push(wifi .. mesh_on)
+				assert_eq(#calls, 1, "reconciled once")
+				assert_eq(calls[1].rec.bridge, "br-lan", "on the LAN bridge")
+				assert_eq(table.concat(calls[1].rec.vids, ","), "20", "the tagged SSID's VLAN")
+				assert_nil(calls[1].prev, "nothing before")
+				assert_eq(st.meshvlan, calls[1].rec, "recorded for the startup rebuild")
+				push("netconf.1.ip=172.19.0.2\n")
+				assert_eq(#calls, 1, "a push without the WiFi config leaves it alone")
+				push(wifi .. "mesh.status=disabled\n")
+				assert_eq(#calls, 2, "mesh off: reconciled again")
+				assert_nil(calls[2].rec, "nothing wanted")
+				assert_eq(calls[2].prev.vids[1], 20, "the ports of the previous record go")
+				assert_nil(st.meshvlan, "and the record")
+				push(wifi .. "mesh.status=disabled\n")
+				assert_eq(#calls, 2, "nothing before, nothing now: not even a reconcile")
+				push(wifi .. mesh_on, {net = {lan_cpueth = "br-lan", uplink_detect = "fdb"}})
+				assert_eq(#calls, 2, "a DSA board's VLAN bridges have the port by design")
+				assert_nil(st.meshvlan, "no record there")
+			end)
+			inform._ucihelper, inform._switchvlan, inform._meshvlan = orig.uci, orig.sw, orig.mv
+			inform._backhaul.lan_bridge, inform._usteer.set_enabled, io.stderr = orig.lb, orig.usteer, orig.stderr
+			inform._sysinfo.switch_status, inform._sysinfo.uplink_phys_port = orig.ss, orig.up
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: _meshvlan_resync keeps a swconfig record alive and tears it down once the profile is not swconfig",
+		fn = function()
+			local orig = {mv = inform._meshvlan, save = inform._state.save}
+			local seen = {}
+			inform._meshvlan = {resync = function(rec) seen[#seen + 1] = "resync"; return true end,
+				reconcile = function(rec, prev) seen[#seen + 1] = rec == nil and prev and "teardown" or "?"; return true end}
+			inform._state.save = function() seen[#seen + 1] = "save" end
+			local rec = {bridge = "br-lan", vids = {20}}
+			local st = {meshvlan = rec}
+			local ok, err = pcall(function()
+				assert_true(inform._meshvlan_resync(st, {vlan = {ports = {lan1 = 3}}}), "swconfig: resync")
+				assert_false(inform._meshvlan_resync(st, {net = {lan_cpueth = "br-lan"}}), "DSA now")
+				assert_eq(table.concat(seen, ","), "resync,teardown,save", "torn down and the record dropped")
+				assert_nil(st.meshvlan, "gone")
+				assert_false(inform._meshvlan_resync({}, {vlan = {ports = {}}}), "no record: nothing")
+			end)
+			inform._meshvlan, inform._state.save = orig.mv, orig.save
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: forgetting the controller takes the mesh VLAN ports down first",
+		fn = function()
+			local orig = inform._meshvlan
+			local got
+			inform._meshvlan = {reconcile = function(rec, prev) got = {rec = rec, prev = prev}; return true end}
+			local ok, err = pcall(inform._forget_controller, {meshvlan = {bridge = "br-lan", vids = {20}}}, {})
+			inform._meshvlan = orig
+			if not ok then error(err, 0) end
+			assert_not_nil(got, "reconciled")
+			assert_nil(got.rec, "to nothing")
+			assert_eq(got.prev.vids[1], 20, "from the record the reset cleared")
 		end
 	},
 }
