@@ -246,7 +246,14 @@ wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh
 cannot know, and does everything in an order chosen so a failure never leaves the
 device unreachable.
 
-1. **Interview** — every question first, before anything is changed.
+1. **Interview** — every question first, before anything is changed. One of them is
+   whether to install the **web interface**: the default installs the OpenWrt packages
+   `openuf` and `luci-app-openuf` (LuCI's dashboard, openUF's pages and the device page)
+   from the latest release, and offers the Halo theme where the flash has room; a
+   **headless** install puts the daemon alone under `/opt/openuf` and adds nothing to LuCI.
+   Never both: a device carrying the file install and the package has two copies of
+   openUF, and a controller has shown such a device as two devices, so `install.sh` now
+   refuses beside the package and the package warns beside a file install.
 2. **Access-point conversion** — a device still acting as a router fights the real
    gateway for DHCP and NAT, so the router role goes: no WAN interface, the WAN
    socket folded into the LAN side, DHCP server off, `firewall`/`dnsmasq`/`odhcpd`

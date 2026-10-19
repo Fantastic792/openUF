@@ -285,6 +285,45 @@ Formalities the feeds check on submission: `PKG_MAINTAINER`, `PKG_LICENSE:=MIT`,
 `conffiles`, procd init, an executable answering `--version` with `PKG_VERSION`, tabs in the
 JavaScript (`js-beautify -t -a -j -w 110`), a `.pot` under `po/templates`.
 
+## One install path per device (2026-10-19)
+
+A Deco M4R set up with `setup.sh` (then a file install under `/opt/openuf`) and later given
+the `openuf` and `luci-app-openuf` packages appeared in the controller as two devices. The
+init script runs `/usr/lib/openuf` whenever it exists, so the package's copy took over with
+the package's `/etc/config/openuf` (`modelmap auto`), not the `conf.lua` the interview had
+written -- a different profile is a different `lan_cpueth`, which is a different identity
+MAC. `setup.sh` is therefore the one entry point and never mixes the two:
+
+- its interview asks **headless?** (default no): the web install fetches the `.apk`/`.ipk`
+  files of the latest GitHub release (`OPENUF_RELEASE_URL`, or `OPENUF_PKG_DIR` for files
+  already on the device), installs `openuf` + `luci-app-openuf` (+ `luci-theme-halo` when
+  wanted and present in the release) in one transaction with `apk add --allow-untrusted` /
+  `opkg install`, writes the answers to `/etc/config/openuf` (a generated profile as the
+  `custom` device + `port` sections), creates the adoption account through the new
+  `openuf bootstrap-account` (`hook/openuf-bootstrap.sh`) and removes a leftover
+  `/opt/openuf`; headless is the file install as before;
+- `install.sh install` refuses when `/usr/lib/openuf/inform.lua` exists;
+- the package's `postinst-pkg` warns when `/opt/openuf/inform.lua` exists and says how to
+  carry the configuration over.
+
+Testing this in the VM found a second bug: on apk, `apk info -e hostapd` is true for
+`wpad-basic-mbedtls` (it PROVIDES hostapd), so `setup.sh`'s packages phase believed a full
+wpad was installed and skipped the swap -- on every 25.12 device, which then had an openUF
+that never starts. The phase now decides by the binary (`wnm_sleep_mode` in
+`/usr/sbin/hostapd`, as the init script does), and every `pkg_installed` on apk (setup.sh,
+install.sh, openuf-deps.sh) matches the exact package line of `apk list -I`.
+
+A third, found when the new hook ran in the VM: `install.sh` hashed the bootstrap account's
+password with `openssl passwd -6`, and a stock image has no `openssl` binary (lua-openssl
+brings the library only, the CLI is `openssl-util`) -- the hash came out empty and the
+account had no password at all. `hook/openuf-bootstrap.sh` now creates the account locked
+(`!`), then hashes with what the image has (the openssl CLI; busybox `passwd -a sha512`
+fed on stdin under `setsid`, so it does not ask the terminal; `uhttpd -m`), and says so
+when none of them worked -- locked beats open. `install.sh` calls the same hook.
+
+The release workflow attaches `luci-theme-halo` since this branch; v0.1.8 and earlier ship
+only `openuf` and `luci-app-openuf`, so a web install from those says so and skips the theme.
+
 ## Order of work
 
 1. `package/openuf` plus the UCI loader, with `install.sh`, `update.sh` and `deploy.sh` kept

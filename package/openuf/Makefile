@@ -66,6 +66,12 @@ if [ -z "$${IPKG_INSTROOT}" ] && ! grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/d
 	echo "openuf: hostapd is a basic build (no 802.11v): openUF will not start until a full wpad is installed." >&2
 	echo "openuf: run 'openuf deps --install', or use the button on LuCI's openUF overview." >&2
 fi
+if [ -z "$${IPKG_INSTROOT}" ] && [ -f /opt/openuf/inform.lua ]; then
+	echo "openuf: a file install of openUF is also present under /opt/openuf. The service now" >&2
+	echo "openuf: runs this package's copy and reads /etc/config/openuf, not /opt/openuf/conf.lua:" >&2
+	echo "openuf: carry that configuration over (LuCI: Services > openUF > Settings), then" >&2
+	echo "openuf: 'rm -rf /opt/openuf'. Two copies have shown up in a controller as two devices." >&2
+fi
 endef
 
 define Build/Configure

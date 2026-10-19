@@ -110,12 +110,28 @@ default answer for everything.
 | `--exclusive-wlan` / `--shared-wlan` | `use_only_unifi_wlan` | exclusive |
 | `--country CC` / `--no-country` | regulatory-domain override, 2-letter ISO code | none |
 | `--l2-announce` / `--no-l2-announce` | L2 discovery broadcasts | derived (see below) |
+| `--web` / `--headless` | the packages `openuf` + `luci-app-openuf` from the latest release (LuCI dashboard and device page), or the daemon alone as files under `/opt/openuf` | web |
+| `--theme` / `--no-theme` | with `--web`: the Halo LuCI theme too | yes with 4 MB free, else no |
 | `--reboot` / `--no-reboot` | reboot at the end? | yes |
 | `-y`, `--yes` | take every default, ask nothing | — |
 | `--keep-work` | leave the downloaded tree in `/tmp` | — |
 
 `OPENUF_REPO=owner/repo`, `OPENUF_REF=branch-or-tag` and `OPENUF_SRC=/path/to/checkout`
-point it at a different source.
+point it at a different source. The packages of a web install come from the latest
+GitHub release; `OPENUF_RELEASE_URL=https://api.github.com/repos/owner/repo/releases/tags/vX.Y.Z`
+picks another release, and `OPENUF_PKG_DIR=/path` uses `.apk`/`.ipk` files already on the
+device (your own build, or a device without internet).
+
+**Web or headless.** A web install writes the interview's answers to `/etc/config/openuf`
+(the `main` section, which puts UCI in charge of the daemon; LuCI's *Services → openUF →
+Settings* edits the same file), creates the adoption account with `openuf
+bootstrap-account`, and removes a file install left under `/opt/openuf` from an earlier
+run -- the adoption state in `/etc/openuf` is shared and stays. A headless install is the
+file install described in § 2, driven by `install.sh`, with `conf.lua` as its
+configuration. The two never coexist: the init script would run the package's copy and
+ignore `/opt/openuf/conf.lua`, and a device in that state has appeared in a controller as
+two devices. `install.sh` refuses when the package is present; the package's install
+warns when `/opt/openuf` is.
 
 **The derived L2 setting.** `l2_announce` ships `true` and that is what makes the AP
 appear in the controller by itself — but a controller that discovered a device over L2

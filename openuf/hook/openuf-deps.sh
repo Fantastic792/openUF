@@ -45,7 +45,8 @@ OVERLAY=${OPENUF_OVERLAY:-/overlay}
 
 if command -v apk >/dev/null 2>&1; then
 	PKG_ADD="apk add"
-	pkg_installed() { apk info -e "$1" >/dev/null 2>&1; }
+	# exact name: `apk info -e` is also true for a package that PROVIDES it
+	pkg_installed() { apk list -I "$1" 2>/dev/null | grep -q "^$1-[0-9]"; }
 	pkg_available() { apk list "$1" 2>/dev/null | grep -q "^$1-[0-9]"; }
 	pkg_add()       { apk add "$@"; }
 	pkg_del()       { apk del "$@"; }
