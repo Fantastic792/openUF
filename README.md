@@ -230,7 +230,9 @@ address, the device facts it already broadcasts) and *Local Settings* behind the
 password. LuCI is one hidden step away: the Konami code (↑ ↑ ↓ ↓ ← → ← → B A), or seven taps
 on the device picture on a phone, offers it, and LuCI's header then carries *Exit LuCI mode*.
 `uci set openuf.web.portal=0` (or the switch on either settings page) turns the page off.
-**`luci-theme-halo`** is a full LuCI theme in the same style -- sidebar, cards, switches, light
+Inside LuCI the app adds a **dashboard** as the landing page: health checks, the path from the
+gateway through the device to its radios and networks, live throughput, radios, clients and
+the controller's view of the device. **`luci-theme-halo`** is a full LuCI theme in the same style -- a sidebar of sections with their pages nested under them, cards, switches, meters, light
 and dark -- usable without openUF too; `openuf deps --install` adds it only where LuCI is
 installed and the flash has room to spare. See USAGE.md § "The device page".
 

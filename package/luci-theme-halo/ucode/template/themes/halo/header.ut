@@ -3,6 +3,9 @@
  Copyright 2026 Yesrab Ali <yesrab.ali111@gmail.com>
  Licensed to the public under the Apache License 2.0.
 
+ The shell: a rail of section icons, the section's page list beside it, a
+ top bar with the breadcrumb and LuCI's indicators, and the page. menu-halo.js
+ fills the rail, the list, the crumbs and the page tabs from LuCI's menu.
  Structure follows luci-theme-bootstrap's header (Copyright 2008 Steven
  Barth, 2012 David Menting, 2008-2022 Jo-Philipp Wich), Apache License 2.0.
 -#}
@@ -11,29 +14,36 @@
 	import { getuid, getspnam } from 'luci.core';
 
 	const boardinfo = ubus.call('system', 'board') ?? {};
-	// halo-dark / halo-light pin the scheme; plain halo follows the OS.
+	// halo-dark / halo-light pin the scheme; plain halo follows the browser
+	// and the appearance toggle in the rail.
 	const darkpref = (theme == 'halo-dark' ? 'true' : (theme == 'halo-light' ? 'false' : null));
 	const hostname = boardinfo.hostname ?? '?';
+	const model = boardinfo.model ?? '';
 
 	http.prepare_content('text/html; charset=UTF-8');
 -%}
 
 <!DOCTYPE html>
-<html lang="{{ dispatcher.lang }}" {{ darkpref ? `data-darkmode="${darkpref}"` : '' }}>
+<html lang="{{ dispatcher.lang }}"{{ darkpref ? ` data-darkmode="${darkpref}" data-pinned=""` : '' }}>
 	<head>
 		<meta charset="utf-8">
 		<title>{{ striptags(`${dispatched?.title ? `${_(dispatched.title)} · ` : ''}${hostname}`) }}</title>
-		{% if (!darkpref): %}
 		<script>
 			(function() {
-				var mq = window.matchMedia('(prefers-color-scheme: dark)'),
-				    root = document.documentElement,
-				    set = function(m) { root.setAttribute('data-darkmode', m.matches) };
-				mq.addEventListener('change', set);
-				set(mq);
+				var root = document.documentElement, pref = 'auto', nav = '';
+				try { pref = localStorage.getItem('halo.theme') || 'auto'; nav = localStorage.getItem('halo.nav') || ''; } catch (e) {}
+				{% if (!darkpref): %}
+				if (pref !== 'light' && pref !== 'dark') pref = 'auto';
+				var dark = pref === 'dark' || (pref === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+				root.setAttribute('data-darkmode', dark ? 'true' : 'false');
+				root.setAttribute('data-theme', pref);
+				{% endif %}
+				/* the navigation's shape before first paint: a bar on phones, a rail
+				   on narrow screens or by choice, the full sidebar otherwise */
+				root.setAttribute('data-nav', window.matchMedia('(max-width: 720px)').matches ? 'bar'
+					: (nav === 'rail' || window.matchMedia('(max-width: 1100px)').matches) ? 'rail' : 'side');
 			})();
 		</script>
-		{% endif %}
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 		<meta name="color-scheme" content="light dark">
 		<meta name="darkreader-lock">
@@ -52,22 +62,43 @@
 	<body class="lang_{{ dispatcher.lang }}{{ blank_page ? ' halo-blank' : '' }}{{ halo_login ? ' halo-login-page' : '' }}" data-page="{{ entityencode(join('-', length(ctx.request_path) ? ctx.request_path : ctx.path), true) }}">
 		{% if (!blank_page): %}
 		<div class="halo-shell">
-			<aside id="halo-sidebar" aria-label="{{ _('Navigation') }}">
-				<a class="halo-brand" href="/" title="{{ entityencode(hostname, true) }}">
+			<nav class="halo-side" id="halo-side" aria-label="{{ _('Navigation') }}">
+				<a class="halo-brand" href="/" title="{{ entityencode(model ? `${hostname} · ${model}` : hostname, true) }}">
 					<span class="halo-mark" aria-hidden="true"></span>
-					<span class="halo-host">{{ striptags(hostname) }}</span>
+					<span class="halo-brand-text"><b>{{ striptags(hostname) }}</b>{% if (model): %}<small>{{ striptags(model) }}</small>{% endif %}</span>
 				</a>
-				<ul class="halo-nav" id="topmenu" style="display:none"></ul>
-				<ul id="modemenu" style="display:none"></ul>
-				<div class="halo-sidebar-foot" id="halo-sidebar-foot"></div>
+				<ul class="halo-nav" id="halo-nav"></ul>
+				<ul class="halo-modemenu" id="modemenu" hidden></ul>
+				<div class="halo-side-foot">
+					{% if (!darkpref): %}
+					<button type="button" class="halo-nav-link halo-theme" id="halo-theme" data-label="{{ _('Appearance') }}" aria-label="{{ _('Appearance') }}">
+						<span class="halo-icon" aria-hidden="true"></span>
+						<span class="halo-nav-label">{{ _('Appearance') }}</span>
+					</button>
+					{% endif %}
+					<button type="button" class="halo-nav-link halo-collapse" id="halo-collapse" aria-pressed="false" data-label="{{ _('Collapse navigation') }}" aria-label="{{ _('Collapse navigation') }}">
+						<span class="halo-icon" aria-hidden="true"></span>
+						<span class="halo-nav-label">{{ _('Collapse') }}</span>
+					</button>
+					<span class="halo-nav-logout" id="halo-nav-logout"></span>
+				</div>
+			</nav>
+
+			<aside class="halo-subnav" id="halo-subnav" aria-label="{{ _('Pages') }}" hidden>
+				<div class="halo-subnav-head" id="halo-subnav-head"></div>
+				<ul class="halo-subnav-list" id="halo-subnav-list"></ul>
 			</aside>
-			<div class="halo-scrim" id="halo-scrim"></div>
+			<div class="halo-scrim" id="halo-scrim" hidden></div>
 
 			<div class="halo-main">
 				<header class="halo-topbar">
-					<button class="halo-burger" id="halo-burger" type="button" aria-label="{{ _('Menu') }}" aria-controls="halo-sidebar" aria-expanded="false"></button>
 					<nav class="halo-crumbs" id="halo-crumbs" aria-label="{{ _('Location') }}"></nav>
-					<div id="indicators" class="pull-right"></div>
+					<div class="halo-top-end">
+						<div id="indicators"></div>
+						<span class="halo-host" title="{{ entityencode(model ? `${hostname} · ${model}` : hostname, true) }}">
+							<b>{{ striptags(hostname) }}</b>{% if (model): %}<span class="halo-host-model">{{ striptags(model) }}</span>{% endif %}
+						</span>
+					</div>
 				</header>
 
 				<div id="maincontent" class="container">
@@ -98,5 +129,5 @@
 						</div>
 					</noscript>
 
-					<div id="tabmenu" style="display:none"></div>
+					<div id="tabmenu" hidden></div>
 		{% endif %}

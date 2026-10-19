@@ -2,20 +2,27 @@
  Halo theme for LuCI.
  Copyright 2026 Yesrab Ali <yesrab.ali111@gmail.com>
  Licensed to the public under the Apache License 2.0.
+
+ The footer names the firmware and LuCI by their version numbers alone:
+ "OpenWrt 25.12.6 · LuCI 26.288" says what a person wants to know, the git
+ describe noise ("(HEAD detached at ...) branch") does not.
 -#}
 
 		{% if (!blank_page): %}
+		{%
+			const dist_ver = match(version.distversion ?? '', /^[0-9A-Za-z][0-9A-Za-z.+-]*/);
+			const luci_name = match(version.luciname ?? "", /^[A-Za-z][A-Za-z0-9]*/);
+			const luci_ver = match(version.luciversion ?? "", /[0-9]+\.[0-9]+/);
+		-%}
 				</div>
 				<footer class="halo-footer">
-					<span>
-						{{ _('Powered by') }}
-						<a href="https://github.com/openwrt/luci" target="_blank" rel="noreferrer">{{ version.luciname }} ({{ version.luciversion }})</a>
-						·
-						<a href="{{ entityencode(version.disturl ?? '#', true) }}" target="_blank" rel="noreferrer">{{ version.distname }} {{ version.distversion }} ({{ version.distrevision }})</a>
-						{% if (lua_active): %}
-							· {{ _('Lua compatibility mode active') }}
-						{% endif %}
-					</span>
+					<a href="{{ entityencode(version.disturl ?? '#', true) }}" target="_blank" rel="noreferrer">{{ version.distname }}{{ dist_ver ? ` ${dist_ver[0]}` : '' }}</a>
+					<span class="halo-footer-sep" aria-hidden="true">·</span>
+					<a href="https://github.com/openwrt/luci" target="_blank" rel="noreferrer">{{ luci_name ? luci_name[0] : version.luciname }}{{ luci_ver ? ` ${luci_ver[0]}` : '' }}</a>
+					{% if (lua_active): %}
+					<span class="halo-footer-sep" aria-hidden="true">·</span>
+					<span>{{ _('Lua compatibility mode active') }}</span>
+					{% endif %}
 				</footer>
 			</div>
 		</div>

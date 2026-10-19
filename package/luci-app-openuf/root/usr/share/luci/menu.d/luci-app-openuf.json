@@ -1,4 +1,17 @@
 {
+	"admin/dashboard": {
+		"title": "Dashboard",
+		"order": 5,
+		"action": {
+			"type": "view",
+			"path": "openuf/dashboard"
+		},
+		"css": "openuf/dashboard.css",
+		"depends": {
+			"acl": [ "luci-app-openuf" ]
+		}
+	},
+
 	"admin/services/openuf": {
 		"title": "openUF",
 		"order": 60,

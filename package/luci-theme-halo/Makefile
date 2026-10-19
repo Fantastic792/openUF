@@ -7,10 +7,10 @@
 include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=Halo Theme (in the style of UniFi Network)
-LUCI_DESCRIPTION:=A clean, light-and-dark LuCI theme modelled on UniFi Network: a sidebar of icons, cards, switches and a floating save bar. Works with any LuCI install; openUF's device page shares its look.
+LUCI_DESCRIPTION:=A light-and-dark LuCI theme modelled on UniFi Network: a rail of section icons with the section's pages beside it, cards, switches, meters and a floating save bar. Works with any LuCI install; openUF's device page shares its look.
 LUCI_DEPENDS:=+luci-base
 
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.1.0
 PKG_RELEASE:=1
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=Yesrab Ali <yesrab.ali111@gmail.com>

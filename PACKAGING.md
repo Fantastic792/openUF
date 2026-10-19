@@ -153,22 +153,92 @@ phone layout were screenshotted. The VM's user-mode networking resets the odd pa
 static request, which also happens with stock uhttpd and no gate. **Not yet run:** on a real
 AP (both lab APs are production), through the SDK, on 24.10/opkg.
 
-## The Halo theme (luci-theme-halo, 2026-10-18)
+## The dashboard (luci-app-openuf, admin/dashboard, 2026-10-19)
 
-A full LuCI theme modelled on UniFi Network, meant to stand alone: a sidebar of LuCI's menu
-with icons (level 1 as collapsible groups, level 2 as links, level 3+ as underlined tabs above
-the page, all from `ui.menu` in `menu-halo.js`), a glass top bar with the breadcrumb and
-LuCI's indicators, sections as cards with ruled grouped-list rows, flag options as switches,
-a floating glass *Save & Apply* bar, Apple-style modal and dropdowns, and the login page as
-a centred card. Halo / Halo Dark / Halo Light like bootstrap's three. No web fonts, no
-images beyond inline SVG. Every class `luci-theme-bootstrap` styles is covered, with its
-mechanics for the dropdown, dynamic list, tooltip, modal overlay and the narrow-screen table
-collapse carried over (Apache-2.0, credited in the file); the newer `cbi-range-slider`,
-`drag-handle` and `cbi-section-filter` are styled too. bootstrap's colour variables are
-aliased for apps that use them inline. Checked in the VM above: login, Status overview,
-Interfaces (and its edit dialog: tabs, dropdown open, switches, dynamic list), System,
-Firewall (zones table fits beside the sidebar), the pending-changes dialog and an apply,
-openUF's own pages; light, dark, and the drawer at 390 px.
+LuCI's landing page on an openUF device (menu order 5, before Status), a read-only view
+(`view/openuf/dashboard.js`, its own stylesheet `openuf/dashboard.css` loaded by the view with
+LuCI's `resource_version` token in the URL, so an upgrade never shows the previous sheet from
+the browser's cache; written through the theme's tokens with fallbacks, so it holds up under
+Bootstrap too). Its health tiles are a container query: seven on one row down to a 1280 px
+window (the detail line goes first), then two balanced rows. The idea --
+one screen that answers "is this access point healthy, and if not, where?" -- is
+luci-theme-vantage's dashboard; the implementation is this repo's own and reads only what
+LuCI's own network model and rpcd give, polled every five seconds:
+
+- a verdict ("Everything looks healthy" / "N things need attention") over the checks:
+  Uplink (the interface carrying the default route, wan-named first; rates from the byte
+  counters), Controller (openUF's `getStatus`: stopped / not adopted / adopted, last contact
+  age), CPU (1-minute load over the core count from `/proc/cpuinfo`), Memory, Wi-Fi (radios
+  up, SSIDs, clients), Signal (clients below -75 dBm), Storage. Each check links to the page
+  that fixes it where there is one.
+- the network path: gateway (address, DNS) → this device (model, address, uptime) → each
+  radio (band, channel · width, rate) with its networks as chips (lock = encrypted, the
+  count of clients, or "joined" for a station link).
+- throughput: a sparkline per interface (uplink, each radio) over the last five minutes,
+  download in the accent colour and upload in its own; peaks beside it. For the uplink,
+  received bytes are download; for a radio, transmitted bytes are (the clients' download).
+- radios (channel, width, TX power, noise, country, networks), clients (name from LuCI's
+  host hints, MAC · IP, network · band, signal bars and dBm, ↓ TX / ↑ RX rate, the Wi-Fi
+  generation from the rate flags, connected time; only an access point's own stations
+  count -- a station-mode network's peer is the AP it joined), system (firmware, kernel,
+  uptime, load, memory and storage bars) and the UniFi controller card (adoption, inform
+  URL, last contact and failure, presented identity, hardware profile, version, the
+  configuration error if any; a link to Services → openUF).
+
+The ACL `luci-app-openuf` gained the read-only grants the page needs (`system board/info`,
+`luci-rpc getNetworkDevices/getWirelessDevices/getHostHints`, `network.interface dump`,
+`network.device status`, `network.wireless status`, `iwinfo info/assoclist`, read of
+`/proc/cpuinfo`); root needed none of them. Verified in the QEMU VM with two
+`mac80211_hwsim` radios (an AP "Halo Lab" and a station on the second radio that joins it,
+so a real association shows), light and dark, 1440 px, 960 px and 390 px.
+
+## The Halo theme (luci-theme-halo, 2026-10-18; reworked 2026-10-19)
+
+A full LuCI theme modelled on UniFi Network, meant to stand alone, and the same tokens as the
+device page so the two read as one product. The 2026-10-19 rework replaced a plain sidebar
+(which read as Bootstrap recoloured) with UniFi's two-level navigation and a set of
+stock-page tidy-ups, after a look at luci-theme-vantage (anothaDev, GPL-3.0) for what makes a
+LuCI theme feel like a product rather than a reskin. Ideas were taken from it; its code was
+not (Halo is Apache-2.0): the shell, script and stylesheet are Halo's own.
+
+- **Shell** (`header.ut`, `menu-halo.js`): one sidebar with the hostname and model at its
+  head, a row per section (LuCI's menu level 1) with an icon and the name, the section's
+  pages nested under it (level 2; the open sections are remembered per browser), the
+  menu's deeper levels as a segmented control above the page, a top bar with the
+  breadcrumb and LuCI's indicators as pills (the unsaved-changes count as a badge, the
+  refresh dot pulsing). The sidebar has three shapes, chosen before first paint from
+  `data-nav` on `<html>` and kept current on resize: `side` (the full sidebar), `rail`
+  (icons only, the name on hover, the pages in a flyout -- on screens ≤ 1100 px, or
+  collapsed by the person with the button at the foot, `localStorage` `halo.nav`; the host
+  chip then shows in the top bar) and `bar` (phones ≤ 720 px: a bottom bar of sections and
+  a sheet of pages). An appearance toggle at the foot cycles automatic / light / dark
+  (`localStorage` `halo.theme`, applied before first paint); the Halo Dark / Halo Light
+  variants pin a scheme and hide it. The first version of the rework (same day) had an
+  icon rail with a separate page-list column; the user found the icons and their names
+  too far apart, hence the single sidebar.
+- **Content**: the page column is capped (1280 px; 1760 px for the dashboard) and centred on
+  a wider screen; cards with a full-bleed header row, tables edge to edge inside them, a
+  200 px label column with fields up to 400 px, one control height, sentence-case table
+  headers, tabular figures, form tabs underlined, a floating Save & Apply bar docked
+  bottom right (above the bottom bar on phones).
+- **Stock pages** (CSS where the markup allows, `menu-halo.js` where it does not): the
+  overview's memory table becomes one meter (in use / cache / free) and storage one thin bar
+  per mount, both rebuilt from LuCI's own table on every poll (the table stays, hidden);
+  `ui.itemlist` dumps ("Label: value<br>") become label / value grids; interface rows show a
+  property grid beside the device box; zone colours LuCI sets inline are tinted with the
+  colour as an edge; firewall targets and policies are coloured; a heading that only repeats
+  the breadcrumb is hidden from view and kept for screen readers; the overview's Hide / Show
+  labels are outlined pills; radio boxes get a band chip.
+- **Not adopted from Vantage, on purpose**: folding help text to one line, folding row
+  actions into a ⋯ menu, the command palette. The first two rewrite what LuCI draws and
+  were that theme's main source of regressions; none of the three is UniFi's idiom.
+
+Every class `luci-theme-bootstrap` styles is covered, with its mechanics for the dropdown,
+dynamic list, tooltip, modal overlay and the narrow-screen table collapse carried over
+(Apache-2.0, credited in the file). Checked in the QEMU VM on 2026-10-19: login, Status
+overview (light and dark), Interfaces and its edit modal, System (form tabs), Firewall zones,
+openUF's own pages, the 960 px flyout, the 390 px bottom bar and sheet, the appearance
+toggle. Not yet on a real AP (both lab APs are production).
 
 ## Release workflow (GitHub Actions)
 
