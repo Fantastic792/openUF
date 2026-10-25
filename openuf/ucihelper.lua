@@ -559,7 +559,7 @@ local AUTODISABLED = OPENUF_PREFIX .. "autodisabled"
 --
 -- An SSID the *user* had already disabled is never stamped, so switching the
 -- option off later does not silently switch their SSID back on. The option is
--- documented (README/USAGE) and shipped as true in conf.lua, but a missing
+-- documented (REFERENCE/USAGE) and shipped as true in conf.lua, but a missing
 -- config is treated as false: openUF should not start disabling a stranger's
 -- SSIDs just because a caller failed to thread cfg through.
 --

@@ -91,7 +91,7 @@ wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh
 
 This is the path to use unless you have a reason not to. It does everything in this
 guide's sections 1–3 plus the access-point conversion, in an order chosen so a failure
-never leaves the device unreachable — see the README's Quick start for the phase list
+never leaves the device unreachable — see REFERENCE.md's Quick start for the phase list
 and the reasoning.
 
 Piping into `sh` and still being able to answer questions works because the script

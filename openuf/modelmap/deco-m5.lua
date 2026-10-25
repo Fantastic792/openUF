@@ -62,7 +62,7 @@
 	  • Bluetooth on blsp1_uart2 -- OpenWrt enables the UART, nothing uses it
 	  • 32 MB SPI-NOR, of which the "firmware" partition is 0x1270000 bytes
 	    (18.4 MiB); OpenWrt's image limit is 16640k. ⚠️ Free overlay after a
-	    stock image is unmeasured, but README's 5 MB for lua-openssl should
+	    stock image is unmeasured, but REFERENCE.md's 5 MB for lua-openssl should
 	    fit comfortably -- an Archer A7 with a 16 MB chip does.
 	Expected radio order: radio0 = 2.4 GHz (wifi0), radio1 = 5 GHz (wifi1).
 	11-ath10k-caldata feeds a000000.wifi from ART offset 0x1000 and

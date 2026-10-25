@@ -247,7 +247,7 @@ case "$ACTION" in
 		cp openuf/etc/init.d/openuf "$INIT_SCRIPT"
 		chmod +x "$INIT_SCRIPT"
 		# The 802.11r translator for genuine UniFi APs (openuf/rrb/, see its
-		# README): its own procd service, started and stopped with openUF's.
+		# REFERENCE.md): its own procd service, started and stopped with openUF's.
 		cp openuf/etc/init.d/openuf-rrb /etc/init.d/openuf-rrb
 		chmod +x /etc/init.d/openuf-rrb "$INSTALL_DIR/rrb/rrb-unifi.uc" 2>/dev/null
 

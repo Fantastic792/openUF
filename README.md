@@ -1,260 +1,108 @@
-# openUF
+<p align="center">
+  <img src="package/luci-theme-halo/htdocs/luci-static/halo/logo.svg" width="72" alt="">
+</p>
 
-[![Tests](https://github.com/yesrab/openUF/actions/workflows/test.yml/badge.svg)](https://github.com/yesrab/openUF/actions/workflows/test.yml)
-[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Lua 5.1+](https://img.shields.io/badge/Lua-5.1%2B-blue.svg)](https://www.lua.org/)
+<h1 align="center">openUF</h1>
 
-openUF is a Lua daemon that makes an OpenWrt device appear as a **Ubiquiti UniFi U6-InWall** (or other UniFi AP models) to a UniFi Network Application controller.  The controller can then adopt the device, push SSID and network configuration, and display live client and radio statistics — all without genuine Ubiquiti hardware.
+<p align="center">
+  <b>Run your OpenWrt access points from UniFi Network.</b><br>
+  openUF makes an OpenWrt device look like a Ubiquiti access point to the UniFi controller:
+  adopt it, push your WiFi networks to it, watch its clients, and roam between it and real UniFi APs.
+</p>
 
-Tested end-to-end against **UniFi Network Application 10.4.57** — both a self-hosted Docker controller and a real UniFi Cloud Gateway Ultra adopting a TP-Link Archer C5 v1 running openUF, with real clients associating to the pushed SSID.  The default device identity presented is **U6-InWall** (model `U6IW`).  openUF emulates a UniFi **access point** only — gateway (USG) and switch (USW) emulation are not implemented and not planned.
+<p align="center">
+  <a href="https://github.com/yesrab/openUF/actions/workflows/test.yml"><img src="https://github.com/yesrab/openUF/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/yesrab/openUF/releases"><img src="https://img.shields.io/github/v/release/yesrab/openUF?label=release" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg" alt="License: GPL-3.0-or-later"></a>
+  <a href="https://www.lua.org/"><img src="https://img.shields.io/badge/Lua-5.1-blue.svg" alt="Lua 5.1"></a>
+</p>
 
-Most rows below marked ✅ were verified by driving the real controller UI against a live openUF device and reading back the resulting wire capture; [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) records the evidence, including where a claim rests on decompiling the controller rather than a live capture.
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#what-it-does">What it does</a> ·
+  <a href="#hardware">Hardware</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#contributing">Contributing</a> ·
+  <a href="REFERENCE.md">Full reference</a>
+</p>
+
+---
+
+## See it
+
+The device's own page, before and after the controller adopts it:
+
+| Waiting to be adopted | Managed by UniFi Network |
+|:---:|:---:|
+| ![The device page before adoption: "Waiting to be adopted", the controller's address and the device facts](screenshots/device-page-ready-for-adoption.png) | ![The device page after adoption: "This device is managed by UniFi Network"](screenshots/device-page-managed-by-unifi.png) |
+
+Two openUF access points, the **U6 IW** nodes, in a real UniFi Network topology beside a
+UniFi Cloud Gateway Ultra, serving phones, laptops and IoT devices on two WiFi networks:
+
+![UniFi Network's topology view with two openUF access points and their clients](screenshots/unifi-topology.png)
+
+It shows up in UniFi Network as a U6 In-Wall and adopts with one click:
+
+![UniFi Network's device list with an openUF access point ready to adopt](screenshots/unifi-devices-ready-to-adopt.png)
+
+The few settings that stay on the device, behind the root password:
+
+| Controller and hardware profile | Wireless, this page, service |
+|:---:|:---:|
+| ![Local Settings: inform URL, adoption state, hardware profile and the identity presented](screenshots/device-page-local-settings-top.png) | ![Local Settings: wireless options, the page switch, restarts](screenshots/device-page-local-settings-bottom.png) |
 
 ## What it does
 
-### Adoption and transport
+- **Adoption like real hardware.** The AP announces itself on the LAN, appears in UniFi
+  Network, WiFiman and the UniFi app, and adopts with one click through the same locked-down
+  `ubnt` login the controller expects. A controller on another subnet adopts it by inform
+  URL instead, with no SSH at all.
+- **WiFi from the controller.** Networks with WPA2, WPA3 and Enhanced Open, per-network
+  VLANs, private pre-shared keys, hidden SSIDs, channel, width and power per radio,
+  802.11r/k/v, band steering, minimum RSSI, per-client speed limits, WiFi schedules, client
+  blocking and Locate.
+- **Fast roaming with genuine UniFi APs.** The built-in translator speaks UniFi's 802.11r
+  key exchange, so phones move between openUF and real UniFi access points without a
+  reconnect.
+- **Live statistics.** Clients with WiFi Experience scores, radios and channel utilisation,
+  wired hosts per port, the uplink, neighbouring access points and RF scans.
+- **Switch ports and mesh.** Per-port VLANs from the controller's Port settings, and a
+  wireless uplink to another openUF AP when the cable is out.
+- **A device page instead of LuCI's login.** Like a Ubiquiti device, the AP's address shows
+  its status and sends you to the controller; LuCI stays one hidden step away, with a
+  dashboard and the matching Halo theme.
+- **Pure Lua, no toolchain.** One command installs it on OpenWrt 24.10 or 25.12, as packages
+  or as files, with upgrades in place.
 
-| Feature | Status |
+Everything above was validated against a real controller, a UniFi Cloud Gateway Ultra on
+UniFi Network 10.x. [REFERENCE.md](REFERENCE.md) has the feature-by-feature status and
+[PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) the evidence. openUF emulates an access
+point only: no gateway or switch emulation, by design.
+
+## Hardware
+
+Any dual-band OpenWrt device with **16 MB of flash or more** and about 5 MB free on
+`/overlay` (the AES-GCM crypto the controller insists on needs `libopenssl3`). A **full
+`wpad` build** is required and the installer swaps it in. Boards with a profile:
+
+| Board | Notes |
 |---|---|
-| L2 UDP discovery (port 10001) | ✅ Working — the periodic announce the controller adopts from, and since 2026-10-03 the device also **answers** the discovery probes WiFiman's Discovery tab, the UniFi app and the Device Discovery Tool send (v1 and v2), so it lists there with model, name and firmware like a real AP. WiFiman's own "connected to UniFi" card is served by the console and already worked for clients on an openUF AP |
-| TNBU inform protocol | ✅ Working — AES-128-CBC and AES-128-GCM |
-| AES-128-GCM | ✅ Working — **required**: 10.4.57 will not finish provisioning a device until it receives a genuine GCM inform. Needs a GCM-capable `lua-openssl` build |
-| L2 adoption (SSH `syswrapper.sh set-adopt`) | ✅ Working — completes to **Connected** |
-| L3 adoption (`set-inform`, no SSH) | ✅ Working — the controller skips SSH entirely and delivers the new authkey in the `setparam` `mgmt_cfg`; openUF accepts it only while unadopted. The controller chooses this path when it has *not* discovered the device via broadcast, which is what `config.l2_announce = false` is for — same-subnet devices that can't accept an SSH login need it |
-| Zero-touch bootstrap adoption | ✅ Optional (`install.sh install --bootstrap-adopt`) — a locked-down, non-root SSH account auto-disabled after adoption |
-| Forget device / factory reset | ✅ Working (`syswrapper.sh reset-inform`) |
-| Restart / reboot command | ✅ Working |
-| Firmware upgrade requests | Stored (version/url), never applied — flashing controller-supplied firmware onto non-Ubiquiti hardware would brick it |
+| TP-Link Archer C5 v1 | The reference device, confirmed end to end |
+| TP-Link TL-WDR3500 v1 | Confirmed; 8 MB flash, needs a custom image with the crypto built in |
+| JioRouter AX6000 JIDU6101 and JIDU6J01 family | Confirmed; WiFi 6, DSA, the project's own lab APs |
+| TP-Link Deco M4R v1 / v2 | Adopted and meshed on a v1 by a user |
+| Xiaomi Mi Router AX3000T | Confirmed upstream, WiFi 6 |
+| TP-Link Archer A7 v5 / C7 v4 / C7 v5 | From the OpenWrt sources, not yet run on the board |
+| TP-Link Deco M5 v1 / v2 / v3 | From the OpenWrt sources, not yet run on the board |
+| TP-Link Deco M4R v4 | From the OpenWrt sources, not yet run on the board |
+| Dynalink DL-WRX36 | From the OpenWrt sources, not yet run on the board |
+| TP-Link WR1043ND v2 | Single band; profile only |
 
-### WiFi provisioning
+Anything else runs on a generic dual-band or single-band profile, or on one the installer
+generates from the running device. Details, caveats and the identity each board presents
+are in [REFERENCE.md § Supported hardware](REFERENCE.md#supported-hardware).
 
-| Feature | Status |
-|---|---|
-| Controller-pushed SSID provisioning | ✅ Working (UCI); only `openuf_`-prefixed sections are created or deleted |
-| Exclusive-WLAN mode (`use_only_unifi_wlan`) | ✅ Working — default `true` disables hand-configured SSIDs so the radios carry only what the controller pushed; reversible (openUF stamps what it disabled). Non-AP interfaces (mesh point, station — a wireless backhaul) are never touched, and `keep_wlan_sections` exempts named AP sections |
-| WPA2 / WPA3 / WPA2-WPA3 mixed security | ✅ Working — derived from the pushed AKM set plus `wpa3.support`/`wpa3.transition`. Requires `radio_caps2` bit `0x1` on each radio, which openUF sends when hostapd can really do SAE — without it the controller silently downgrades every WPA3 WLAN to WPA2. **WPA-Enterprise (802.1X) is not supported**: the wire protocol carries no RADIUS server, port or secret, so such a WLAN is skipped with a log line rather than mis-provisioned as a keyless WPA2 SSID |
-| Enhanced Open (OWE), incl. transition mode | ⚠️ Adopted from upstream 2026-09-28; lab-confirmed on the wire there, **no OWE BSS has been brought up on any real AP, ours included**. Needs `radio_caps2` bit `0x8`, which openUF claims when `hostapd -vowe` passes and the ucode wifi generator (24.10+) knows `owe_transition`. Without the bit the controller drops an OWE WLAN and sends a transition one as plain open. Transition mode is written as one `owe_transition=1` section. OpenWrt then names the hidden OWE BSS `<ssid>OWE`, where UniFi firmware reuses the SSID |
-| PMF / 802.11w (`ieee80211w`) | ✅ Working — from `aaa.<n>.pmf.status`/`pmf.mode`. PMF is just PMF: the WPA3-transition signal is `wpa3.support`/`wpa3.transition`, not these keys |
-| Fast Roaming (802.11r) | ✅ Working — both the WLAN-level `ft.status` and the SAE-only `wpa3.ft.status` are read; FT is enabled if either asks for it, since OpenWrt cannot enable 802.11r for one AKM alone On a **WPA3-only** WLAN the controller sends FT only to a radio claiming `radio_caps2` bit `0x2`, which openUF sets alongside `0x1` since 2026-09-28 (⚠️ lab-confirmed on the wire upstream; an FT-SAE roam on a WPA3-only WLAN is not yet verified on hardware). With **genuine UniFi APs** it interoperates only with `unifi_ft_interop = true` and its built-in translator, which converts UniFi's inter-AP key-exchange framing on the OpenWrt side (**on by default for new installations**, and the translator is part of openUF since the same day: d-malinowski's [rrb-unifi](https://github.com/d-malinowski/unifi-openwrt-roaming) vendored as `openuf/rrb/`, run as the `openuf-rrb` service, learning the UniFi APs on the LAN by itself; without the translator openUF APs still roam among themselves, and a site with genuine UniFi APs but no translator should set it off; ⚠️ adopted 2026-10-25 from d-malinowski/openUF, whose evidence is a BT Home Hub 5A on OpenWrt 25.12.6 roaming against a U7 Lite on UniFi 8.7.11, FT-PSK, both directions; not run from this lab, which has no UniFi AP; USAGE § 6) |
-| VLAN-tagged SSIDs | ✅ Working — verified end-to-end on real hardware with a client on a tagged IoT network. From `aaa.<n>.br.devname` (`br0.<vlan>`), the wire's only VLAN signal: openUF builds a `br-openuf<id>` bridge holding the tagged uplink sub-device, joins the VAP to it, and trunks the VID through a swconfig switch — tagging the CPU port and the uplink socket only, never the LAN sockets, since on `ar8216`-family switches the tag flag is one global per-port bitmask and tagging a socket for the IoT VLAN makes it egress-tagged in VLAN 1 too, deafening the untagged wired client on it. Keep VLAN ids **below the switch's VLAN table size** (16 on some boards) — netifd has no `vid` option, so the id doubles as the table slot |
-| Private Pre-Shared Keys (several passphrases on one SSID, each on its own VLAN) | ⚠️ Adopted from upstream 2026-09-28; lab-confirmed on the wire and through to UCI there, **no client has joined with a VLAN key on any real AP**. Needs `wifi_caps` bit `0x100000`, which openUF claims when the ucode wifi generator writes per-station VLANs (`vlanid=` in `ap.uc`, 24.10+) and hostapd is built with VLAN support. Without the bit the controller skips the WLAN entirely. Each key becomes a `wifi-station` section (any MAC) and each VLAN a `wifi-vlan` section bridged into the same `br-openuf<id>` a VLAN-tagged SSID uses, trunked the same way; a key on a VLAN-1 network puts its client on the WLAN's own network. A key whose VLAN openUF cannot build is left out, never downgraded to the untagged LAN. A UID IoT WLAN whose keys come from RADIUS only (`psk_radius=2`) is skipped, as WPA-Enterprise is |
-| Channel and TX power per radio | ✅ Working (Low/Medium/High/Custom; channel **Auto** is written through as UCI `channel=auto`, i.e. hostapd ACS picks on the AP; TX power **Auto** deletes the `txpower` option so the driver default applies again) |
-| Radio enable / disable | ✅ Working — Transmit Power → **Disabled** arrives as `radio.<n>.status=disabled` (plus `wireless.<n>.status` on each of that radio's WLANs) → UCI `disabled`. Only an explicit value is written, so a push that omits the key leaves a hand-disabled radio alone |
-| Device identity vs. management MAC | ✅ openUF identifies by `dev.conf.net.lan_cpueth`'s MAC but reports the IP of the bridge that port is enslaved to. Where those are different netdevs — a DSA map naming a socket that carries the label MAC while `br-lan` inherits the conduit's — the AP claims an address that ARP attributes to a different MAC, and the gateway raises an IP conflict against a correctly configured network. `ucihelper.ensure_bridge_identity` pins the bridge to the identity MAC at startup, only when they differ (upstream verified it on the AX3000T, including the no-op path on a swconfig board). This fork's JioRouter maps name `br-lan` itself, so it is a no-op there |
-| Channel width per radio | ✅ Working — from `radio.<n>.ieee_mode` (`11nght20`/`11naht40`/…) → `htmode`, clamped down to what `iw phy` says the radio supports (a WiFi-6 identity invites HE pushes at n/ac hardware, which hostapd would refuse to start on). This is also the only 802.11n/ac/ax mode signal the wire carries |
-| IoT Optimization: Lock 2.4 GHz to Channel 6 / DTIM Interval Lock | ✅ Working — both are controller-side shortcuts that arrive as an ordinary `radio.<n>.channel=6` and `dtim_period=3`, needing no dedicated handling |
-| IoT Optimization: Force WiFi 4 Mode | ✅ Working — **verified end to end on real hardware**. Most of the mode arrives as ordinary keys (2.4 GHz-only, WPA2, PMF/BSS-transition off) and its one distinct effect, suppressing the QBSS Load IE, reaches hostapd as `bss_load_update_period=0` — read back out of a live `hostapd-phy0.conf`. Note it does **not** change `radio.<n>.ieee_mode`: the radio keeps its configured width, so on a board with a `dev.conf.radio.<band>.htmode_floor` that floor is suppressed for the radio while any WLAN on it has the mode on, or the HE IEs the mode exists to remove go straight back into the beacon |
-| BSS Transition (802.11v) | ✅ Working (`bss_transition`) — needs a full `wpad` build |
-| Band Steering | ✅ Working via `usteer` — requires the `usteer` package and a full `wpad` build (see Quick start). Upstream watched a real client move 2.4 → 5 GHz on an accepted 802.11v BSS-Transition request. **The off switch was broken until 2026-09-28**: openUF toggled `band_steering_threshold`, which usteer's source shows only biases load balancing (inert with `load_balancing_threshold` 0), so a running usteer kept steering at its default `band_steering_interval`. It now writes `band_steering_interval 0` for off and lets the daemon default apply for on (✅ confirmed upstream in the running daemon). The AP's own Band Steering setting (device panel, `bandsteering.*`, needs `wifi_caps` bit `0x4`/`0x8`) is read too: Prefer 5G turns steering on for the AP (✅ wire and daemon confirmed upstream; ⚠️ a client steered by it alone not yet observed), Balance has no usteer equivalent and is ignored with one log line |
-| Airtime Fairness | ✅ Adopted from upstream 2026-09-28; **On** confirmed there on four radios (ath10k, ath9k, mt76 ×2: pushed by a real UCG Ultra, written and read back). ⚠️ **Off** is lab-confirmed only, and nothing has run on the JioRouter boards yet. The device panel's switch reaches openUF only with `wifi_caps` bit `0x20`, claimed where mac80211's per-phy `airtime_flags` exists in debugfs. On is the kernel's own default (equal airtime share per client), so only Off changes anything: openUF writes 0 to `airtime_flags` and the scheduler falls back to round-robin. Kept in `state.json` and reapplied at startup, since debugfs resets on reboot; a factory reset puts the default back. **Check the device's Airtime Fairness setting before the first deploy of this build:** upstream found the controller holding `atf_enabled: false` for both APs from before the bit was claimed, which would have switched the scheduler off on the first push. **Seen here too on 2026-09-28: AP2's first push after the deploy carried `atf.mode=disabled` and switched the scheduler off.** Set Airtime Fairness to On in the device panel before, or right after, deploying this build |
-| Auto 802.11 DTIM Period | ✅ Working — Auto and Custom both arrive as a concrete `dtim_period` |
-| Multicast Enhancement (multicast-to-unicast) | ✅ Working — from `wireless.<n>.mcast.enhance` |
-| Multicast and Broadcast Blocker | ⚠️ Wire protocol confirmed live (`wireless.<n>.bcfilt.*`). No hostapd/OpenWrt option exists for it, so it is enforced with nftables in a dedicated `bridge openuf_bcfilt` table; the generated ruleset is verified against real `nft`, but its on-air effect is not (no real radios available). **Blocks LAN→WLAN broadcast/multicast except from allow-listed source MACs — this breaks DHCP for wireless clients unless the DHCP server's MAC is on the list**, which is Ubiquiti's own documented behavior. The ruleset is rebuilt from UCI on every start, so it survives a reboot the controller does not re-push after |
-| Minimum Data Rate Control | ✅ Wire protocol confirmed live (`wireless.<n>.minrate_data` + `beacon_rate`/`minrate_cck_rates.status`/`minrate_below_disable`). Applied per **radio** — OpenWrt's `basic_rate`/`supported_rates`/`legacy_rates`/`beacon_rate` are `wifi-device` options, so WLANs sharing a radio collapse to the most permissive floor. Turning the control off tears the options down again (marker-tracked, hand-tuned rates untouched) |
-| Proxy ARP | ✅ Wire protocol confirmed live (`aaa.<n>.proxy_arp`) → `proxy_arp`. Needs a full `wpad` build (hostapd only compiles proxy-ARP support in with `CONFIG_PROXYARP`) |
-| Client Isolation | ✅ Wire protocol confirmed live (`wireless.<n>.l2_isolation`) → `isolate` (hostapd `ap_isolate`) |
-| Hide WiFi Name | ✅ Wire protocol confirmed live (`wireless.<n>.hide_ssid`, duplicated as `aaa.<n>.hide_ssid`) → `hidden` (hostapd `ignore_broadcast_ssid`) |
-| MAC Address Filter | ✅ Wire protocol confirmed live. Arrives in a top-level `macacl.<m>.*` section keyed by **devname**, not by WLAN index, so it is joined on `wireless.<n>.devname` → `macfilter` + `maclist`. Allow/deny policy maps 1:1 onto OpenWrt's; enforced by hostapd itself |
-| WiFi Speed Limit | ⚠️ Wire protocol confirmed live (top-level `qos.vap.<m>.*`, joined on devname; kbps). **Per client**, as the UniFi firmware does it (upstream's reading of 4.0.15, adopted 2026-10-18): one queue per station in each direction, upload queued on an IFB device (`kmod-ifb`; policing without it), and the controller's per-client `rate-update` honoured for one association. Needs a speed-limit profile to exist in site settings before the per-WLAN toggle emits anything. No hostapd/OpenWrt option expresses a throughput cap, so it is enforced with `tc` — HTB on egress for downlink, ingress policing for uplink. The generated commands are verified against real `tc`, but the on-air throughput is not (no real radios available). The qdiscs are rebuilt from UCI on every start, so the cap survives a reboot |
-| Roaming Assistant | ✅ Adopted from upstream 2026-09-28, **verified on real hardware there**: a client stuck at −80 dBm on one AP was moved to the other (−61 dBm) and stayed for the 30 min watched. ⚠️ Not yet exercised between AP1 and AP2 here. Per WLAN, 5 GHz (`wireless.<n>.btm_disassoc.*`, needs `wifi_caps2` bit `0x20`). A weak client gets an 802.11v request toward an AP that hears it at least `roam_assist_diff_db` (8) dB louder, then a disassociation with a short ban if it stays; a client with no better AP is left alone. Decided in `roamassist.lua`, not by usteer's device-wide roam trigger; needs `usteer` on every AP for the cross-AP signal table (see USAGE § 6) |
-| Minimum RSSI | ✅ Working — per **radio**, not per WLAN. Since 2026-10-18 it is the firmware's two halves (upstream's reading of 4.0.15): hostapd refuses probes and authentication 3 dB above the threshold, and a client already on is kicked only after 30 s below it, so a weak client no longer loops kick → rejoin (a one-shot kick, not a persistent block). Disabling it in the controller stops the enforcement (the wire signals disable by omitting the whole `stamgr.<n>` block) |
-| Wireless uplink / mesh | ✅ **Working — verified end to end 2026-10-03** on two MT7986 boards against a real UCG Ultra: an AP whose cable is pulled joins a parent's hidden 4-address WDS downlink within ~20 s, keeps its address, informs over the hop, and its VLAN-tagged SSIDs keep reaching their networks; the controller shows the wireless uplink, the parent and the topology hop. UniFi's mesh is 4-address WDS, not 802.11s (PROTOCOL-VALIDATION § Wireless uplink). The station is enabled only while the wired uplink socket has no link, so a wired AP never bridges two uplinks. Claimed (`wifi_caps` `0x1`/`0x800`) by default on every board. swconfig boards claim it since 2026-10-18: their uplink policy reads the socket's link from the switch, and tagged SSIDs cross the hop through a guarded `br-lan.<vid>` port (USAGE § 6b). First run on one 2026-10-19, a Deco M4R v1 (user, a shallow test): with the cable pulled it came up online over the wireless uplink; the cable coming back and a tagged SSID across the hop are not yet confirmed there. The wire coming back disables the station on the next heartbeat (verified). Not yet exercised: more than one hop |
-| Show Access Point Name in Beacon | ❌ **Not implemented on the OpenWrt side.** The wire protocol and its `wifi_caps2` bit `0x40` gating are confirmed live, and openUF writes `wps_device_name`/`ap_setup_locked` — but a beacon never carries the name. OpenWrt emits the whole WPS/WSC block, `device_name` included, only when `config_methods` is non-empty, which needs `wps_pushbutton` or `wps_label`; openUF sets neither, so WPS never activates. Upstream verified this 2026-09-10 on an Archer C5 and an AX3000T (both 25.12.5): the gate is `/usr/share/ucode/wifi/ap.uc:227`, and no live BSS config carries a single WPS key. Enabling WPS to broadcast a name is a real security surface for a cosmetic feature, so this is left unimplemented deliberately |
-| WLAN Schedule | ⚠️ **Implemented 2026-10-18** from upstream (`wlansched.lua`, confirmed on their hardware, unit-tested here): the controller's on-time blocks (`wireless.<n>.schedule_<day>[.<i>]`, `fw_caps` `0x1000` claimed) are stored per SSID and checked every heartbeat; outside them the SSID's netdev goes down, inside them it comes back with its beacon restarted. Nothing moves until the clock is trusted (a controller answer's time within a minute of the local clock) — the firmware keeps every SSID up until NTP has set the time, and so does this. Previously: Two `fw_caps` bits change that wire format and are deliberately not claimed until the schedule is built: `0x1000` (several time blocks per day as `schedule_<day>.<i>`; without it, blocks collapse onto one key and the last one wins) and `0x400000` (`schedule_invert`; without it the controller inverts the schedule itself). See PROTOCOL-VALIDATION.md § Capability bitmasks |
-| SAE Anti-clogging / SAE Sync Time | ❌ **Not applicable on OpenWrt.** The wire keys (`aaa.<n>.sae.anti_clogging` / `.sae.sync`) are real and emitted only for a genuine WPA3/SAE WLAN, but `sae_anti_clogging_threshold` and `sae_sync` are hostapd keys with **no** wifi-iface UCI option behind them — upstream checked the wifi-iface schema, `/usr/share/ucode/wifi/` and `hostapd.sh`'s `config_add_*` lists on two boards (25.12.5) and found neither. openUF used to write them; UCI stored them and the generator dropped them in silence. Removed, along with the parser fields nothing could consume |
-
-### Reporting and statistics
-
-| Feature | Status |
-|---|---|
-| Wireless client statistics | ✅ Working — per-client traffic, signal, MIMO/generation, TX MCS (`vap_table[].sta_table`) |
-| Radio statistics | ✅ Working — channel utilization, avg. signal/interference/airtime, per-VAP "Air Stats" |
-| WiFi Experience / satisfaction score | ✅ Working — device-computed, confirmed rendering live. **Since 2026-10-18 it is the UniFi firmware's own formula** (`satisfaction.lua`, ported by upstream from `libubnt.so` 4.0.15: the lowest of the signal, PHY-rate and last-minute retry terms, with `satisfaction_reason`, `anomalies` and the per-SSID bar charts the controller draws; the TCP and latency terms score 100 since mac80211 has no source for them). Before that, an estimate reworked from upstream 2026-09-28: the worst of downlink airtime efficiency (ideal ÷ actual `tx duration`, as Aruba/Aerohive score client health; the per-frame cost is per band since 2026-10-03, after a clean 5 GHz MacBook sending one small frame per PPDU was scored Poor by the 2.4 GHz figure), uplink rate against the client's association ceiling (`hostapd_cli all_sta`), and SNR against the radio's noise floor. Upstream measured airtime tracking ping loss on mt76 (the same driver family as the JioRouter's mt7986) and read ath9k's retry accounting from source. ⚠️ Unconfirmed: whether ath10k firmware counts retries in airtime, and HE (Wi-Fi 6) client ceilings. Before this the score was signal vs. retry ratio, and retry counters mean different things per driver |
-| Ethernet port statistics (`port_table[]`) | ✅ Working — one entry per **physical socket** on swconfig boards, each with the link speed and duplex that socket actually negotiated, read from the switch (the CPU netdev only ever knows the internal SoC↔switch link, which is always 1000/full). Which socket is the uplink is detected from the switch's ARL table, so it follows the cable. Per-port byte counters from the switch's MIB, which openUF switches on at startup where the driver ships it off (`ar8xxx_mib_poll_interval`); packet/multicast/broadcast/drop counts are not available per socket, so those columns stay empty rather than carrying the CPU port's totals. Anomaly, STP and Profile are controller-side or USW-only — they read `-` for a real UniFi gateway's ports too. Boards with no readable switch keep the netdev-based single-port shape |
-| Wired client statistics (`port_table[].mac_table`) | ✅ Working — hosts are placed on the socket they are really plugged into, from the switch's ARL table on swconfig boards (there `bridge fdb` can only ever say "behind the CPU port") and from the bridge FDB on DSA, where each socket is its own bridge port. Each socket is asked about **its own** bridge, not the uplink's, so a socket openUF has moved into a VLAN bridge still reports its hosts; where that socket has MAC learning off (see per-port VLAN below) the FDB has nothing to say and the hosts come from an nftables tap instead. Rows carry `vlan` (the VLAN of the bridge the socket sits in) and, for such a socket, an `ip` harvested by the tap — which is what puts the client on the right **network**, not just the right port. The uplink socket reports none, and neither does a socket on a VLAN openUF does not carry (a swconfig board's WAN socket stranded on VLAN 2 — a host there is not reachable on the LAN it would be listed in). The AP's own MACs and its wireless stations are never reported as wired clients. One `bridge fdb` dump serves every socket in a payload |
-| AirView Connectivity and Roaming | ⚠️ Adopted from upstream 2026-10-18 (`assoctrack.lua`): each connection's Association / Authentication / DHCP / DNS stages and every arrival, departure and roam go out as the `notif` informs a UniFi AP sends, within ~250 ms, with the Fast Roaming, Minimum RSSI and Roaming Assistant tags; `wifi_caps2` `0x2000` is claimed while they are sent. Confirmed on upstream's hardware; needs both APs on this build here |
-| STUN wake-up | ⚠️ Adopted from upstream 2026-10-18 (`stun.lua`): openUF is the STUN client the controller expects, so a command or a WLAN edit reaches the AP within a second instead of at the next heartbeat. Confirmed against upstream's 10.6 controller |
-| Load balance (per-radio client cap) | ⚠️ Adopted from upstream 2026-10-18: `stamgr.<n>.loadbalance.maxsta` kicks the most idle clients above the cap, as the firmware does. REST-only in the 10.6 UI |
-| Environment / rogue-AP scanning (`scan_radio_table`) | ✅ Working — confirmed rendering live in the Environment tab. Read from the kernel's passive BSS cache, so on its own it lists only neighbours on the radio's **own** channel (measured: 0 on 5 GHz, co-channel only on 2.4 GHz); an optional `neighbour_scan_interval` adds a real sweep at the cost of a brief client stall |
-| Sibling-AP recognition (no false "impersonator" warnings) | ✅ Adopted from upstream 2026-09-28 — the controller takes the scanning AP's `is_unifi`/`serialno` tag as the only proof a BSS is the site's own (decompiled `com.ubnt.service.aS.rhAW`). openUF APs beacon a small vendor element (`vendor_elements`) carrying their identity MAC and tag each other; without it every other openUF AP was listed as a third-party AP broadcasting your SSID (upstream saw all six sibling BSSes flagged). Read back over nl80211 through `ucode`, because OpenWrt's `iw` never prints an unknown vendor IE. openUF ↔ openUF only. ⚠️ AP1 and AP2 have not run this build yet, so the Environment tab here has not been checked |
-| RF environment enrichment (802.11k beacon reports) | ✅ Working — the mechanism Ubiquiti's Channel AI describes as *"neighbor reports and automated RRM scans"*, adopted from upstream. openUF periodically asks one 802.11k-capable **client** to sweep and report back; the client goes off-channel, the AP never does. Upstream measured a 5 GHz Environment list going from 0 neighbours to 4. Off with `rrm_enrichment = false` |
-| LLDP topology announcement | ✅ Working (via `lldpd`) — **set `lldpd.config.cid_interface` to your LAN network**, or the controller shows the wrong Parent Device: lldpd's default chassis ID is some other interface's MAC, which the controller can't match to the MAC openUF is adopted under. See [USAGE](USAGE.md#7-lldp-topology) |
-| RF scans — Airtime Scan, Quick Scan, Radio AI's sweep | ✅ Working — verified live 2026-10-03: `spectrum-scan`, `quick-scan` and `scan_band` each queue a sweep that runs in four-channel chunks, one per heartbeat (a whole-band sweep in one go silenced the radio for ~3 s and dropped every client — see PROTOCOL-VALIDATION.md § RF scans), and the survey counters become per-channel, per-width utilization/interference rows the Airtime view renders; the Quick Scan card's "last scan" comes from the `EVT_AP_QuickScanEvent` notification openUF posts after the sweep (PROTOCOL-VALIDATION.md § RF scans). Interference is "busy airtime that was not our own rx/tx", an approximation of what a real AP's spectral hardware measures |
-
-### Device management
-
-| Feature | Status |
-|---|---|
-| Locate (LED identify blink) | ✅ Working — requires `dev.conf.led` set per board, naming an LED that is **actually wired** (see USAGE § 3). Locate snapshots whatever trigger the LED was driving, persists it, and restores it on stop, so it survives a restart landing between `set-locate` and `unset-locate`; an interrupted Locate is torn down at the next start rather than blinking forever |
-| Manage → LED steady on/off toggle | ✅ Working — same `dev.conf.led` requirement. Persisted and re-applied at startup, so it survives a reboot; also re-asserted when a Locate ends, since restoring the blink's previous trigger alone would leave a status LED dark |
-| Client block / unblock | ✅ Working — enforced via nftables, persists across restarts |
-| IP Settings (DHCP / static) | ✅ Working — reconfigures the device's own management interface, including the DNS servers (`resolv.nameserver.<k>.ip` → `/etc/resolv.conf`, in the controller's primary/secondary order). DNS is applied on the static path only; on DHCP the lease supplies it. A static address is re-applied on every start, so it survives a reboot the controller never re-pushes it after |
-| Per-port VLAN assignment | ⚠️ Wire format fully mapped live (`switch.*`: device-level gate, per-VLAN table, per-port `pvid` plus a tagged/untagged/`exclude` matrix joined on `port_table[].port_idx`); requires reporting the `hasOWRTSwitch` capability bit and ticking **Port VLAN** on the device. Applied two ways. On **swconfig** boards, as `switch_vlan` sections: requires a `dev.conf.vlan` port map plus a `swport` on the port, never touches the socket the uplink cable is in (detected at runtime, and refused outright when it cannot be determined), and is reversible — unticking the device-level **Port VLAN** box tears openUF's sections down and restores the stock port strings; the generated UCI is unit-tested, but that it programs a real switch ASIC is **not verified**. On **DSA** boards (adopted from upstream, verified there on an AX3000T against a UCG Ultra) there is no switch table to write and `bridge-vlan` is deliberately not used: the assigned socket is moved out of `br-lan` and into that VLAN's `br-openuf<id>` bridge — the same L2 a tagged SSID on the same VLAN already uses. `br-lan` keeps the uplink and the management address and nothing runs with `vlan_filtering`, so a wrong answer cannot strand the AP. The moved socket gets MAC learning switched **off** (`openuf_brport<vid>_<socket>`): the ASIC has one address table shared with the uplink, and with learning on it hardware-drops every VLAN-tagged reply to the socket while outbound stays perfect — measured upstream as four DHCP DISCOVERs out and nothing back, versus a 2 ms OFFER with learning off. The hosts behind that socket, which learning off takes out of `bridge fdb`, come from an nftables tap (`bridge openuf_learn`) instead. Native VLAN only; a tagged-only port is refused out loud. ⚠️ Not yet exercised on this tree's JioRouter boards |
-| Set Replacement Device / Load Configuration | ✅ Working — both are controller-side clones; no device-side protocol involved |
-| Controller-scheduled nightly neighbour scan (`cron.*` → `syswrapper.sh 11k-scan`) | ✅ Wire protocol confirmed live 2026-09-15 (AP2). Every full push carries a cron job, `0 4 * * * syswrapper.sh 11k-scan`, that the controller expects the AP's own cron to run — the "automated RRM scans" of Channel AI. openUF writes the pushed jobs into a marked block in `/etc/crontabs/root` (only commands this build provides are installed, everything else is logged) and adds the `11k-scan` verb, which asks the running daemon to sweep every radio on its next heartbeat and report the result. Needs a correct clock, which is what the next row is for |
-| NTP servers and timezone from the controller (`ntpclient.*`, `system.timezone`) | ✅ Wire protocol confirmed live 2026-09-15. Applied to UCI `system.ntp.server` and `system.@system[0].timezone`, each stamping what it replaced (`openuf_ntp_orig`, `openuf_timezone_orig`) so it is visible and reversible; an explicit `ntpclient.status=disabled` puts the board's own list back. Found because AP2's clock was eight days slow with sysntpd running — that jailed daemon's failure to sync is a separate, still-open question |
-| `ebtables.*` hardening (BPDU and VLAN-tag drop from wireless clients) | ⚠️ Wire protocol confirmed live 2026-09-15: ten literal ebtables rules per push, dropping frames to the Bridge Group Address on every VAP in both directions and 802.1Q-tagged frames from clients. Re-expressed as an nftables `bridge openuf_l2guard` table on the **AP VAP netdevs only** — the bridge-wide `--vlan-id` rule is deliberately not applied to wired sockets, because on a DSA board the tagged uplink traverses the bridge and telling the uplink socket from a client socket is a detection openUF refuses when unsure. Rebuilt at startup from `state.json`. The generated ruleset is unit-tested; its on-air effect is not verified. Needs `kmod-nft-bridge`, like the Blocker. Since 2026-09-28 the VAP list is re-read once a minute and the table rebuilt when it changed (an SSID added by a push whose `wifi reload` had not finished, or wireless coming up after the daemon), and a factory reset removes the table |
-| Power / PoE reporting | Not applicable — the flagged UI field belongs to the upstream parent device, not the AP |
-| Speed test | Not applicable — gateway-only feature in current UniFi Network |
-| USG / USW emulation | Not implemented, not planned |
-
-## Supported hardware
-
-A dual-band OpenWrt device with **at least 16 MB flash**, and roughly **5 MB free on
-`/overlay`** after the stock image.  8 MB is not enough: the AES-GCM backend
-(`lua-openssl`) pulls in `libopenssl3` at ~4.35 MB, and adoption cannot complete without
-GCM — a stock 8 MB build leaves only ~1.6 MB of overlay, which no crypto backend fits in
-(`openssl-util` and `luaossl` depend on the same library).  Measured on a TL-WDR3500 v1,
-which is 3.2 MB short and therefore **cannot run openUF from a stock image** — it needs
-USB extroot or a custom build with the crypto baked into squashfs.  Known-working:
-
-- **TP-Link Archer C5 v1** (dual-band 802.11n/ac) — use `modelmap/archer-c5-v1.lua`.
-  **The reference device**: install, adoption, the WiFi config push, live clients and the
-  radios themselves are confirmed on this board (OpenWrt 25.12.5) against a real UniFi Cloud
-  Gateway Ultra — see [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md#the-first-real-hardware-run)
-- **TP-Link TL-WDR3500 v1** (dual-band 802.11n, 2x2) — use `modelmap/tl-wdr3500-v1.lua`.
-  Adoption, SSID provisioning, 802.11r/k/v, Band Steering, Minimum RSSI and WiFi Speed
-  Limit all confirmed on real hardware against a UCG Ultra.
-  ⚠️ **8 MB flash: does not fit a stock image** (see the space requirement above) — it needs
-  a custom build with the crypto in squashfs. Even then **`nftables` typically does not fit**
-  (~490 KB with its kernel modules), which leaves two features unavailable on this board:
-  **client Block/Unblock** and the **Multicast and Broadcast Blocker**. Its radio order is
-  also the reverse of the Archer C5's — `radio0` is 2.4 GHz here
-- **TP-Link WR1043ND v2** (single-band 802.11n) — use `modelmap/tl-wr1043ndv2.lua`
-- **TP-Link Archer A7 v5 / Archer C7 v4 / Archer C7 v5** (dual-band 802.11n/ac, 3x3, QCA9563 +
-  QCA9880, ath79) — use `modelmap/archer-a7-v5.lua`, **one profile for all three**: OpenWrt's
-  `board.d` handles them in a single case (same switch layout, same LED names, same radios).
-  ⚠️ **Not yet run on the hardware**: derived from the OpenWrt DTS and `board.d`; the header
-  flags what to check first (the LAN1–LAN4 socket order and the radio order). 16 MB flash, so
-  a stock image fits. The first profile to present a **WiFi 5 identity** — `ufmodel/uhdiw.lua`,
-  the UAP-IW-HD, five sockets like the board — which no controller has adopted under yet; the
-  header says how to fall back to `u6iw`
-- **TP-Link Deco M5 v1 / v2 / v3** (dual-band 802.11ac Wave 2, 2x2, IPQ4019 / ipq40xx, DSA) — use
-  `modelmap/deco-m5.lua`, **one profile for all three revisions**: OpenWrt builds them from one
-  `.dtsi` with the same two sockets (the DSA netdevs `wan` and `lan`) and the same radios; they
-  differ only in how the single RGB LED is wired (an lp5521 on v1/v2, GPIOs on v3), and the
-  profile resolves that name at load time. ⚠️ **Not yet run on the hardware**: derived from the
-  OpenWrt DTS and `board.d`; the header flags what to check first (pin the bridge MAC to the
-  label **before adopting** — netifd otherwise follows the bridge's first member, and a per-port
-  VLAN push can change that — plus the radio order and the LED name). Presents a **two-socket WiFi 5 identity** —
-  `ufmodel/u7hd.lua`, the UAP-AC-HD — first adopted by a live controller on a Deco M4R v1
-  (2026-10-18, user); the header says what that left open and how to fall back to `u6iw`. The
-  USB-C socket is power only on the Deco and "reserved for future use" on the UAP-AC-HD, so nothing
-  is reported for it. ⚠️ **Upstream OpenWrt has it in snapshots only**: the M5 reached main on
-  2026-03-25 and is in no release. Release-based images, 24.10.2 to 25.12.5, come from
-  [dutchmillbytes/openwrt](https://github.com/dutchmillbytes/openwrt/releases); they put the label
-  MAC on `lan` instead of `eth0`, which leaves `eth0` random, so the header's pin command copies
-  `br-lan`'s own address and works on both. ⚠️ **No image ships the M5's WiFi board data yet**
-  (`ipq-wifi-tplink_deco-m5`, so far only on that fork's branches): the radios run on the generic
-  IPQ4019 data until one does
-- **TP-Link Deco M4R v1 / v2** (dual-band 802.11n + 802.11ac Wave 2, 2x2, QCA9563 + QCA9886, ath79,
-  swconfig) — use `modelmap/deco-m4r-v1.lua`, **one profile for both revisions**: OpenWrt builds the
-  v2 from the v1's DTS (same chips, same OEM firmware), so both report `tplink,deco-m4r-v1`. Two
-  sockets on one tagged CPU trunk (`0@eth0`), physical ports 3 and 5, and **no WAN role at all** —
-  OpenWrt makes both sockets LAN, so the AP conversion has nothing to move. ⚠️ **Only a first,
-  shallow run on the hardware** (a v1, user: adopted 2026-10-18, meshed with the cable pulled
-  2026-10-19); the profile is derived from the OpenWrt DTS and `board.d`, and the header flags what
-  to check first (which hole is physical 3, the radio order, the LED name). 16 MB flash, so a stock image fits. Presents the
-  same **two-socket WiFi 5 identity** as the Deco M5 (`ufmodel/u7hd.lua`), with the same fallback
-- **TP-Link Deco M4R v4** (dual-band 802.11n + 802.11ac Wave 2, 2x2, MT7621 + MT7603 + MT7613,
-  ramips / mt7621, DSA) — use `modelmap/deco-m4r-v4.lua`. A different board from the v1/v2 (MediaTek
-  instead of Qualcomm, DSA instead of swconfig), hence its own profile. ⚠️ **Its two sockets are the
-  netdevs `eth0` and `eth1`** — DSA ports, renamed so in OpenWrt 24.10, with the CPU conduit called
-  `dsa` — so the generic profiles, which take `eth0` for a CPU trunk, are wrong on it; this profile
-  uses the bridge, as on every DSA board here. ⚠️ **Not yet run on the hardware**: derived from the
-  OpenWrt DTS and `board.d`; the header flags what to check first (the bridge MAC against the sticker,
-  which hole is switch port 0, the radio order, whether the PCB's extra LEDs show through the case).
-  16 MB flash, so a stock image fits. Presents the same identity as the v1/v2
-- **Xiaomi Mi Router AX3000T** (dual-band 802.11ax, 2x2, MT7981 / mediatek-filogic) — use
-  `modelmap/xiaomi-ax3000t.lua`. Profile adopted from upstream (jonasevcik/openUF), where
-  it is verified on the hardware: HE on both bands, 160 MHz on 5 GHz, DSA. Its four sockets
-  are the netdevs `wan`/`lan2`/`lan3`/`lan4` (no `lan1`), and its case LED needs
-  **`kmod-leds-gpio`** or the board has no drivable LED at all — `install.sh` adds the
-  module when it sees only radio LEDs registered. ⚠️ Not yet run on this tree's own
-  hardware; the map differs from the JioRouter ones in naming the uplink socket as
-  `lan_cpueth` rather than the bridge, which openUF now handles either way
-- **JioRouter AX6000 JIDU6101** (MT7986A / mediatek-filogic, dual-band 802.11ax) — use
-  `modelmap/jiorouter-ax6000-jidu6101.lua`. ⚠️ **Not yet confirmed on the hardware**: the
-  profile is derived from the board's OpenWrt DTS and `board.d` entry rather than from a
-  live run, and its header flags the two facts to check first (the LED name and which
-  radio is which band). The first **DSA** board here rather than swconfig, which changes
-  how ports are reported — see below. 140 MB of SPI-NAND, so space is a non-issue.
-  Carries a `dev.conf.radio` policy: its 5 GHz radio cannot be handed the controller's
-  channel **Auto** unqualified (hostapd ACS picks a DFS channel, the mt7915 driver fails
-  to start CAC, and the radio is left down), and the controller's default mode for the
-  emulated U6IW is 802.11n at 40 MHz on a 4x4 WiFi-6 phy — see
-  [USAGE](USAGE.md#radio-policy-devconfradio)
-- **JioRouter AX6000 JIDU6J01 / JIDU6201 / JIDU6401 / JIDU6601 / JIDU6701** (MT7986A /
-  mediatek-filogic, dual-band 802.11ax) — use `modelmap/jiorouter-ax6000-jidu6j01.lua`.
-  **One profile for all five**: OpenWrt builds a single image from one DTS, so every
-  variant reports the same board name and differs only in where `board.d` reads the label
-  MAC from in the MFG partition — resolved at first boot, before openUF starts.
-  ⚠️ **Not yet confirmed on the hardware**: derived from the OpenWrt DTS plus the
-  JIDU6101 profile, which is the same SoC and the same MT7976 radios. It inherits that
-  board’s measured `dev.conf.radio` policy; the header flags what to re-check first
-- **Dynalink DL-WRX36** (dual-band 802.11ax, IPQ8072A / qualcommax-ipq807x) — use
-  `modelmap/dynalink-dl-wrx36.lua`. Presents as a **U6-InWall**, like the JioRouter profiles: WiFi 6
-  on two bands and five sockets, four GbE LAN and a 2.5 GbE WAN. Every socket is its own netdev, so
-  the profile uses the bridge and detects the uplink, as on every DSA board here. OpenWrt main drives
-  the switch as DSA (the PPE driver); 24.10 and 25.12 still use the NSS dataplane, which presents
-  the same five netdevs. ⚠️ **Not yet run on the hardware**: derived from the OpenWrt DTS and
-  `board.d`; the header flags what to check first (the radio order, the reverse of the JioRouters',
-  and the LED name `blue:`). ⚠️ **Pin the bridge MAC before adopting**: `board.d` sets none, so
-  `br-lan` follows `lan1`, and a port VLAN on Port 1 would change the identity; the header has the
-  three commands. It carries the JioRouters' 80 MHz floor on 5 GHz, which answers the U6-InWall's
-  40 MHz default, but not their DFS and 160 MHz limits, which answer a MediaTek driver. NAND flash,
-  so space is a non-issue
-
-Anything else: `modelmap/generic-dualband-ap.lua` or `modelmap/generic-singleband-ap.lua`,
-or let `setup.sh` generate a profile from the running device (DSA boards only, where every
-socket is a netdev and a correct profile really is derivable — on a swconfig board the
-physical port numbering is board truth that cannot be probed, and it refuses rather than
-guessing).
-
-**swconfig vs DSA.** These change which of two port-reporting shapes a profile uses, and
-getting it wrong is not cosmetic — a socket wrongly treated as downstream makes the AP
-report the whole LAN, gateway included, as hosts plugged into it:
-
-| | swconfig (ath79) | DSA (filogic and later) |
-|---|---|---|
-| Sockets in the kernel | one CPU netdev for all of them | one netdev per socket |
-| Port link speed / duplex | `swconfig dev switch0 show` | the netdev's own sysfs |
-| Which socket a host is on | the switch's ARL table | that socket's bridge-FDB slice |
-| Uplink socket | `dev.conf.vlan` + ARL lookup | `dev.conf.net.uplink_detect = "fdb"` |
-| Per-port VLAN assignment | supported (`switch_vlan` sections) | supported (the socket moves into the VLAN's bridge; Native VLAN only) |
-| `dev.conf.vlan` | required | must be **absent** |
-
-The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end.  `ufmodel/uhdiw.lua` (UAP-IW-HD, the WiFi 5 in-wall with the same five sockets) is selected by the Archer A7/C7 profile so a WiFi 5 board is offered 802.11ac modes rather than WiFi 6 ones it has to clamp; its model code and firmware version come from Ubiquiti's own firmware catalog, but ⚠️ no controller has adopted a device under it yet.  `ufmodel/u7hd.lua` (UAP-AC-HD, the WiFi 5 ceiling AP with **two** sockets) is selected by the Deco M5 and both Deco M4R profiles for the same reason and to match those boards' socket count; its facts come from the same catalog, and a controller has adopted it once so far, on a Deco M4R v1 (2026-10-18).  `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
-
-## Quick start
-
-**OpenWrt package** (24.10 `opkg`, 25.12 `apk`; both on the release page, built by the
-release workflow): `apk add --allow-untrusted ./openuf_<ver>_all.apk`, set
-`openuf.main.inform_url` if your controller is not reachable as `unifi`, start the service.
-The configuration is `/etc/config/openuf`; see [USAGE § 2](USAGE.md#as-an-openwrt-package).
-The package depends on everything openUF uses except a **full wpad build**, which OpenWrt
-cannot express as a dependency and which is not negotiable (a `wpad-basic-*` build rejects
-the 802.11v option every controller WLAN carries and takes the radio down): `openuf deps
---install` swaps the basic build for the full one of the same crypto library, and the
-service refuses to start until that has happened.
-`luci-app-openuf` adds *Services → openUF* to LuCI (24.10 and later): status, the wpad swap
-and missing packages as a button, every option with a plain-language description, a custom
-hardware profile filled in from what the board reports, an export of that profile as a file
-to contribute, and the conversion into an AP (WAN off, DHCP and firewall off) as a button;
-from the shell that is `openuf-convert`.
-
-From the reboot after `luci-app-openuf` is installed, the device's address opens openUF's own
-**device page** instead of LuCI, the way an adopted Ubiquiti or Omada device sends you to its
-controller: an *Overview* anyone on the network can see (adoption state, the controller's
-address, the device facts it already broadcasts) and *Local Settings* behind the root
-password. LuCI is one hidden step away: the Konami code (↑ ↑ ↓ ↓ ← → ← → B A), or seven taps
-on the device picture on a phone, offers it, and LuCI's header then carries *Exit LuCI mode*.
-`uci set openuf.web.portal=0` (or the switch on either settings page) turns the page off.
-Inside LuCI the app adds a **dashboard** as the landing page: health checks, the path from the
-gateway through the device to its radios and networks, live throughput, radios, clients and
-the controller's view of the device. **`luci-theme-halo`** is a full LuCI theme in the same style -- a sidebar of sections with their pages nested under them, cards, switches, meters, light
-and dark -- usable without openUF too; `openuf deps --install` adds it only where LuCI is
-installed and the flash has room to spare. See USAGE.md § "The device page".
+## Install
 
 One command on the device, over SSH:
 
@@ -262,187 +110,99 @@ One command on the device, over SSH:
 wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh
 ```
 
-`setup.sh` is the whole conversion, guided: it identifies the board, asks what it
-cannot know, and does everything in an order chosen so a failure never leaves the
-device unreachable.
+The guided installer identifies the board, asks the few things it cannot know, and does
+the rest in an order that never leaves the device unreachable:
 
-1. **Interview** — every question first, before anything is changed. One of them is
-   whether to install the **web interface**: the default installs the OpenWrt packages
-   `openuf` and `luci-app-openuf` (LuCI's dashboard, openUF's pages and the device page)
-   from the latest release, and offers the Halo theme where the flash has room; a
-   **headless** install puts the daemon alone under `/opt/openuf` and adds nothing to LuCI.
-   Never both: a device carrying the file install and the package has two copies of
-   openUF, and a controller has shown such a device as two devices, so `install.sh` now
-   refuses beside the package and the package warns beside a file install.
-2. **Access-point conversion** — a device still acting as a router fights the real
-   gateway for DHCP and NAT, so the router role goes: no WAN interface, the WAN
-   socket folded into the LAN side, DHCP server off, `firewall`/`dnsmasq`/`odhcpd`
-   stopped and out of the boot sequence, and the resolver pointed back at the real
-   nameservers `dnsmasq` was fronting. The packages are left installed, only
-   disabled, so it is one command to undo.
+1. **Interview.** Every question first. The default installs the `openuf` and
+   `luci-app-openuf` packages from the latest release, plus the Halo theme where there is
+   room; `--headless` installs the daemon alone.
+2. **Access-point conversion.** The router role goes: no WAN, the WAN socket joins the LAN,
+   DHCP server and firewall off. Everything is left installed and is one command to undo.
+3. **Hardware profile**, **controller address** and the **adoption account**, which locks
+   itself once the device is adopted.
+4. **Dependencies**, including the full `wpad` build, then install and reboot.
 
-   Folding in the WAN socket means two different things: on **DSA** it is the
-   socket's own netdev, so it joins the LAN bridge and stays hardware-switched. On
-   **swconfig** it is a CPU netdev reaching a socket the ASIC has segmented into its
-   own VLAN — bridging that in works but hairpins every frame through the SoC, so
-   `setup.sh` moves the port into the LAN VLAN in the switch instead, and only when
-   it can prove which port that is. See [USAGE](USAGE.md#moving-the-wan-socket-to-the-lan-side).
-3. **Hardware profile** — the board-specific profiles are listed with the detected
-   one marked, the generics below them, and generating one from the running device
-   at the bottom. Enter takes the detected board's profile, or a generic chosen by
-   radio count when there is none.
-4. **Controller** — an address, or nothing at all to be found by L2 discovery.
-5. **Adoption account** — the locked-down `ubnt`/`ubnt` bootstrap login, so first
-   adoption works without presetting a root password. Whether it exists also decides
-   the adoption path: with no bootstrap account and no root password, L2 discovery is
-   switched **off**, because a controller that discovered a device over L2 insists on
-   adopting it over SSH and fails outright when it cannot log in.
-6. **Dependencies** — installed, including swapping a `wpad-basic-*` build for the
-   matching full one (`wpad-basic-mbedtls` → `wpad-mbedtls`, same crypto library, so
-   no extra flash). A basic build has no `bss_transition` option at all and errors
-   the radio down; `install.sh` alone cannot fix that, because the two packages
-   conflict and `add` without `del` fails.
-7. **Install and reboot.**
+Then open UniFi Network. The AP appears under Devices (or under *Pending* when you gave it
+the controller's address), and **Adopt** does the rest.
 
-Package installation deliberately runs *before* the network teardown: the teardown
-can take this device's internet with it, so nothing is left to download by then.
-
-Everything it asks can also be passed as an option, so the same script drives an
-unattended install:
+Unattended, with every answer as an option:
 
 ```sh
 wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh -s -- \
     --yes --controller 10.0.0.5 --modelmap jiorouter-ax6000-jidu6101 --no-reboot
 ```
 
-`sh setup.sh --help` lists them all. `OPENUF_REPO`, `OPENUF_REF` and `OPENUF_SRC`
-point it at a different fork, branch, or a checkout already on the device.
-
-<details>
-<summary>Doing it by hand instead</summary>
+`sh setup.sh --help` lists them all. The packages alone, from the
+[release page](https://github.com/yesrab/openUF/releases):
 
 ```sh
-# 1. SSH into the OpenWrt device, install dependencies (OpenWrt 25.12+ uses apk)
-apk update
-apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftables kmod-nft-bridge hostapd-utils usteer ip-bridge tc-tiny kmod-ifb kmod-sched-act-police wpad-wolfssl
-
-# 2. Download and install (no git client or scp needed). This is the source
-#    tree; install.sh comment-strips it on the way in. A tagged release
-#    (vX.Y.Z) publishes a pre-stripped openuf-X.Y.Z.tar.gz under Releases
-#    instead; it unpacks to openuf-X.Y.Z/ and installs the same way.
-wget -O openuf-src.tar.gz https://codeload.github.com/yesrab/openUF/tar.gz/main
-tar xzf openuf-src.tar.gz && cd openUF-main
-sh install.sh install
-#    Re-running this later upgrades in place and KEEPS the device's conf.lua
-#    (its modelmap above all); add --replace-conf to start from the default.
-#    Later upgrades: `openuf-update` on the device, or from your dev machine
-#    `sh tools/deploy.sh <ap-ip>...` (USAGE § 2, "Upgrading an installed AP").
-
-# 3a. L2 adoption (device and controller on same subnet)
-#     — The device will appear in UniFi Discover automatically.
-#     — Click Adopt in the controller UI.
-
-# 3b. L3 adoption (different subnets — no SSH from the controller needed)
-ssh root@<device> syswrapper.sh set-inform http://<controller-ip>:8080/inform
-#     — The device will appear as Pending in the controller.
-#     — Click Adopt.
+apk add --allow-untrusted ./openuf-<ver>.apk ./luci-app-openuf-<ver>.apk   # OpenWrt 25.12
+opkg install ./openuf_<ver>_all.ipk ./luci-app-openuf_<ver>_all.ipk         # OpenWrt 24.10
+openuf deps --install        # swaps a wpad-basic build for the full one
 ```
 
-`install.sh` does not touch the network configuration, so a device installed this way
-is still a router unless you convert it yourself.
-</details>
+Upgrades: `openuf-update` on the device, or install the next release's packages. The
+[usage guide](USAGE.md) covers configuration, the device page, upgrading, uninstalling and
+troubleshooting.
 
-Both adoption paths complete to **Connected**.  L2 requires the controller to
-SSH in (set a root password first, or use `--bootstrap-adopt`); L3 skips SSH
-entirely and delivers the adoption key over the inform channel.
+## Documentation
 
-The `apk add` step is optional: `install.sh install` installs every dependency that
-is missing, including `usteer` and a full `wpad` build — both required for BSS
-Transition (802.11v) and Band Steering to work at all. Any full build counts
-(`wpad`, `wpad-wolfssl`, `wpad-openssl`, `wpad-mbedtls`), and an existing one is
-left in place. `wpad-basic-*` builds lack 802.11v support entirely and will error
-with "unknown configuration item 'bss_transition'" — `install.sh` cannot swap one
-out (the packages conflict, so `add` without `del` fails), which is why `setup.sh`
-does it. By hand: `apk del wpad-basic-mbedtls && apk add wpad-mbedtls`, matching the
-crypto library already on the device.
+| Document | What it is for |
+|---|---|
+| [REFERENCE.md](REFERENCE.md) | **The full reference.** Every feature with its validation status, the hardware matrix, the detailed quick start, local testing and protocol notes |
+| [USAGE.md](USAGE.md) | Installing by hand, every configuration option, the device page and LuCI app, upgrading, troubleshooting |
+| [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) | What was confirmed against a live controller, with the wire evidence; it wins where other documents disagree |
+| [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md) | What is not implemented yet, what is known about it, and the experiment plan |
+| [PACKAGING.md](PACKAGING.md) | The OpenWrt packages, the LuCI app, the theme and the release workflow |
+| [CLAUDE.md](CLAUDE.md) | Working notes for contributors: the constraints, the landmines, and how to add a hardware profile |
 
-`install.sh` works on both package managers: `apk` on OpenWrt 25.12+ and `opkg` on
-24.10 and earlier.
+## Contributing
 
-`install.sh install` also registers `/etc/openuf/` and `/opt/openuf/conf.lua` with
-`sysupgrade`, so an adopted AP stays adopted across a firmware upgrade — stock
-`sysupgrade` backs up neither, and would take the authkey and the modelmap selection with
-it. Existing entries in `/etc/sysupgrade.conf` are left alone; see
-[USAGE.md](USAGE.md) for what uninstall does to them.
+Issues and pull requests are welcome at [github.com/yesrab/openUF](https://github.com/yesrab/openUF).
 
-Installing from a git checkout instead (for contributors/dev builds) still works — `scp -r
-openuf/ install.sh setup.sh root@<device>:/tmp/openuf/` and run `setup.sh` (or just
-`install.sh`) from there.
+**Report a problem** with the board and OpenWrt version, the controller version, and the
+output of `openuf status` and `logread -e openuf` on the device. Say what the controller
+showed.
 
-See [USAGE.md](USAGE.md) for full dependency details, configuration reference, and troubleshooting.
+**Add a hardware profile.** The most useful contribution. On a DSA board the installer can
+generate one (`setup.sh`, or *Export* on the LuCI settings page); otherwise write
+`openuf/modelmap/<vendor>-<model>.lua` from the board's OpenWrt DTS and `board.d` entry,
+following [CLAUDE.md § Adding a new device map](CLAUDE.md#adding-a-new-device-map), and say
+in its header what was and was not confirmed on the hardware.
 
-## Local testing (no hardware required)
+**Change the code.** The daemon is Lua 5.1 as OpenWrt ships it, the installers are POSIX
+shell for busybox; the constraints are listed in [CLAUDE.md](CLAUDE.md). Before a pull
+request:
 
 ```sh
-# Install Lua on macOS/Linux
-brew install lua luarocks      # macOS
-# or: apt install lua5.1 luarocks  # Debian/Ubuntu
-
-# Install test dependencies
-luarocks install --local lua-cjson
-
-# Run unit tests (all pure Lua)
-eval $(luarocks path --local)
-lua tests/run_tests.lua
-
-# Full end-to-end adoption round-trip against the Python controller stub
-# (needs pycryptodome, luasocket and lua-cjson):
-sh tools/simulate.sh --adopt
-
-# Or drive it manually:
-pip install pycryptodome
-python3 tools/test_controller.py --adopt --verbose
-# In another terminal, run from inside the openuf/ dir (the scripts load
-# conf.lua and the modelmap with cwd-relative paths):
-cd openuf && lua inform.lua
+eval $(luarocks path --local) && lua tests/run_tests.lua   # the suite, pure Lua, no hardware
+bash -n setup.sh && dash -n setup.sh                         # both shells, for every script touched
+sh tools/dist.sh --verify                                    # the stripped tree is bytecode-identical and still passes
 ```
 
-On a real AP, `tools/heartbeat-probe.lua` reports what one inform actually costs
-that board — every process spawned and file opened, per command and path — by
-building its own payload in a throwaway process alongside the running daemon.
-See [USAGE § 8](USAGE.md#measuring-what-a-heartbeat-costs-on-the-device).
+A new test file is registered in `tests/run_tests.lua`. Comments explain *why*, naming the
+failure that motivated the code. Where a fact cannot be determined, report nothing rather
+than a plausible guess. Protocol changes start from PROTOCOL-VALIDATION.md, and anything
+the controller sends that openUF does not act on stays counted in the unhandled ledger
+until it is implemented. No device addresses, passwords or controller keys go into the
+tree. CI runs the suite and the release verification on every push.
 
-## Protocol notes
+**Test without hardware.** `sh tools/simulate.sh --adopt` runs an adoption round-trip against
+the Python controller stub; `tools/validation/` has a Docker UniFi controller for the real
+thing.
 
-openUF implements the **TNBU binary inform protocol**:
+## Credits
 
-- HTTP POST to `/inform` every 10 seconds
-- Binary header: `TNBU` magic + version + MAC + flags + 16-byte IV + data version + payload length
-- Payload: JSON, AES-128 encrypted with the device's authkey — CBC, or GCM (with a
-  40-byte AAD) once the controller sets `use_aes_gcm`.  Controller responses may be
-  zlib-compressed; openUF decompresses them with a bundled pure-Lua inflater
-- The `noop`'s `interval` sets the heartbeat cadence (clamped to 5–300 s); 10 s is the
-  device's own default when the controller names none
-- Default pre-adoption key: `ba86f2bbe107c7c57eb5f2690775c712`
-- Everything the controller sends that openUF does not act on -- an unknown `_type` or
-  `cmd` with its body, a `mgmt_cfg` key or `system_cfg` key shape no parser reads -- is
-  counted in `/etc/openuf/unhandled.json`, redacted and bounded, always. That file is the
-  list of what the controller wants that openUF does not do yet ([USAGE § 3](USAGE.md#3-configuration))
-- Adoption: L2 — controller SSHes in and calls `syswrapper.sh set-adopt <url> <newkey>`;
-  L3 — new authkey arrives in the `setparam` response's `mgmt_cfg`
-
-Key reference material:
-- [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) — this project's own findings from running openUF against a real self-hosted UniFi controller; supersedes the below where they disagree
-- [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md) — the open questions: protocol surfaces not implemented yet, what is known about each, and the experiment plan. Mesh/wireless uplink is the current head item
-- [amd989/unifi-gateway](https://github.com/amd989/unifi-gateway) — primary protocol reference; live Python daemon tested against real controllers
-- [jeffreykog/unifi-inform-protocol](https://github.com/jeffreykog/unifi-inform-protocol)
-- [fxkr/unifi-protocol-reverse-engineering](https://github.com/fxkr/unifi-protocol-reverse-engineering)
+openUF began as a fork of [jonasevcik/openUF](https://github.com/jonasevcik/openUF) and
+still exchanges work with it. The 802.11r translator for genuine UniFi APs is
+[d-malinowski/unifi-openwrt-roaming](https://github.com/d-malinowski/unifi-openwrt-roaming),
+whose author also contributed the interoperability work around it. The protocol groundwork
+came from [amd989/unifi-gateway](https://github.com/amd989/unifi-gateway),
+[jeffreykog/unifi-inform-protocol](https://github.com/jeffreykog/unifi-inform-protocol) and
+[fxkr/unifi-protocol-reverse-engineering](https://github.com/fxkr/unifi-protocol-reverse-engineering).
+Built on [OpenWrt](https://openwrt.org/) and [LuCI](https://github.com/openwrt/luci).
 
 ## License
 
-GPL-3.0-or-later since 2026-10-25, the whole repository, see [LICENSE](LICENSE). It began
-as a fork of [jonasevcik/openUF](https://github.com/jonasevcik/openUF) (MIT): that work is
-distributed here under the GPL with its MIT notice preserved in [NOTICE](NOTICE), which also
-lists the other copyright holders, among them d-malinowski for the 802.11r translator in
-`openuf/rrb/` (GPL-3.0-or-later, the reason for the switch). `luci-theme-halo` keeps its own
-Apache-2.0 declaration for the LuCI widget mechanics it follows.
+[GPL-3.0-or-later](LICENSE). [NOTICE](NOTICE) lists the copyright holders and preserves the
+MIT notice of the original openUF. `luci-theme-halo` is Apache-2.0.

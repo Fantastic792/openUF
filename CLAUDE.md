@@ -291,7 +291,7 @@ named `generic-*` is listed under "Generic"; anything else under "Board-specific
 
 Three places name the profiles and will drift silently:
 
-- `README.md` → **Supported hardware**, with an honest ⚠️ if it is not confirmed on the
+- `REFERENCE.md` → **Supported hardware**, with an honest ⚠️ if it is not confirmed on the
   hardware, and the flash/space caveat if there is one.
 - `USAGE.md` → **Hardware model map**, the `dev = dofile("modelmap/…")` list.
 - `openuf/conf.lua`'s own header comment, which lists the known-working maps.
@@ -314,7 +314,7 @@ Three places name the profiles and will drift silently:
 [ ] ⚠️ marks on everything not confirmed on real hardware
 [ ] board-specific test added to tests/test_modelmap.lua
 [ ] lua tests/run_tests.lua passes
-[ ] README / USAGE / conf.lua header updated
+[ ] REFERENCE / USAGE / conf.lua header updated
 ```
 
 ## Adding a UniFi identity (ufmodel)
@@ -1020,7 +1020,7 @@ REVERSE-ENGINEERING.md   the open questions: unimplemented surfaces + experiment
 ```
 
 `PROTOCOL-VALIDATION.md` records what was confirmed against a live controller versus
-inferred from decompilation, and **supersedes README/USAGE where they disagree**. If you
+inferred from decompilation, and **supersedes REFERENCE/USAGE where they disagree**. If you
 are about to change protocol behaviour, check there first for why it is the way it is.
 
 `REVERSE-ENGINEERING.md` is the other half: what is *not* implemented, what is known about

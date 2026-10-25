@@ -72,7 +72,7 @@ chmod +x "$STAGE/etc/init.d/openuf" "$STAGE/etc/init.d/openuf-rrb" "$STAGE/hook/
 printf '%s %s\n' "$(git describe --always --dirty 2>/dev/null || echo unknown)" \
 	"$(date -u +%Y-%m-%dT%H:%MZ)" > "$STAGE/BUILD"
 
-# setup.sh ships alongside install.sh: it is the entry point the README
+# setup.sh ships alongside install.sh: it is the entry point README.md
 # documents, and a release tarball that lacked it left a user who
 # downloaded the tarball with no way to run the guided install. update.sh is
 # what upgrades an installed AP from this same tarball (tools/deploy.sh hands
@@ -80,7 +80,7 @@ printf '%s %s\n' "$(git describe --always --dirty 2>/dev/null || echo unknown)" 
 cp install.sh setup.sh update.sh LICENSE NOTICE "$BUILD/"
 
 # ── Verify ──────────────────────────────────────────────────────────────────
-# README.md/USAGE.md are deliberately not shipped: ~21 KB transferred to and
+# README.md/REFERENCE.md/USAGE.md are deliberately not shipped: ~21 KB transferred to and
 # extracted on the device for no runtime purpose. They live in the repo and on
 # the release page.
 if [ "$1" = "--verify" ]; then
