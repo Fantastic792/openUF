@@ -727,6 +727,15 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   lp5521 (ceiling 255), where 1 is 0.4 %: the case light went dark the moment openUF started,
   Locate included, since the timer trigger blinks at the current brightness. Unreadable or
   non-numeric falls back to 1.
+- **The SDK build minifies CSS with csstidy, and csstidy breaks this CSS.** `luci.mk` runs
+  `csstidy --template=highest` on every stylesheet under `htdocs`: selectors sharing declarations
+  are merged across the file and `margin`/`padding` shorthands are rebuilt by splitting on spaces,
+  so a `calc(-1 * …)` margin became `margin:calc(-1;` and the browser dropped every rule after it
+  (v0.2.2 on AP2, 2026-10-26: unstyled login, unusable sidebar). Both LuCI packages set
+  `LUCI_MINIFY_CSS:=0` before including `luci.mk`; keep it, and keep jsmin (its output was
+  verified byte for byte against luci-base's `jsmin.c`). A package that renders fine from the
+  tree and badly from a release is this until proven otherwise: compare the device's file with
+  the tree's, and count what Chrome parses (`new CSSStyleSheet().replaceSync(text).cssRules`).
 - **The device page is a uhttpd ucode handler that uhttpd loads ONCE, at start.**
   `luci-app-openuf`'s uci-defaults puts `/cgi-bin/luci=/usr/share/ucode/openuf/gate.uc` into
   `uhttpd.*.ucode_prefix` (replacing LuCI's own line, or adding it where stock 25.12 serves

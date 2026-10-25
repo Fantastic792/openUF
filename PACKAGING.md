@@ -341,6 +341,17 @@ for root credentials. It had only ever passed against the validation container's
 has no such check. The hook now registers the shell, repairs an existing account's entry when
 run again, and `install.sh uninstall` removes it.
 
+A fifth, in the v0.2.2 packages the SDK built (AP2, 2026-10-26): LuCI's `luci.mk` runs every
+`.css` under `htdocs` through `csstidy --template=highest`, which merges selectors that share
+declarations across the whole file (the cascade order goes with it) and rebuilds `margin`/`padding`
+shorthands by splitting on spaces, so `margin: calc(-1 * var(--card-py)) …` came out as
+`margin:calc(-1;` -- an unclosed paren the browser reads as one declaration running to the end
+of the file. Chrome kept 145 of the theme's 869 rules; the login page had no styling and the
+sidebar neither opened nor collapsed. `luci-theme-halo` and `luci-app-openuf` now set
+`LUCI_MINIFY_CSS:=0` (luci-theme-footstrap's precedent, for `:has()` and `color-mix()`). JS
+minification stays on: jsmin's output for these files is byte for byte what the device ran,
+passes a syntax check, and keeps template and regex literals intact.
+
 The release workflow attaches `luci-theme-halo` since this branch; v0.1.8 and earlier ship
 only `openuf` and `luci-app-openuf`, so a web install from those says so and skips the theme.
 
