@@ -741,6 +741,12 @@ factory reset.
   constant to encode with; the old conversion drifted 12 dB between drivers.
 - **Never set `ft_psk_generate_local`.** It is FT-PSK-only, and pinning it stops OpenWrt
   configuring the key holders FT-SAE needs, so WPA3 clients silently lose fast roaming.
+  The one exception is `ftinterop.lua` under `unifi_ft_interop`: it sets `0` and writes the
+  explicit `r0kh`/`r1kh` key holders in the same breath, so the relationship FT-SAE needs
+  exists; a UniFi AP never derives keys locally and pulls from this AP instead. That path also
+  needs the external rrb-unifi translator's veth as hostapd's `ft_iface`, written as the raw
+  `hostapd_bss_options` form (the translator reads the generated `ft_iface=<bridge>` line that
+  precedes it), and only when the veth exists: hostapd fails a BSS whose `ft_iface` is missing.
 - **Two kernel modules are not implied by their packages.** `kmod-nft-bridge` for the
   Multicast/Broadcast Blocker's `meta` rule (everything else in that table builds without
   it, so the control looks enabled and filters nothing) and `kmod-sched-act-police` for the
@@ -844,6 +850,12 @@ credited to this repo), so diff before assuming a commit is new.
   the guest portal (REVERSE-ENGINEERING.md backlog row 24).
   Each sync is a row in REVERSE-ENGINEERING.md's session log and an "Adopted from upstream,
   <date>" section in PROTOCOL-VALIDATION.md -- update both, and move this line.
+- **A third fork is a remote too: `dmalinowski` → d-malinowski/openUF.** Its
+  `pr/unifi-ft-interop` (one commit, `94ac182`) was adopted on 2026-10-25 as `ftinterop.lua`
+  (PROTOCOL-VALIDATION.md, "Adopted from d-malinowski/openUF"); it is proposed to upstream but
+  not merged there, so a later upstream sync may bring the same change back under
+  `openuf/ftinterop.lua` -- diff before re-applying. Their `pr/hh5a-modelmap` (a BT Home Hub 5A
+  map, lantiq/xrx200) has not been reviewed. Their hardware is a HH5A and a U7 Lite; label it.
 - **Mechanics that worked in syncs 3 and 4:** `git add -A` first, then per commit **in
   upstream's order** `git show --format= <c> -- openuf/ tests/ ':!openuf/guestportal.lua'
   ':!tests/test_guestportal.lua' | git apply --3way` (the fetch puts their blobs in our
@@ -897,6 +909,9 @@ openuf/
   wlansched.lua     WiFi Blackout Schedule: the firmware's schedule lines, netdev down/up
   stun.lua          the STUN client whose mapped address the controller wakes
   rrbguard.lua      repairs hostapd's stale 802.11r key-exchange socket (wpad restart)
+  ftinterop.lua     802.11r with genuine UniFi APs (conf `unifi_ft_interop`, off): UniFi's
+                    mobility domain, explicit key holders for the peers the rrb-unifi
+                    translator lists, nasid = BSSID, hostapd's ft_iface on the translator's veth
   util.lua          shared helpers: file/command reads, exec_ok, is_mac, bit shim, sysfs
                     master_of/driver_of, nft_apply (one `nft -f` transaction per table)
   unhandled.lua     /etc/openuf/unhandled.json: every _type, cmd, mgmt_cfg key and

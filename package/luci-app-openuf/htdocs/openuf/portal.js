@@ -476,7 +476,8 @@
 		groups.push(h('div', { class: 'group card' },
 			h('div', { class: 'group-title' }, 'Wireless'),
 			row('Only broadcast UniFi networks', 'Turn off wireless networks set up on this device by hand, so only the controller\'s networks are on the air.', toggle('use_only_unifi_wlan', '1', ro), { inline: true }),
-			row('Announce on the local network', 'Let UniFi Network discover this access point without typing its address.', toggle('l2_announce', '1', ro), { inline: true })
+			row('Announce on the local network', 'Let UniFi Network discover this access point without typing its address.', toggle('l2_announce', '1', ro), { inline: true }),
+			row('Fast roaming with genuine UniFi access points', 'Lets phones move between this device and real UniFi access points without reconnecting. Needs the rrb-unifi translator installed on this device; leave off without it.', toggle('unifi_ft_interop', '0', ro), { inline: true })
 		));
 
 		groups.push(h('div', { class: 'group card' },

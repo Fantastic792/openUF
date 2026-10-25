@@ -107,6 +107,7 @@ local function with_ucihelper(fn)
 		ucihelper._uci, ucihelper._popen, ucihelper._read_file, ucihelper._run_cmd
 	local orig_bcf, orig_shaper, orig_ifnames_vap =
 		ucihelper._bcfilter, ucihelper._shaper, ucihelper.get_ifnames_for_vap
+	local orig_fti, orig_ifname_vap = ucihelper._ftinterop, ucihelper.get_ifname_for_vap
 	ucihelper._uci = m.mock
 	ucihelper._popen = function() return "" end       -- no live ifname resolution in tests
 	-- Hardware capability probing is cached (it describes hardware); clear it
@@ -127,6 +128,7 @@ local function with_ucihelper(fn)
 		orig_uci, orig_popen, orig_read, orig_run
 	ucihelper._bcfilter, ucihelper._shaper, ucihelper.get_ifnames_for_vap =
 		orig_bcf, orig_shaper, orig_ifnames_vap
+	ucihelper._ftinterop, ucihelper.get_ifname_for_vap = orig_fti, orig_ifname_vap
 	ucihelper._phy_caps_cache = nil
 	ucihelper._phy_caps_unstable_until = nil
 	ucihelper._phy_caps_read_at = nil

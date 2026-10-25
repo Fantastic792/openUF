@@ -68,6 +68,17 @@ config = {
 	-- already switched off is switched back on.
 	keep_wlan_sections = {},
 
+	-- 802.11r fast roaming with genuine UniFi APs (ftinterop.lua). Needs the
+	-- rrb-unifi translator (github.com/d-malinowski/unifi-openwrt-roaming),
+	-- which converts between OpenWrt's and UniFi's inter-AP key-exchange
+	-- framing on a veth pair, and its /etc/config/rrb-unifi peer list
+	-- (`rrb-unifi-setup peers`). When on, every FT WLAN uses UniFi's
+	-- mobility domain, ft_psk_generate_local=0 with explicit key holders for
+	-- the listed UniFi peers, nas_identifier = BSSID, and hostapd's ft_iface
+	-- on the translator's veth. Off: openUF's own mobility domain, which
+	-- keeps clients from ever trying a fast transition to a UniFi AP.
+	unifi_ft_interop = false,
+
 	-- URL the inform loop posts to.  Overwritten at runtime when the controller
 	-- sends a new URL or when syswrapper.sh set-inform is called.
 	-- The value here is only used while state.json carries no URL of its own

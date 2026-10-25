@@ -800,6 +800,7 @@ reads nothing else, so what it shows is what the daemon would run.
 config = {
     use_only_unifi_wlan = true,  -- disable non-openuf_ SSIDs during provisioning
     keep_wlan_sections  = {},    -- AP sections that option must leave alone (see below)
+    unifi_ft_interop = false,    -- 802.11r with genuine UniFi APs, see § 6
     inform_url  = "http://unifi:8080/inform",   -- first-boot URL; state.json's wins once set
     state_file  = "/etc/openuf/state.json",     -- honoured by inform, announce and syswrapper
     l2_announce = true,          -- see below
@@ -1220,6 +1221,44 @@ apart, force one with `hostapd_cli bss_tm_req` and read the target AP's log: `au
 **and no `EAPOL-4WAY-HS-COMPLETED`** is fast; `auth_alg=sae` followed by a 4-way is the
 fallback.
 
+**Fast roaming with genuine UniFi APs (`unifi_ft_interop`).** Stock hostapd and UniFi's
+hostapd use the same FT key hierarchy and the same AES-SIV protected RRB payloads, but UniFi
+frames RRB differently: it inserts the source and destination AP addresses (12 bytes) after
+the RRB type, because it sends from the AP's Ethernet MAC rather than the BSSID
+(PROTOCOL-VALIDATION.md, "802.11r with genuine UniFi APs"). The
+[rrb-unifi](https://github.com/d-malinowski/unifi-openwrt-roaming) translator, a ucode daemon,
+converts between the two framings on a veth pair; nothing on the UniFi AP is changed. With
+`unifi_ft_interop = true` in `conf.lua` (or `option unifi_ft_interop '1'` in `openuf.main`;
+the LuCI pages have the toggle), every FT WLAN gets what a UniFi peer needs:
+
+| UCI option | Off (default) | On |
+|---|---|---|
+| `mobility_domain` | openUF's own hash of the SSID | UniFi firmware's: first two bytes of SHA1("salt" .. SSID zero-padded to 32 bytes) |
+| `ft_psk_generate_local` | unset (OpenWrt: 1 for PSK) | `0`, so the key holders below are written |
+| `nasid` (R0KH-ID) | unset (hostapd's default is already the BSSID) | this BSS's BSSID without colons, written explicitly so `rrb-unifi-setup verify` can read it |
+| `r0kh` / `r1kh` | wildcards keyed with `iapp_key` | one entry per UniFi peer BSS from `/etc/config/rrb-unifi` (`list ft_peer '<bssid>,<r0kh-id>'`), plus the wildcards |
+| `hostapd_bss_options` | unset | `ft_iface=vft0`, the translator's veth end, only when that netdev exists |
+| `reassociation_deadline` | 3000 | OpenWrt's default |
+
+Setup, after the translator is installed (`rrb-unifi-setup install`): turn on Fast Roaming
+for the WLAN in UniFi, turn `unifi_ft_interop` on, restart openUF, then run
+`rrb-unifi-setup collect <user>@<unifi-ap>` and `rrb-unifi-setup peers` to write the UniFi
+BSSes into the `ft_peer` list, and Force Provision the openUF AP. `rrb-unifi-setup verify`
+compares both sides, openUF's sections included. `pmk_r1_push` only pushes to listed peers
+(wildcards are skipped), so a UniFi AP missing from `ft_peer` can still pull keys from openUF,
+but gets none pushed. The raw `hostapd_bss_options` form is deliberate even on 25.12, which
+has a first-class `ft_iface` option: the translator learns a BSS's LAN bridge from the
+`ft_iface=` line OpenWrt generates before the override, and 24.10 has no such option.
+
+Troubleshooting: openUF logs `ftinterop:` lines to the system log when something is missing.
+`ft_iface not present` means the translator's veth is not up: the WLAN works, but FT to UniFi
+APs does not. `the controller sent no iapp_key` means the push carried no FT key (Fast Roaming
+off for the WLAN). `no ft_peer` means `rrb-unifi-setup peers` has not been run. Only WPA2-PSK
+with FT-PSK is verified against a UniFi AP so far, and only by the translator's author (a BT
+Home Hub 5A against a U7 Lite); this lab has no UniFi AP. FT-SAE should take the same path
+but is untested. hostapd's key-exchange socket then lives on the veth, and `rrbguard.lua`'s
+stale-socket check covers it the same way.
+
 **VLAN-tagged SSIDs** (assigning a WiFi network to a non-native network) need three
 things on the AP, and openUF builds all three:
 
@@ -1601,7 +1640,9 @@ backlog row 23). Each is on by default and needs nothing in `conf.lua`.
 - **802.11r** key holders are keyed with the controller's per-WLAN `iapp_key` (so every
   openUF AP on the WLAN is a peer without sharing the passphrase's derivation), PMK-R1 is
   pushed, and a stale key-exchange socket in hostapd (seen upstream after weeks of uptime)
-  is repaired by restarting wpad when no client is connected or in the 04:00 hour.
+  is repaired by restarting wpad when no client is connected or in the 04:00 hour. With
+  `unifi_ft_interop` on, the key holders also name the genuine UniFi APs the rrb-unifi
+  translator lists, and hostapd exchanges keys through the translator's veth (§ 6).
 - **Hygiene:** usteerd's AP-to-AP table broadcasts are dropped before they leave a VAP,
   the bridge hairpin flag is re-asserted on BSSes OpenWrt force-isolates (Multicast
   Enhancement, Proxy ARP), the nightly 11k-scan runs at two random times in the hour, and

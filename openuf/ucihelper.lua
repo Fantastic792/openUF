@@ -20,6 +20,7 @@ M._bcfilter   = nil  -- nil = load openuf/bcfilter.lua on first use
 -- "WiFi Speed Limit" enforcement (tc). Injectable for the same reason.
 -- Minimum RSSI's constants (wire offset, refusal margin).
 M._minrssi    = nil  -- nil = load openuf/minrssi.lua on first use
+M._ftinterop  = nil  -- nil = load openuf/ftinterop.lua on first use
 M._run_cmd    = os.execute
 
 -- Injectable: command execution that captures stdout (for read-only introspection,
@@ -103,6 +104,7 @@ end
 
 local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end
 local function get_minrssi()  return get_sibling("minrssi",  M._minrssi)  end
+local function get_ftinterop() return get_sibling("ftinterop", M._ftinterop) end
 
 -- Map a UCI wifi-device's channel number to the controller's band identifier.
 -- The real controller's radio_table schema requires this "radio" field
@@ -894,6 +896,15 @@ local function mac_of(ifname)
 	return mac and mac:lower() or nil
 end
 
+-- The BSSID a VAP has right now: its live netdev's address, resolved the
+-- same way the per-VAP features resolve it (find_vap_iface). Asked during
+-- apply_config, before the reload, so a VAP being rebuilt still answers
+-- with the netdev it is about to get back. nil when the radio has no live
+-- interface for it (a WLAN on its first push).
+function M.vap_bssid(radio, ssid)
+	return mac_of(M.get_ifname_for_vap(radio, ssid))
+end
+
 -- The bridge a netdev is enslaved to, or nil when it carries its own address.
 local function master_of(ifname)
 	return util.master_of(ifname, M._read_file)
@@ -1614,6 +1625,22 @@ function M.apply_config(resp, cfg, opts)
 					extra.r0kh = { "ff:ff:ff:ff:ff:ff,*," .. vap.iapp_key }
 					extra.r1kh = { "00:00:00:00:00:00,00:00:00:00:00:00,"
 						.. vap.iapp_key }
+				end
+				-- unifi_ft_interop: fast roaming with genuine UniFi APs through
+				-- the rrb-unifi translator. ftinterop.lua rewrites the options
+				-- above (UniFi's mobility domain, ft_psk_generate_local=0 with
+				-- explicit key holders for the listed UniFi peers, nasid =
+				-- BSSID, hostapd's ft_iface on the translator's veth). Off, the
+				-- section is exactly what the block above produced.
+				if cfg and cfg.config and cfg.config.unifi_ft_interop then
+					local fti = get_ftinterop()
+					if fti then
+						fti.apply(extra, vap, M.vap_bssid(vap.radio, vap.ssid),
+							get_uci().cursor(), M.DELETE)
+					else
+						io.stderr:write("openuf: unifi_ft_interop is on but "
+							.. "ftinterop.lua is missing\n")
+					end
 				end
 			end
 			if opts and (opts.band_steering_active or opts.roam_assist_active) then

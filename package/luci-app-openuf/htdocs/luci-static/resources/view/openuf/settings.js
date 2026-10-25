@@ -57,7 +57,7 @@ function seedFromStatus(status) {
 	for (const k of opts)
 		if (c[k] != null && c[k] !== '')
 			uci.set('openuf', 'main', k, String(c[k]));
-	const flags = [ 'use_only_unifi_wlan', 'l2_announce', 'rrm_enrichment', 'debug_dump_requests' ];
+	const flags = [ 'use_only_unifi_wlan', 'l2_announce', 'rrm_enrichment', 'debug_dump_requests', 'unifi_ft_interop' ];
 	for (const k of flags)
 		if (c[k] != null)
 			uci.set('openuf', 'main', k, c[k] ? '1' : '0');
@@ -320,6 +320,11 @@ return view.extend({
 			_('OpenWrt wireless section names (for example default_radio0) that stay enabled even with the option above ticked.'));
 		o.depends('use_only_unifi_wlan', '1');
 		o.datatype = 'uciname';
+
+		o = s.taboption('features', form.Flag, 'unifi_ft_interop', _('Fast roaming with genuine UniFi access points'),
+			_('Lets clients roam between this device and real UniFi access points without a full reconnect (802.11r). Needs the rrb-unifi translator installed on this device and its list of UniFi access points; without it, leave this off: it changes which fast-roaming settings the controller\'s WiFi networks get.'));
+		o.default = '0';
+		o.rmempty = false;
 
 		o = s.taboption('features', form.Flag, 'rrm_enrichment', _('Ask clients to report nearby networks'),
 			_('Fills the controller\'s Environment view without taking the radios off their channels: one capable client at a time is asked to look around and report what it sees (802.11k).'));
