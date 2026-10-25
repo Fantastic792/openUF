@@ -1545,6 +1545,9 @@ function M.apply_config(resp, cfg, opts)
 	-- Every VLAN this push still wants an L2 for; anything else gets pruned
 	-- after the loop.
 	local wanted_vlans = {}
+	-- Whether ftinterop put a BSS on the rrb-unifi translator's veth this
+	-- push (the translator is restarted after the reload below).
+	local interop_veth = false
 	for _, vap in ipairs(vap_table) do
 		if vap.ssid and vap.radio then
 			local extra = {}
@@ -1637,6 +1640,9 @@ function M.apply_config(resp, cfg, opts)
 					if fti then
 						fti.apply(extra, vap, M.vap_bssid(vap.radio, vap.ssid),
 							get_uci().cursor(), M.DELETE)
+						if type(extra.hostapd_bss_options) == "table" then
+							interop_veth = true
+						end
 					else
 						io.stderr:write("openuf: unifi_ft_interop is on but "
 							.. "ftinterop.lua is missing\n")
@@ -1958,6 +1964,16 @@ function M.apply_config(resp, cfg, opts)
 
 	-- Reload wireless
 	M._run_cmd("wifi reload")
+	-- unifi_ft_interop: a BSS was just put on the rrb-unifi translator's
+	-- veth. The translator reads the running hostapd configs once, at start,
+	-- and exits after its wait when none uses the veth, after which procd
+	-- stops respawning it; its own reload trigger fires on LuCI's
+	-- reload_config, never on this `wifi reload`. So it is restarted here,
+	-- after the reload has written the configs it will read. A push is a
+	-- rare event, and the daemon holds no state a restart could lose.
+	if interop_veth and M._read_file("/etc/init.d/rrb-unifi") then
+		M._run_cmd("/etc/init.d/rrb-unifi restart")
+	end
 	-- netifd may hand the interfaces new netdev names on the way back up, and
 	-- the wireless config this reload just wrote is the very thing the radio
 	-- rows were read from, so the lookups below must not reuse anything read

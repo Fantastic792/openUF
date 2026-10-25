@@ -75,9 +75,13 @@ config = {
 	-- (`rrb-unifi-setup peers`). When on, every FT WLAN uses UniFi's
 	-- mobility domain, ft_psk_generate_local=0 with explicit key holders for
 	-- the listed UniFi peers, nas_identifier = BSSID, and hostapd's ft_iface
-	-- on the translator's veth. Off: openUF's own mobility domain, which
-	-- keeps clients from ever trying a fast transition to a UniFi AP.
-	unifi_ft_interop = false,
+	-- on the translator's veth (only when that veth exists). On by default
+	-- for new installations: without the translator openUF APs still roam
+	-- among themselves, and a site with no UniFi AP notices nothing. Set
+	-- false on a site that has genuine UniFi APs but no translator: openUF's
+	-- own mobility domain then keeps clients from trying a fast transition
+	-- towards them that can only fall back to a full reconnect.
+	unifi_ft_interop = true,
 
 	-- URL the inform loop posts to.  Overwritten at runtime when the controller
 	-- sends a new URL or when syswrapper.sh set-inform is called.

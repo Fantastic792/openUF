@@ -8,6 +8,7 @@
 #   openuf-update --from /tmp/openUF     # an unpacked tree already on the device
 #   openuf-update --check                # show what is installed; change nothing
 #   openuf-update --no-rollback          # keep a failed update in place for debugging
+#   openuf-update --no-rrb-unifi         # leave the rrb-unifi translator as it is
 #
 # What it does, in this order:
 #
@@ -17,7 +18,10 @@
 #      the modelmap, and with THAT the identity MAC the controller adopted the
 #      device under (CLAUDE.md, "lan_cpueth decides IDENTITY"). state.json is
 #      never touched. That is what makes this safe on an adopted AP: nothing
-#      to re-adopt, nothing to re-provision.
+#      to re-adopt, nothing to re-provision. install.sh also installs or
+#      refreshes the rrb-unifi translator (802.11r with genuine UniFi APs)
+#      from this project's fork; that step is optional and never fails the
+#      update (--no-rrb-unifi leaves it alone)
 #   4. restart the service and WAIT for the new daemon to complete an inform
 #      cycle (it writes /tmp/openuf-status after each one)
 #   5. if it does not within the deadline, put the backup back and restart
@@ -52,8 +56,10 @@ CHECK=0
 ROLLBACK=1
 RESTART=1
 KEEP_WORK=0
+RRB_ARG=""
 while [ $# -gt 0 ]; do
 	case "$1" in
+		--no-rrb-unifi) RRB_ARG="--no-rrb-unifi" ;;
 		--from)        shift; [ $# -gt 0 ] || die "--from needs a path"; FROM=$1 ;;
 		--ref)         shift; [ $# -gt 0 ] || die "--ref needs a tag or branch"; OPENUF_REF=$1 ;;
 		--check)       CHECK=1 ;;
@@ -97,6 +103,12 @@ show_installed() {
 	fi
 	_n=$(ps w 2>/dev/null | grep -E 'lua (inform|announce)\.lua' | grep -vc grep)
 	say "  daemons     $_n running"
+	_rv=$(sed -n 's/^VERSION=//p' /usr/sbin/rrb-unifi-setup 2>/dev/null | head -1)
+	if [ -f /usr/sbin/rrb-unifi.uc ]; then
+		say "  rrb-unifi   ${_rv:-?}$( /etc/init.d/rrb-unifi running >/dev/null 2>&1 && echo ', running' || echo ', not running')"
+	else
+		say "  rrb-unifi   not installed (the translator for 802.11r with genuine UniFi APs)"
+	fi
 	return 0
 }
 
@@ -215,7 +227,7 @@ say "== install"
 # No --replace-conf: the device's conf.lua is the point. install.sh also
 # installs any dependency a newer version added (kmods, packages), using the
 # package manager it finds.
-if ! ( cd "$SRC" && sh install.sh install ); then
+if ! ( cd "$SRC" && sh install.sh install $RRB_ARG ); then
 	warn "install.sh failed"
 	[ "$ROLLBACK" = 1 ] && restore_backup
 	die "update aborted$( [ "$ROLLBACK" = 1 ] && echo '; the previous version is back' )"

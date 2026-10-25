@@ -114,19 +114,28 @@ function deviceBlock(s) {
 // openUF refuses to start until a full build is there; the button below
 // runs `openuf deps --install`, which does the swap and installs whatever
 // else is missing. Rendered once, outside the polled block (see render()).
-function installButton(w, missing) {
+function installButton(w, missing, th, r) {
 	const swap = (w.full === false);
 	const choices = arr(w.choices);
 	const select = E('select', { 'class': 'cbi-input-select' },
 		choices.map(c => E('option', { 'value': c, 'selected': (c == w.suggested) ? '' : null }, c)));
-	const label = swap
-		? (missing.length ? _('Replace hostapd with the full build and install the missing packages') : _('Replace hostapd with the full build'))
-		: (missing.length ? _('Install the missing packages') : _('Install the Halo theme'));
+	const wantRrb = !!(r && !r.installed);
+	let label;
+	if (swap)
+		label = missing.length ? _('Replace hostapd with the full build and install the missing packages') : _('Replace hostapd with the full build');
+	else if (missing.length)
+		label = wantRrb ? _('Install the missing packages and the rrb-unifi translator') : _('Install the missing packages');
+	else if (wantRrb)
+		label = _('Install the rrb-unifi translator');
+	else
+		label = _('Install the Halo theme');
 	const btn = E('button', { 'class': 'btn cbi-button cbi-button-positive', 'click': function() {
 		const chosen = swap ? select.value : null;
 		ui.showModal(label, [
 			swap ? E('p', {}, _('%s is removed and %s installed. The radios are down for about ten seconds in between, then brought back up on the new build, and openUF is restarted. Do this over a cable, not over WiFi.').format(w.installed || _('the basic build'), chosen))
-			     : E('p', {}, _('The packages are downloaded from the OpenWrt repository and installed, then openUF is restarted. The device needs internet access for this.')),
+			     : E('p', {}, wantRrb
+			         ? _('The packages are downloaded from the OpenWrt repository, the rrb-unifi translator from its GitHub source, and installed; openUF is restarted and, on an adopted device, asks the controller for its configuration again so the WiFi networks move onto the translator. The device needs internet access for this.')
+			         : _('The packages are downloaded from the OpenWrt repository and installed, then openUF is restarted. The device needs internet access for this.')),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 				E('button', { 'class': 'btn cbi-button-positive', 'click': ui.createHandlerFn(this, function() {
@@ -203,13 +212,38 @@ function softwareBlock(s) {
 			E('td', { 'class': 'td' }, _('The Halo look for LuCI, matching the device page; installed only on devices with flash to spare'))
 		]));
 	}
+	// The rrb-unifi translator: 802.11r fast roaming with genuine UniFi
+	// access points. Not an OpenWrt package; openuf deps fetches it from the
+	// project's fork and the translator's own setup tool installs it.
+	const r = d.rrb_unifi;
+	if (r) {
+		let state;
+		if (r.installed) {
+			const bits = [];
+			if (r.version) bits.push('v' + r.version);
+			bits.push(r.running ? _('running') : _('not running'));
+			if (!r.veth) bits.push(_('veth missing'));
+			state = installed(true, false, bits.join(', '));
+		} else if (arr(r.missing).length) {
+			state = E('span', { 'class': 'label warning' }, _('no: needs %s').format(arr(r.missing).join(', ')));
+		} else {
+			state = E('span', { 'class': 'label notice' }, _('not yet: the install button adds it'));
+		}
+		const peers = r.installed ? (r.peers > 0 ? _('; %d UniFi access point(s) listed').format(r.peers) : _('; no UniFi access point listed yet (rrb-unifi-setup collect, then peers)')) : '';
+		t.appendChild(E('tr', { 'class': 'tr' }, [
+			E('td', { 'class': 'td' }, 'rrb-unifi'),
+			E('td', { 'class': 'td' }, _('optional')),
+			E('td', { 'class': 'td' }, state),
+			E('td', { 'class': 'td' }, _('Fast roaming (802.11r) between this device and genuine UniFi access points: converts hostapd\'s inter-AP key exchange to UniFi\'s framing') + peers)
+		]));
+	}
 	const parts = [ t ];
 	if (w.full === false)
 		parts.push(E('p', {}, _('openUF will not start with a basic hostapd build: it rejects the 802.11v option every network from the controller carries and takes the radio down with it. The full build of the same crypto library is suggested, so nothing else on the device changes and no extra flash is used.')));
 	if (missing.length)
 		parts.push(E('p', {}, _('A missing mandatory package stops openUF from running; a missing optional one leaves that feature off. Everything is installed from the OpenWrt package repository, so the device needs internet access for this.')));
-	if (w.full === false || missing.length || (th && th.wanted))
-		parts.push(installButton(w, missing));
+	if (w.full === false || missing.length || (th && th.wanted) || (r && !r.installed))
+		parts.push(installButton(w, missing, th, r));
 	return E('div', {}, parts);
 }
 

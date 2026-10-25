@@ -58,6 +58,19 @@ openuf/uciconf.lua                /etc/config/openuf -> the `dev`/`config` table
 
 ## Decisions
 
+- **The rrb-unifi translator is not a feed package** (2026-10-25). openUF's `unifi_ft_interop`
+  switch (on by default) assumes d-malinowski's translator for 802.11r roaming with genuine
+  UniFi APs. It is four files (a ucode daemon, an init script, a config, a setup tool) that
+  are not in the OpenWrt feeds, so `openuf deps --install --only-rrb-unifi` downloads them
+  from the project's fork, https://github.com/yesrab/unifi-openwrt-roaming (pinned by
+  `OPENUF_RRB_REF`, default `main`), and runs the translator's own setup tool, which
+  installs `ucode-mod-socket` and `kmod-veth`, writes the veth's network sections and its
+  sysupgrade.conf lines. `install.sh`, `setup.sh` (both install paths) and the LuCI
+  overview's install button all go through that one command, and `openuf-update` refreshes
+  it. A `+rrb-unifi` DEPENDS on the `openuf` package would need a `rrb-unifi` package built
+  by the release workflow first (a git-source Makefile over the fork, a uci-defaults for the
+  veth); that is the step to take once the feed builds at all.
+
 | Topic | Decision | Why |
 |---|---|---|
 | Install prefix | `/usr/lib/openuf/` for the modules, presets and hook; `/usr/bin/syswrapper.sh` symlink (the controller's SSH adoption runs it by name); `/usr/bin/openuf` a tiny CLI (`--version`, `status`, `reset-inform`); `/etc/openuf/` for `state.json` and the ledger | Feed packages do not install under `/opt`. The cwd-relative `dofile` design stays: only the init script and the hook name the directory |

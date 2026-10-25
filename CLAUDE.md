@@ -359,6 +359,12 @@ Other things to preserve:
   answers yes in places where the open then fails.
 - **Every question is asked before anything changes**, and each has a matching option so
   the same script runs unattended. Adding a prompt means adding an option.
+- **The rrb-unifi translator's packages go in the packages phase, its files in the openUF
+  phase.** `ucode-mod-socket` and `kmod-veth` join `OPTIONAL` when the translator is wanted
+  (`--rrb-unifi`, the default), so they arrive while the box still has internet; the files
+  come from the fork through `openuf-deps`, which `install.sh` runs on the file path and
+  `setup.sh` runs itself after the package install. Its veth creation is a guarded network
+  reload that `openuf-deps` confirms; it adds an interface and tears nothing down.
 - **Value-taking options** must go through `need_val`, or a forgotten value silently
   configures the empty string.
 
@@ -437,6 +443,19 @@ host at a time, with `dist.sh --verify` gating every push.
 `--bootstrap-adopt` creates the locked-down non-root `ubnt`/`ubnt` account, scoped to
 running `syswrapper.sh set-adopt` only, which self-locks once adopted and re-enables on
 factory reset.
+
+**The rrb-unifi translator is installed from the project's fork, by `openuf-deps`, after
+the service start.** `install.sh install` (hence `setup.sh` and `update.sh`) runs
+`hook/openuf-deps.sh --install --only-rrb-unifi` unless `--no-rrb-unifi`: it downloads the
+four files from `OPENUF_RRB_URL` (default the fork's `main`), refuses anything that is not the
+tool, runs the translator's own `rrb-unifi-setup install --yes`, confirms that tool's
+network-reload watchdog at once (an isolated veth pair cannot cut the SSH session the
+watchdog protects), starts the service, and on an adopted AP forgets `cfgversion` with the
+daemon stopped so the controller re-pushes and the FT WLANs move onto the veth. It is never
+fatal: no internet, no `kmod-veth` in the feed or under 1 MB free costs the feature and
+nothing else. The LuCI overview's install button runs the same command. Keep the step after
+`"$INIT_SCRIPT" start` so the re-push has a daemon to restart, and keep everything about the
+translator's files in that one function: `setup.sh`'s package path calls it too.
 
 ---
 
@@ -909,7 +928,9 @@ openuf/
   wlansched.lua     WiFi Blackout Schedule: the firmware's schedule lines, netdev down/up
   stun.lua          the STUN client whose mapped address the controller wakes
   rrbguard.lua      repairs hostapd's stale 802.11r key-exchange socket (wpad restart)
-  ftinterop.lua     802.11r with genuine UniFi APs (conf `unifi_ft_interop`, off): UniFi's
+  ftinterop.lua     802.11r with genuine UniFi APs (conf `unifi_ft_interop`, on by default
+                    for new installations; without the translator it only changes the
+                    mobility-domain formula and FT-PSK's key path): UniFi's
                     mobility domain, explicit key holders for the peers the rrb-unifi
                     translator lists, nasid = BSSID, hostapd's ft_iface on the translator's veth
   util.lua          shared helpers: file/command reads, exec_ok, is_mac, bit shim, sysfs
@@ -940,7 +961,8 @@ openuf/
                     openuf-convert.sh (/usr/sbin/openuf-convert: setup.sh's AP
                     conversion as --check/--convert/--revert), openuf-deps.sh
                     (/usr/sbin/openuf-deps, `openuf deps`: what openUF needs
-                    installed as JSON, and the basic-to-full wpad swap)
+                    installed as JSON, the basic-to-full wpad swap, and the
+                    rrb-unifi translator from the project's fork)
   etc/init.d/openuf procd service: announce + inform instances; finds either prefix
 package/            the OpenWrt feed: openuf (net/), luci-app-openuf (the LuCI pages, the device
                     page htdocs/openuf/ and its gate root/usr/share/ucode/openuf/gate.uc) and

@@ -9,15 +9,26 @@
 #          "packages":[{"pkg":"nftables","present":true,"required":false,
 #                       "unlocks":"..."},...],
 #          "missing":["kmod-nft-bridge"],"ok":false,
+#          "rrb_unifi":{"installed":true,"version":"1.3","veth":true,
+#                       "running":true,"peers":2,"missing":[],
+#                       "source":"https://raw.githubusercontent.com/..."},
 #          "theme":{"package":"luci-theme-halo","installed":false,"luci":true,
 #                   "free_kb":5120,"min_free_kb":4096,"wanted":true}}
-#   openuf-deps --install [--wpad mbedtls|openssl|wolfssl] [--only-wpad] [--no-theme]
+#   openuf-deps --install [--wpad mbedtls|openssl|wolfssl] [--only-wpad]
+#                         [--no-theme] [--no-rrb-unifi] [--only-rrb-unifi]
 #       Installs the missing packages, then replaces a basic wpad/hostapd
 #       with a full build -- the same crypto library the basic one used, so
 #       no second TLS library lands on the flash, unless --wpad names
 #       another -- brings the radios back up on the new build and restarts
 #       openUF so it re-probes what hostapd can do. The radios are down for
 #       about ten seconds in between: run this over a cable, not over WiFi.
+#       Then the rrb-unifi translator (802.11r fast roaming with genuine
+#       UniFi APs, USAGE § 6): downloaded from this project's fork of it and
+#       installed or refreshed by its own setup tool, started, and openUF's
+#       config re-pushed so hostapd's key exchange moves onto its veth.
+#       Optional: a failure costs that feature only. --only-rrb-unifi does
+#       just that step (install.sh and the updater call it so);
+#       --no-rrb-unifi skips it.
 #       Exit status 0 once the device has everything. The Halo LuCI theme
 #       (luci-theme-halo, the look openUF's device page shares) comes along
 #       only where LuCI is installed and the flash has room to spare; it is
@@ -216,6 +227,175 @@ install_theme() {
 	add_one "$THEME_PKG"
 }
 
+# ── the rrb-unifi translator ────────────────────────────────────────────────
+# 802.11r fast roaming with genuine UniFi APs (USAGE § 6; PROTOCOL-VALIDATION.md,
+# "802.11r with genuine UniFi APs"). UniFi's hostapd frames its inter-AP
+# key-exchange (RRB) differently from stock hostapd; d-malinowski's rrb-unifi,
+# a ucode daemon on a veth pair, reframes them. openUF writes the matching
+# hostapd options under its unifi_ft_interop switch (on by default), so the
+# translator is part of what a new openUF install needs. It is not in the
+# OpenWrt feeds: it is downloaded from this project's fork of it and put in
+# place by the translator's own setup tool, so its file list, its packages,
+# the veth's network sections and the sysupgrade.conf lines stay its
+# business. The fork is the source so that an openUF release never depends on
+# a repository this project does not control; OPENUF_RRB_REF pins a branch,
+# tag or commit.
+RRB_REPO=${OPENUF_RRB_REPO:-yesrab/unifi-openwrt-roaming}
+RRB_REF=${OPENUF_RRB_REF:-main}
+RRB_URL=${OPENUF_RRB_URL:-https://raw.githubusercontent.com/$RRB_REPO/$RRB_REF}
+RRB_FILES="rrb-unifi-setup rrb-unifi.uc rrb-unifi.init rrb-unifi.config"
+RRB_SETUP=${OPENUF_RRB_SETUP:-/usr/sbin/rrb-unifi-setup}
+RRB_DAEMON=${OPENUF_RRB_DAEMON:-/usr/sbin/rrb-unifi.uc}
+RRB_INIT=${OPENUF_RRB_INIT:-/etc/init.d/rrb-unifi}
+RRB_CONFIG=${OPENUF_RRB_CONFIG:-/etc/config/rrb-unifi}
+RRB_STATE=${OPENUF_STATE_FILE:-/etc/openuf/state.json}
+# The flash floor before a first install (the files are ~60 KB, the two
+# packages ~40 KB); a refresh of an installed translator has no floor.
+RRB_MIN_FREE_KB=${OPENUF_RRB_MIN_FREE_KB:-1024}
+# Evidence, not package names, as PACKAGES above: an image with veth built in
+# counts.
+RRB_PACKAGES='ucode-mod-socket|file:/usr/lib/ucode/socket.so
+kmod-veth|kmod:veth'
+
+# fetch <url> <dest>: every client an OpenWrt image might have (update.sh's).
+fetch() {
+	_url=$1; _dst=$2
+	if have_cmd uclient-fetch; then
+		uclient-fetch -q -O "$_dst" "$_url" 2>/dev/null && return 0
+		uclient-fetch -q --no-check-certificate -O "$_dst" "$_url" 2>/dev/null && return 0
+	fi
+	if have_cmd curl; then
+		curl -fsSL -o "$_dst" "$_url" 2>/dev/null && return 0
+	fi
+	if have_cmd wget; then
+		wget -q -O "$_dst" "$_url" 2>/dev/null && return 0
+		wget -q --no-check-certificate -O "$_dst" "$_url" 2>/dev/null && return 0
+	fi
+	return 1
+}
+
+rrb_installed() { [ -f "$RRB_DAEMON" ] && [ -f "$RRB_INIT" ]; }
+rrb_version()   { sed -n 's/^VERSION=//p' "$RRB_SETUP" 2>/dev/null | head -1; }
+# hostapd's end of the veth, from the translator's config (vft0 unless set).
+rrb_ft_iface() {
+	_n=$(sed -n "s/^[[:space:]]*option ft_iface '\{0,1\}\([^' ]*\)'\{0,1\}.*/\1/p" "$RRB_CONFIG" 2>/dev/null | head -1)
+	printf '%s' "${_n:-vft0}"
+}
+rrb_veth()    { [ -e "/sys/class/net/$(rrb_ft_iface)" ]; }
+rrb_running() { [ -x "$RRB_INIT" ] && "$RRB_INIT" running >/dev/null 2>&1; }
+rrb_peers()   { _n=$(grep -c 'list ft_peer' "$RRB_CONFIG" 2>/dev/null); printf '%s' "${_n:-0}"; }
+rrb_missing_packages() {
+	out=""
+	while IFS='|' read -r name how; do
+		[ -n "$name" ] || continue
+		present "$how" || out="$out $name"
+	done <<PKGS
+$RRB_PACKAGES
+PKGS
+	printf '%s' "${out# }"
+}
+
+# openUF puts hostapd's key exchange on the veth on its next config push, and
+# an adopted AP only gets one when its cfgversion no longer matches the
+# controller's: forget it, the way tools/hotpatch.sh --repush does, with the
+# daemon stopped so the two never write state.json at once. The caller
+# restarts openUF (REPUSHED=1).
+REPUSHED=0
+repush_openuf() {
+	[ -f "$RRB_STATE" ] && have_cmd lua || return 0
+	grep -q '"adopted":true' "$RRB_STATE" 2>/dev/null || return 0
+	[ -x /etc/init.d/openuf ] && /etc/init.d/openuf stop >/dev/null 2>&1
+	if lua -e 'local c=require"cjson"; local p=arg[1]; local f=assert(io.open(p)); local s=c.decode(f:read("*a")); f:close(); s.cfgversion=""; local o=assert(io.open(p..".tmp","w")); o:write(c.encode(s)); o:close(); assert(os.rename(p..".tmp",p))' "$RRB_STATE" 2>/dev/null; then
+		say "  cfgversion forgotten: the controller pushes the full config again, which moves hostapd's key exchange onto the veth"
+	else
+		warn "could not forget cfgversion; Force Provision the AP in UniFi so its FT WLANs move onto the veth"
+	fi
+	REPUSHED=1
+}
+
+# Status 0 when the translator is in place afterwards (installed, refreshed or
+# already current); 1 with the reason said when it is not. Never fatal to a
+# caller: a device without it keeps everything but fast roaming to UniFi APs.
+install_rrb_unifi() {
+	if ! rrb_installed; then
+		free=$(overlay_free_kb)
+		if [ "$free" -lt "$RRB_MIN_FREE_KB" ]; then
+			say "  skipping the rrb-unifi translator: ${free} KB free on the flash, it is only installed with ${RRB_MIN_FREE_KB} KB to spare"
+			return 1
+		fi
+	fi
+	if ! have_cmd ucode; then
+		warn "ucode is not installed; the rrb-unifi translator runs on it (OpenWrt 24.10 and newer ship it with the wifi scripts)"
+		return 1
+	fi
+	missing=$(rrb_missing_packages)
+	if [ -n "$missing" ]; then
+		say "installing for the rrb-unifi translator: $missing"
+		for p in $missing; do
+			add_one "$p" || { warn "the rrb-unifi translator needs $p; not installed"; return 1; }
+		done
+	fi
+	tmp=$(mktemp -d /tmp/openuf-rrb.XXXXXX 2>/dev/null) || { warn "could not create a temporary directory in /tmp"; return 1; }
+	for f in $RRB_FILES; do
+		if ! fetch "$RRB_URL/$f" "$tmp/$f" || [ ! -s "$tmp/$f" ]; then
+			warn "could not download $RRB_URL/$f; the rrb-unifi translator is not $(rrb_installed && printf refreshed || printf installed)"
+			rm -rf "$tmp"
+			return 1
+		fi
+	done
+	# A download that is not the tool (a GitHub error page, a moved file).
+	grep -q '^VERSION=' "$tmp/rrb-unifi-setup" && grep -q 'rrb-unifi' "$tmp/rrb-unifi.init" || {
+		warn "the files at $RRB_URL do not look like the rrb-unifi translator; nothing installed"
+		rm -rf "$tmp"
+		return 1
+	}
+	changed=1
+	if rrb_installed && cmp -s "$tmp/rrb-unifi.uc" "$RRB_DAEMON" && cmp -s "$tmp/rrb-unifi.init" "$RRB_INIT" \
+		&& cmp -s "$tmp/rrb-unifi-setup" "$RRB_SETUP"; then
+		changed=0
+	fi
+	was_running=0; rrb_running && was_running=1
+	had_veth=0; rrb_veth && had_veth=1
+	# The tool's install asks before installing packages and before a network
+	# reload; --yes answers both. Its reload (the veth pair's creation) is
+	# guarded by a 120 s watchdog that restores /etc/config/network unless
+	# `confirm` is run -- meant for a person whose SSH session the reload may
+	# have cut. Adding an isolated veth pair cuts nothing, so the confirmation
+	# follows at once. It also keeps an existing /etc/config/rrb-unifi, so
+	# the peer list survives a refresh.
+	if ! ( cd "$tmp" && sh ./rrb-unifi-setup install --yes ) >"$tmp/install.log" 2>&1; then
+		warn "rrb-unifi-setup install failed:"
+		tail -n 6 "$tmp/install.log" | sed 's/^/    /' >&2
+		rm -rf "$tmp"
+		return 1
+	fi
+	[ -f "$RRB_SETUP" ] && sh "$RRB_SETUP" confirm >/dev/null 2>&1
+	rm -rf "$tmp"
+	if [ "$changed" = 1 ] && [ "$was_running" = 1 ]; then
+		"$RRB_INIT" restart >/dev/null 2>&1 && say "  rrb-unifi restarted on the new files"
+	elif [ "$was_running" = 0 ] && rrb_veth; then
+		# The tool enables the service but leaves starting it to its own
+		# `apply`, which an openUF-provisioned AP never runs (openUF writes
+		# the FT options itself). It waits for a BSS on the veth; openUF's
+		# next push puts one there.
+		"$RRB_INIT" start >/dev/null 2>&1 && say "  rrb-unifi started"
+	fi
+	peers=$(rrb_peers)
+	if [ "$changed" = 1 ]; then
+		say "  the rrb-unifi translator is installed ($(rrb_version), from $RRB_URL)"
+	else
+		say "  the rrb-unifi translator is current ($(rrb_version))"
+	fi
+	if [ "$peers" = 0 ]; then
+		say "  no UniFi peer listed yet: rrb-unifi-setup collect USER@UNIFI_AP, then rrb-unifi-setup peers, then Force Provision"
+	else
+		say "  UniFi peers listed: $peers"
+	fi
+	rrb_veth || warn "the veth $(rrb_ft_iface) is not up; hostapd stays on the bridge until it is (a reboot creates it from /etc/config/network)"
+	[ "$had_veth" = 0 ] && rrb_veth && repush_openuf
+	return 0
+}
+
 # ── --check ─────────────────────────────────────────────────────────────────
 json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n'; }
 
@@ -250,6 +430,19 @@ PKGS
 		printf '"%s"' "$m"
 	done
 	printf '],"ok":%s,' "$( [ "$full" = true ] && [ -z "$(missing_packages)" ] && printf true || printf false )"
+	if rrb_installed; then ri=true; else ri=false; fi
+	if rrb_veth; then rv=true; else rv=false; fi
+	if rrb_running; then rr=true; else rr=false; fi
+	rver=$(rrb_version)
+	printf '"rrb_unifi":{"installed":%s,"version":%s,"veth":%s,"running":%s,"peers":%s,"missing":[' \
+		"$ri" "$( [ -n "$rver" ] && printf '"%s"' "$(json_str "$rver")" || printf null )" "$rv" "$rr" "$(rrb_peers)"
+	first=1
+	for m in $(rrb_missing_packages); do
+		[ "$first" = 1 ] || printf ','
+		first=0
+		printf '"%s"' "$m"
+	done
+	printf '],"source":"%s"},' "$(json_str "$RRB_URL")"
 	if luci_present; then l=true; else l=false; fi
 	if theme_present; then t=true; else t=false; fi
 	if theme_wanted; then w=true; else w=false; fi
@@ -272,8 +465,16 @@ add_one() {   # add_one <package>
 	return 1
 }
 
-install() {   # install <only-wpad 0|1> <library or empty> <theme 0|1>
-	only_wpad=$1; lib=$2; theme=${3:-1}
+install() {   # install <only-wpad 0|1> <library or empty> <theme 0|1> <rrb 0|1> <only-rrb 0|1>
+	only_wpad=$1; lib=$2; theme=${3:-1}; rrb=${4:-1}; only_rrb=${5:-0}
+	if [ "$only_rrb" = 1 ]; then
+		rc=0
+		install_rrb_unifi || rc=1
+		if [ "$REPUSHED" = 1 ] && [ -x /etc/init.d/openuf ]; then
+			if /etc/init.d/openuf restart >/dev/null 2>&1; then say "openUF restarted"; fi
+		fi
+		return $rc
+	fi
 	changed=0
 	missing=""
 	[ "$only_wpad" = 1 ] || missing=$(missing_packages)
@@ -323,7 +524,12 @@ install() {   # install <only-wpad 0|1> <library or empty> <theme 0|1>
 		[ -x /etc/init.d/wpad ] && /etc/init.d/wpad restart >/dev/null 2>&1
 		if wifi up >/dev/null 2>&1; then say "  radios brought up on the new build"; fi
 	fi
-	if [ "$changed" = 1 ] && [ -x /etc/init.d/openuf ]; then
+	# After hostapd is settled: the translator needs one, and the re-push
+	# it may trigger is what moves the FT WLANs onto its veth.
+	if [ "$rrb" = 1 ] && [ "$only_wpad" != 1 ]; then
+		install_rrb_unifi || true
+	fi
+	if { [ "$changed" = 1 ] || [ "$REPUSHED" = 1 ]; } && [ -x /etc/init.d/openuf ]; then
 		# The capability bits openUF claims are probed once, at start.
 		if /etc/init.d/openuf restart >/dev/null 2>&1; then say "openUF restarted"; fi
 	fi
@@ -336,13 +542,15 @@ install() {   # install <only-wpad 0|1> <library or empty> <theme 0|1>
 }
 
 # ── main ────────────────────────────────────────────────────────────────────
-MODE=""; LIB=""; ONLY_WPAD=0; THEME=1
+MODE=""; LIB=""; ONLY_WPAD=0; THEME=1; RRB=1; ONLY_RRB=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--check)     MODE=check ;;
 		--install)   MODE=install ;;
 		--only-wpad) ONLY_WPAD=1 ;;
 		--no-theme)  THEME=0 ;;
+		--no-rrb-unifi)   RRB=0 ;;
+		--only-rrb-unifi) ONLY_RRB=1 ;;
 		--wpad)
 			shift; [ $# -gt 0 ] || die "--wpad needs a value: mbedtls, openssl or wolfssl"
 			case "$1" in
@@ -351,13 +559,13 @@ while [ $# -gt 0 ]; do
 				*) die "--wpad: mbedtls, openssl or wolfssl, not '$1'" ;;
 			esac
 			;;
-		-h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) die "unknown option: $1" ;;
 	esac
 	shift
 done
 case "$MODE" in
 	check)   check ;;
-	install) [ "$(id -u)" = 0 ] || die "must run as root"; install "$ONLY_WPAD" "$LIB" "$THEME" ;;
-	*)       sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+	install) [ "$(id -u)" = 0 ] || die "must run as root"; install "$ONLY_WPAD" "$LIB" "$THEME" "$RRB" "$ONLY_RRB" ;;
+	*)       sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

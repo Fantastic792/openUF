@@ -5,9 +5,12 @@
 # Run from the project root after transferring files to the device.
 #
 # Usage:
-#   ./install.sh install [--bootstrap-adopt] [--replace-conf]
+#   ./install.sh install [--bootstrap-adopt] [--replace-conf] [--no-rrb-unifi]
 #                           — copy files, enable service. An existing
-#                             /opt/openuf/conf.lua is KEPT unless --replace-conf
+#                             /opt/openuf/conf.lua is KEPT unless --replace-conf.
+#                             The rrb-unifi translator (802.11r with genuine
+#                             UniFi APs) is installed from this project's fork
+#                             unless --no-rrb-unifi
 #   ./install.sh uninstall  — remove files, disable service
 
 INSTALL_DIR=/opt/openuf
@@ -51,10 +54,12 @@ ACTION=${1:-}
 [ $# -gt 0 ] && shift
 BOOTSTRAP_ADOPT=0
 REPLACE_CONF=0
+RRB_UNIFI=1
 for _opt in "$@"; do
 	case "$_opt" in
 		--bootstrap-adopt) BOOTSTRAP_ADOPT=1 ;;
 		--replace-conf)    REPLACE_CONF=1 ;;
+		--no-rrb-unifi)    RRB_UNIFI=0 ;;
 		*) echo "ERROR: unknown option: $_opt" >&2; exit 1 ;;
 	esac
 done
@@ -362,6 +367,20 @@ case "$ACTION" in
 		"$INIT_SCRIPT" enable 2>/dev/null
 		"$INIT_SCRIPT" start
 
+		# The rrb-unifi translator: 802.11r fast roaming with genuine UniFi
+		# APs (USAGE § 6), which openUF's unifi_ft_interop switch assumes.
+		# Downloaded from this project's fork of it and installed by its own
+		# setup tool -- in hook/openuf-deps.sh, which the updater and the
+		# LuCI overview's button run too. Optional: no internet, a feed
+		# without kmod-veth or a full flash costs this feature and nothing
+		# else, and `openuf deps --install` retries it later. After the
+		# service start so the re-push it triggers on an adopted AP lands.
+		if [ "$RRB_UNIFI" = 1 ]; then
+			if ! "$INSTALL_DIR/hook/openuf-deps.sh" --install --only-rrb-unifi; then
+				echo "WARNING: the rrb-unifi translator is not installed -- fast roaming to genuine UniFi APs needs it (openuf deps --install)."
+			fi
+		fi
+
 		# Enable lldpd
 		if [ -f /etc/init.d/lldpd ]; then
 			/etc/init.d/lldpd enable
@@ -411,6 +430,15 @@ case "$ACTION" in
 
 		# Remove symlink, and the updater command
 		rm -f "$BIN_LINK" /usr/bin/openuf-update /usr/bin/openuf /usr/sbin/openuf-convert /usr/sbin/openuf-deps
+
+		# The rrb-unifi translator has its own uninstall and may be wanted
+		# without openUF (it works with a hand-configured WLAN too), so it
+		# stays. Its uninstall refuses while a controller-provisioned WLAN
+		# still carries ft_iface, hence the order in the hint.
+		if [ -x /usr/sbin/rrb-unifi-setup ]; then
+			echo "The rrb-unifi translator stays installed. To remove it: forget the device in UniFi (or clear"
+			echo "the openuf_ wireless sections), then: rrb-unifi-setup uninstall [--remove-packages]"
+		fi
 
 		# The controller's cron jobs (sysconf.lua) call the symlink just
 		# removed; take openUF's marked block out of root's crontab so crond

@@ -185,6 +185,22 @@ else
 fi
 echo ""
 
+# ── rrb-unifi translator ─────────────────────────────────────────────────────
+# 802.11r fast roaming with genuine UniFi APs (USAGE § 6). Informational: an
+# AP without it keeps everything but that, and install.sh adds it.
+echo "[ rrb-unifi translator ]"
+if [ -f /usr/sbin/rrb-unifi.uc ] && [ -f /etc/init.d/rrb-unifi ]; then
+	_rv=$(sed -n 's/^VERSION=//p' /usr/sbin/rrb-unifi-setup 2>/dev/null | head -1)
+	ok "rrb-unifi ${_rv:-?} installed"
+	_ft=$(sed -n "s/^[[:space:]]*option ft_iface '\{0,1\}\([^' ]*\)'\{0,1\}.*/\1/p" /etc/config/rrb-unifi 2>/dev/null | head -1)
+	if [ -e "/sys/class/net/${_ft:-vft0}" ]; then ok "veth ${_ft:-vft0} present"; else info "veth ${_ft:-vft0} absent (created from /etc/config/network at boot)"; fi
+	if /etc/init.d/rrb-unifi running >/dev/null 2>&1; then ok "rrb-unifi running"; else info "rrb-unifi not running (it starts once a WLAN uses the veth)"; fi
+	info "UniFi peers listed: $(grep -c 'list ft_peer' /etc/config/rrb-unifi 2>/dev/null || echo 0)"
+else
+	info "not installed — install.sh adds it (openuf deps --install); without it openUF APs still roam among themselves"
+fi
+echo ""
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo "==========================="
 echo "Results: $PASS passed, $FAIL failed"

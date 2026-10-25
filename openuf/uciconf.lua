@@ -41,7 +41,7 @@
 	      option roam_assist_diff_db '8'  option country_override ''
 	      option bootstrap_adopt_user ''  option debug_dump_file ''
 	      option debug_dump_requests '0'  option debug_dump_max_bytes '4194304'
-	      option unifi_ft_interop '0'
+	      option unifi_ft_interop '1'
 	      (debug_caps and debug_payload_extra stay conf.lua-only: they are
 	      research switches, not settings)
 	  config device 'custom'

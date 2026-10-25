@@ -26,19 +26,23 @@ local function rrb_cfg(peers, ft_iface)
 	return {["rrb-unifi"] = {main = {ft_peer = peers, ft_iface = ft_iface}}}
 end
 
--- Run fn with ftinterop's seams stubbed: sysfs answers for the netdevs in
--- `present`, and log lines are collected instead of printed. Restored even
--- when fn raises, so a failing test cannot leak its stubs.
+-- Run fn with ftinterop's seams stubbed: sysfs answers for the netdevs named
+-- in `present`, the translator's files exist when `present` names their
+-- paths, and log lines are collected instead of printed. Restored even when
+-- fn raises, so a failing test cannot leak its stubs.
+local INSTALLED = "/etc/config/rrb-unifi"
+
 local function with_ftinterop(present, fn)
-	local orig_read, orig_log = ftinterop._read_file, ftinterop._log
+	local orig_read, orig_exists, orig_log = ftinterop._read_file, ftinterop._exists, ftinterop._log
 	local logged = {}
 	ftinterop._read_file = function(path)
 		local ifn = path:match("^/sys/class/net/([^/]+)/ifindex$")
 		return (ifn and present[ifn]) and "9\n" or nil
 	end
+	ftinterop._exists = function(path) return present[path] == true end
 	ftinterop._log = function(msg) logged[#logged + 1] = msg end
 	local ok, err = pcall(fn, logged)
-	ftinterop._read_file, ftinterop._log = orig_read, orig_log
+	ftinterop._read_file, ftinterop._exists, ftinterop._log = orig_read, orig_exists, orig_log
 	if not ok then error(err, 0) end
 end
 
@@ -116,7 +120,7 @@ return {
 	{
 		name = "ftinterop: apply reproduces the working U7 interop config",
 		fn = function()
-			with_ftinterop({vft0 = true}, function()
+			with_ftinterop({vft0 = true, [INSTALLED] = true}, function()
 				local extra = {ieee80211r = "1", reassociation_deadline = "3000",
 					pmk_r1_push = "1", ft_over_ds = "0"}
 				ftinterop.apply(extra, {ssid = "corp", radio = "radio0", iapp_key = KEY},
@@ -142,7 +146,7 @@ return {
 	{
 		name = "ftinterop: apply degrades without key, peers, BSSID or veth",
 		fn = function()
-			with_ftinterop({}, function(logged)
+			with_ftinterop({[INSTALLED] = true}, function(logged)
 				local extra = {}
 				ftinterop.apply(extra, {ssid = "corp", radio = "radio0"}, nil,
 					ro_cursor({}), DELETE)
@@ -154,13 +158,43 @@ return {
 				assert_true(has_log(logged, "BSSID not known"), "missing BSSID logged")
 				assert_true(has_log(logged, "ft_iface not present"), "missing veth logged")
 			end)
-			with_ftinterop({vft0 = true}, function(logged)
+			with_ftinterop({vft0 = true, [INSTALLED] = true}, function(logged)
 				local extra = {}
 				ftinterop.apply(extra, {ssid = "corp", radio = "radio0", iapp_key = KEY},
 					OWN, ro_cursor({}), DELETE)
 				assert_eq(#extra.r0kh, 1, "wildcard only")
 				assert_true(has_log(logged, "no ft_peer"), "missing peers logged")
 			end)
+		end
+	},
+	{
+		name = "ftinterop: without the translator installed, one line per WLAN and a config openUF APs roam on",
+		fn = function()
+			-- The switch is on by default, so this is every AP that never
+			-- installed rrb-unifi: the options that keep openUF APs roaming
+			-- among themselves are written, nothing names a missing veth, and
+			-- the log says the one thing that matters instead of diagnosing
+			-- each piece of the translator.
+			with_ftinterop({}, function(logged)
+				local extra = {}
+				ftinterop.apply(extra, {ssid = "corp", radio = "radio0", iapp_key = KEY},
+					OWN, ro_cursor({}), DELETE)
+				assert_eq(extra.mobility_domain, "5de5", "UniFi's mobility domain, the same on every openUF AP")
+				assert_eq(extra.ft_psk_generate_local, "0", "key holders")
+				assert_eq(#extra.r0kh, 1, "the wildcard key holder every openUF AP accepts")
+				assert_eq(extra.nasid, "00005e00532b", "nasid")
+				assert_eq(extra.hostapd_bss_options, DELETE, "no ft_iface: hostapd stays on the bridge")
+				assert_true(has_log(logged, "not installed"), "the one line")
+				assert_false(has_log(logged, "ft_iface not present"), "no veth diagnosis")
+				assert_false(has_log(logged, "no ft_peer"), "no peer-list diagnosis")
+				assert_eq(#logged, 1, "exactly one line")
+			end)
+			assert_false(ftinterop.translator_installed(), "no files -> not installed")
+			ftinterop._exists = function(p) return p == "/etc/init.d/rrb-unifi" end
+			local ok, installed = pcall(ftinterop.translator_installed)
+			ftinterop._exists = nil
+			ftinterop._exists = dofile("openuf/ftinterop.lua")._exists
+			assert_true(ok and installed, "the init script alone counts")
 		end
 	},
 	{
@@ -216,9 +250,11 @@ return {
 			ucihelper._popen = function() return "" end
 			ucihelper._read_file = function(path)
 				if path == "/sys/class/net/phy0-ap0/address" then return OWN .. "\n" end
+				if path == "/etc/init.d/rrb-unifi" then return "#!/bin/sh /etc/rc.common\n" end
 				return nil
 			end
-			ucihelper._run_cmd = function() return true end
+			local cmds = {}
+			ucihelper._run_cmd = function(cmd) cmds[#cmds + 1] = cmd; return true end
 			ucihelper._bcfilter = {reconcile = function() end}
 			ucihelper._shaper = {reconcile = function() end}
 			ucihelper._ftinterop = ftinterop
@@ -230,7 +266,7 @@ return {
 				 x_passphrase = "hunter22", fast_roaming_enabled = true, iapp_key = KEY},
 			}}
 			local ok, err = pcall(function()
-				with_ftinterop({vft0 = true}, function()
+				with_ftinterop({vft0 = true, [INSTALLED] = true}, function()
 					ucihelper.apply_config(resp, {config = {unifi_ft_interop = true}})
 					local s = db.wireless.openuf_radio0_corp
 					assert_eq(s.ieee80211r, "1", "FT on")
@@ -240,9 +276,23 @@ return {
 					assert_nil(s.reassociation_deadline, "OpenWrt's default deadline")
 					assert_eq(s.r0kh[1], PEER1 .. ",00005e005321," .. KEY, "the peer")
 					assert_eq(s.hostapd_bss_options[1], "ft_iface=vft0", "veth")
+					-- The translator reads hostapd's configs at start and gives
+					-- up when none uses the veth: it is restarted after the
+					-- reload that wrote them, and only then.
+					local reload, restart
+					for i, c in ipairs(cmds) do
+						if c == "wifi reload" then reload = reload or i end
+						if c == "/etc/init.d/rrb-unifi restart" then restart = i end
+					end
+					assert_not_nil(restart, "rrb-unifi restarted")
+					assert_true(reload and restart > reload, "after the wifi reload")
 
 					db.wireless = nil
+					cmds = {}
 					ucihelper.apply_config(resp, {config = {}})
+					for _, c in ipairs(cmds) do
+						assert_neq(c, "/etc/init.d/rrb-unifi restart", "off: the translator is left alone")
+					end
 					s = db.wireless.openuf_radio0_corp
 					assert_eq(s.mobility_domain, ucihelper.derive_mobility_domain("corp"),
 						"off: openUF's own mobility domain")

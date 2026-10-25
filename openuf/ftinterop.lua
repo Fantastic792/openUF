@@ -1,7 +1,16 @@
 --[[
 	ftinterop.lua -- 802.11r fast roaming between openUF and genuine UniFi APs.
 
-	Off by default (conf.lua / openuf.main `unifi_ft_interop`). Adopted from
+	On by default for new installations (conf.lua / openuf.main
+	`unifi_ft_interop`, the user's decision of 2026-10-25; d-malinowski ships it
+	off). Without the translator installed, what the switch changes is the
+	mobility domain (UniFi's formula instead of openUF's: every openUF AP
+	still computes the same one, so they keep roaming among themselves) and
+	FT-PSK's key path (pull over RRB instead of local derivation, the path
+	FT-SAE takes anyway); nothing then points hostapd at a veth that does not
+	exist. On a site with genuine UniFi APs but no translator, clients try a
+	fast transition towards those APs and fall back to a full reconnect: the
+	fix is the translator, or the switch off. Adopted from
 	d-malinowski/openUF (branch pr/unifi-ft-interop, 2026-10-22); the hardware
 	evidence is theirs: a BT Home Hub 5A on OpenWrt 25.12.6 roaming against a
 	U7 Lite on UniFi 8.7.11, FT-PSK, both directions (PROTOCOL-VALIDATION.md,
@@ -71,6 +80,11 @@ M.DEFAULT_FT_IFACE = "vft0"
 
 -- Injectable seams.
 M._read_file = util.read_file
+M._exists = function(path)
+	local f = io.open(path, "r")
+	if f then f:close() return true end
+	return false
+end
 M._log = function(msg) io.stderr:write("openuf: ftinterop: " .. msg .. "\n") end
 
 -- ─── SHA1 (pure Lua, 32-bit words through util.bit) ──────────────────────────
@@ -167,6 +181,19 @@ function M.peers(cursor)
 	return out
 end
 
+-- Whether the rrb-unifi translator is installed here: its setup tool leaves
+-- /etc/config/rrb-unifi and the init script behind. Decides how much apply()
+-- says when the veth or the peer list is missing. On an AP without the
+-- translator (the common case, the switch being on by default) that is one
+-- line per FT WLAN, not a diagnosis of every missing piece.
+M.TRANSLATOR_FILES = {"/etc/config/rrb-unifi", "/etc/init.d/rrb-unifi"}
+function M.translator_installed()
+	for _, p in ipairs(M.TRANSLATOR_FILES) do
+		if M._exists(p) then return true end
+	end
+	return false
+end
+
 -- The ft_iface hostapd should use, or nil when it does not exist (yet).
 function M.ft_iface(cursor)
 	local name = cursor and cursor:get(M.RRB_CONFIG, "main", "ft_iface")
@@ -185,6 +212,7 @@ end
 -- interface is up). `cursor` reads /etc/config/rrb-unifi; `delete` is
 -- ucihelper.DELETE, "this option must not be present".
 function M.apply(extra, vap, bssid, cursor, delete)
+	local installed = M.translator_installed()
 	extra.mobility_domain = M.mobility_domain(vap.ssid)
 	extra.ft_psk_generate_local = "0"
 	extra.reassociation_deadline = delete
@@ -205,9 +233,9 @@ function M.apply(extra, vap, bssid, cursor, delete)
 		r0kh[#r0kh + 1] = "ff:ff:ff:ff:ff:ff,*," .. key
 		r1kh[#r1kh + 1] = "00:00:00:00:00:00,00:00:00:00:00:00," .. key
 		extra.r0kh, extra.r1kh = r0kh, r1kh
-		if #r0kh == 1 then
+		if #r0kh == 1 and installed then
 			M._log("no ft_peer in /etc/config/" .. M.RRB_CONFIG
-				.. ": UniFi peers can pull keys, but none get pushed")
+				.. ": UniFi peers can pull keys, but none get pushed (rrb-unifi-setup peers)")
 		end
 	else
 		-- Without the controller's key OpenWrt derives one from the
@@ -221,8 +249,15 @@ function M.apply(extra, vap, bssid, cursor, delete)
 		extra.hostapd_bss_options = {"ft_iface=" .. ifn}
 	else
 		extra.hostapd_bss_options = delete
-		M._log("ft_iface not present, hostapd stays on the bridge: "
-			.. "fast roaming to UniFi APs needs the rrb-unifi translator")
+		if installed then
+			M._log("ft_iface not present, hostapd stays on the bridge: "
+				.. "is the rrb-unifi service running?")
+		end
+	end
+	if not installed then
+		M._log(string.format("%s: the rrb-unifi translator is not installed; openUF APs "
+			.. "still roam among themselves, fast roaming to genuine UniFi APs needs it",
+			tostring(vap.ssid)))
 	end
 	return extra
 end

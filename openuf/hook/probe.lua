@@ -238,7 +238,9 @@ function M.describe(dev, config, opts)
 	out.config = {
 		inform_url = c.inform_url, use_only_unifi_wlan = c.use_only_unifi_wlan,
 		keep_wlan_sections = c.keep_wlan_sections, l2_announce = c.l2_announce,
-		unifi_ft_interop = c.unifi_ft_interop,
+		-- An explicit boolean: a conf.lua from before the option has nil, which
+		-- the daemon runs as off, and the LuCI pages seed UCI from this value.
+		unifi_ft_interop = c.unifi_ft_interop == true,
 		neighbour_scan_interval = c.neighbour_scan_interval,
 		rrm_enrichment = c.rrm_enrichment, rrm_request_interval = c.rrm_request_interval,
 		roam_assist_diff_db = c.roam_assist_diff_db, country_override = c.country_override,

@@ -179,6 +179,7 @@ OPT_L2=""              # ""=derive 1=on 0=off
 OPT_COUNTRY=""         # ""=ask; "none" or a 2-letter code
 HEADLESS=""            # ""=ask 1=daemon only, as files  0=the packages, with LuCI
 OPT_THEME=""           # ""=ask 1=yes 0=no  (luci-theme-halo; web install only)
+OPT_RRB=""             # ""=ask 1=yes 0=no  (the rrb-unifi translator, from the fork)
 DO_REBOOT=""           # ""=ask 1=yes 0=no
 KEEP_WORK=0
 
@@ -226,6 +227,10 @@ is asked interactively (or takes its default under --yes).
                             to LuCI (headless)
       --theme / --no-theme  with --web: also the Halo LuCI theme (default:
                             yes with 4 MB free on the flash, else no)
+      --rrb-unifi / --no-rrb-unifi
+                            the rrb-unifi translator, for 802.11r fast roaming
+                            between this AP and genuine UniFi APs, from the
+                            project's fork of it (default: yes)
       --reboot / --no-reboot
                             reboot when done (default: yes)
       --keep-work           leave the downloaded tree in /tmp for inspection
@@ -266,6 +271,8 @@ while [ $# -gt 0 ]; do
 		--headless)          HEADLESS=1 ;;
 		--theme)             OPT_THEME=1 ;;
 		--no-theme)          OPT_THEME=0 ;;
+		--rrb-unifi)         OPT_RRB=1 ;;
+		--no-rrb-unifi)      OPT_RRB=0 ;;
 		--reboot)            DO_REBOOT=1 ;;
 		--no-reboot)         DO_REBOOT=0 ;;
 		--keep-work)         KEEP_WORK=1 ;;
@@ -763,6 +770,21 @@ if [ -z "$OPT_EXCLUSIVE" ]; then
 	fi
 fi
 
+head1 "Fast roaming with genuine UniFi access points"
+say "  openUF APs roam among themselves with 802.11r. Roaming between this AP"
+say "  and a real UniFi AP needs the rrb-unifi translator as well: UniFi's"
+say "  hostapd frames the inter-AP key exchange differently, and the translator"
+say "  (a small ucode daemon on a veth pair, by d-malinowski) converts it."
+say "  It is installed from the project's fork of it, with ucode-mod-socket and"
+say "  kmod-veth (about 100 KB). Nothing on the UniFi APs changes. Later, on"
+say "  this device: rrb-unifi-setup collect USER@UNIFI_AP, then"
+say "  rrb-unifi-setup peers, then Force Provision the AP in UniFi."
+say "  Without it openUF turns the feature's settings on all the same, and"
+say "  only roaming to real UniFi APs is missing."
+if [ -z "$OPT_RRB" ]; then
+	if ask_yn "  Install the rrb-unifi translator?" Y; then OPT_RRB=1; else OPT_RRB=0; fi
+fi
+
 head1 "Regulatory domain (optional)"
 say "  Normally the controller's country setting is used and this stays off."
 say ""
@@ -869,6 +891,7 @@ say "  Hardware profile  $MODELMAP"
 say "  Controller        ${INFORM_URL:-L2 auto-discovery}"
 say "  Bootstrap account $([ "$OPT_BOOTSTRAP" = 1 ] && echo 'yes (ubnt/ubnt, self-locking)' || echo no)"
 say "  Controller WLANs  $([ "$OPT_EXCLUSIVE" = 1 ] && echo 'exclusive' || echo 'alongside existing SSIDs')"
+say "  UniFi roaming     $([ "$OPT_RRB" = 1 ] && echo 'rrb-unifi translator installed' || echo 'no translator (openUF APs only)')"
 say "  L2 discovery      $([ "$OPT_L2" = 1 ] && echo on || echo 'off (L3 adoption)')"
 say "  Regdomain         $([ "$OPT_COUNTRY" = none ] && echo "the controller's" || echo "$OPT_COUNTRY (override; controller still told its own)")"
 if [ "$HEADLESS" = 1 ]; then
@@ -937,6 +960,10 @@ if [ -d /sys/bus/platform/devices/leds ] \
 	OPTIONAL="$OPTIONAL kmod-leds-gpio"
 fi
 case "$INFORM_URL" in https*) OPTIONAL="$OPTIONAL luasec" ;; esac
+# The rrb-unifi translator's two packages go in here, in the packages phase,
+# while this box is still the router with internet; its files come later from
+# the fork (openuf-deps, run by install.sh or after the package install).
+[ "$OPT_RRB" = 1 ] && OPTIONAL="$OPTIONAL ucode-mod-socket kmod-veth"
 
 MISSING=""
 for p in $REQUIRED; do pkg_installed "$p" || MISSING="$MISSING $p"; done
@@ -1258,6 +1285,10 @@ if [ "$HEADLESS" = 1 ]; then
 
 	BOOTSTRAP_ARG=""
 	[ "$OPT_BOOTSTRAP" = 1 ] && BOOTSTRAP_ARG="--bootstrap-adopt"
+	# install.sh installs the rrb-unifi translator unless told not to; its
+	# veth is created with a guarded network reload that install.sh confirms
+	# itself (an isolated veth pair cannot cut this session).
+	[ "$OPT_RRB" = 0 ] && BOOTSTRAP_ARG="$BOOTSTRAP_ARG --no-rrb-unifi"
 	# install.sh reads openuf/, tools/strip.lua and install.sh by relative path.
 	# --replace-conf: on its own, install.sh keeps a device's existing conf.lua
 	# (a bare reinstall must not move an adopted device's modelmap); this script
@@ -1347,6 +1378,17 @@ else
 	[ -f "$PKG_DIR/inform.lua" ] \
 		|| die "the package manager reported success but $PKG_DIR/inform.lua is missing"
 	ok "installed openuf and luci-app-openuf${P_THEME:+ and luci-theme-halo}"
+
+	# The rrb-unifi translator is not an OpenWrt package: the openuf package
+	# brings the command that installs it from the project's fork (the same
+	# step install.sh runs for a file install). Optional, never fatal.
+	if [ "$OPT_RRB" = 1 ]; then
+		if /usr/sbin/openuf-deps --install --only-rrb-unifi; then
+			ok "rrb-unifi translator installed"
+		else
+			warn "the rrb-unifi translator could not be installed; openuf deps --install retries it (LuCI's openUF overview has the button)"
+		fi
+	fi
 
 	head1 "Configuring openUF"
 
