@@ -462,6 +462,13 @@ case "$ACTION" in
 			sed -i '/^ubnt:/d' /etc/shadow
 			echo "Removed SSH bootstrap account 'ubnt'."
 		fi
+		# The shell that account was registered with in /etc/shells (dropbear
+		# refuses a login whose shell is not listed there) goes with it --
+		# whichever prefix made the account, since the entry is the path.
+		if grep -q '/hook/adopt-shell\.sh$' /etc/shells 2>/dev/null; then
+			sed -i '/\/hook\/adopt-shell\.sh$/d' /etc/shells
+			echo "Removed the bootstrap shell from /etc/shells."
+		fi
 		if grep -q "^openuf:" /etc/group 2>/dev/null; then
 			sed -i '/^openuf:/d' /etc/group
 		fi

@@ -591,6 +591,13 @@ Two things real hardware does that the validation container had to be taught:
   the admin-configured Device SSH credentials — correct behavior, because `announce.lua`'s
   `IsDefault` byte (`0x17` in the TLV blob, `make_blob_17_1a`) correctly declares the device
   unadopted.
+- The reverse lesson, learned on a device: dropbear checks the account's shell against
+  `/etc/shells` **before** the password (`getusershell(3)`), and OpenWrt ships that file with
+  `/bin/ash` alone. The forced shell was not listed, so on AP2 (2026-10-25) the gateway's three
+  SSH attempts in twelve seconds each ended in `User 'ubnt' has invalid shell, rejected` and the
+  mobile app asked for root credentials instead ("advanced adoption"). The container's OpenSSH
+  has no such check, which is why the account passed here and never on a device until
+  `hook/openuf-bootstrap.sh` registered the shell.
 
 `mgmt_url` is the **web UI deep link** (`https://host:8443/manage/site/default`), *not* an
 alias for `inform_url`. Treating them as the same key makes the device overwrite its working

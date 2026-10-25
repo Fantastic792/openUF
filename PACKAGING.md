@@ -331,6 +331,16 @@ account had no password at all. `hook/openuf-bootstrap.sh` now creates the accou
 fed on stdin under `setsid`, so it does not ask the terminal; `uhttpd -m`), and says so
 when none of them worked -- locked beats open. `install.sh` calls the same hook.
 
+A fourth, found on AP2 on 2026-10-25 -- the first L2 adoption of a device through the mobile
+app since the hook existed: dropbear checks a login's shell against `/etc/shells` before the
+password (`getusershell(3)`; the code is the same in 24.10's 2024.86 and 25.12's 2025.89), and
+OpenWrt's base-files has shipped that file with `/bin/ash` alone since 2006. The forced shell was
+never listed, so every `ubnt` login on a real device was `User 'ubnt' has invalid shell,
+rejected` (three attempts from the gateway in twelve seconds) and the app fell back to asking
+for root credentials. It had only ever passed against the validation container's OpenSSH, which
+has no such check. The hook now registers the shell, repairs an existing account's entry when
+run again, and `install.sh uninstall` removes it.
+
 The release workflow attaches `luci-theme-halo` since this branch; v0.1.8 and earlier ship
 only `openuf` and `luci-app-openuf`, so a web install from those says so and skips the theme.
 

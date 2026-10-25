@@ -441,7 +441,11 @@ host at a time, with `dist.sh --verify` gating every push.
 
 `--bootstrap-adopt` creates the locked-down non-root `ubnt`/`ubnt` account, scoped to
 running `syswrapper.sh set-adopt` only, which self-locks once adopted and re-enables on
-factory reset.
+factory reset. The account's shell must be listed in `/etc/shells` or dropbear rejects the
+login before the password (`User 'ubnt' has invalid shell, rejected`): `hook/openuf-bootstrap.sh`
+registers it, also for an account that exists already, and `uninstall` removes it. The
+validation container's OpenSSH never checked, so this was invisible until a real L2 adoption
+(AP2, 2026-10-25).
 
 **The 802.11r translator for genuine UniFi APs ships with the tree.** `openuf/rrb/rrb-unifi.uc`
 (d-malinowski's rrb-unifi, vendored; `openuf/rrb/README.md` names the upstream
