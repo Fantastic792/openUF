@@ -3923,9 +3923,10 @@ function M.handle_response(json_str, st, cfg)
 	if _type == "setdefault" then
 		-- Controller requested factory reset.  Reset state on disk and in-memory.
 		io.stderr:write("inform: controller requested factory reset\n")
-		-- mac/ip/hostname are populated once at M.run() startup by
-		-- _populate_net_info and never persisted to state.json -- preserve them
-		-- across the reset rather than losing the device's identity mid-run.
+		-- mac/hostname are populated once at M.run() startup by
+		-- _populate_net_info (ip is refreshed every heartbeat) and never
+		-- persisted to state.json -- preserve them across the reset rather
+		-- than losing the device's identity mid-run.
 		local mac, ip, hostname = st.mac, st.ip, st.hostname
 		local prev = {}
 		for k, v in pairs(st) do prev[k] = v end
@@ -4409,7 +4410,10 @@ end
 
 -- ─── Main loop ───────────────────────────────────────────────────────────────
 
--- Populate st.mac / st.ip using announce.lua's get_mac/get_ip helpers.
+-- announce.lua, loaded once and kept (M._announce) for the heartbeat's
+-- address refresh below: _require_sibling dofile()s a module fresh on every
+-- call, and re-parsing announce.lua every 10 s to ask one `ip addr` would be
+-- the wrong trade. Tests replace M._announce with a stub.
 --
 -- _require_sibling dofile()s announce.lua fresh every call (dofile, unlike
 -- require, never caches), which re-runs its self-executing "script entry
@@ -4420,12 +4424,22 @@ end
 -- does e.g. on a docker bridge network that disallows UDP broadcast -- call
 -- os.exit(1) and kill the whole inform process before the actual inform loop
 -- ever runs. Suppress it for the duration of just this reuse-only dofile.
-function M._populate_net_info(st, cfg)
+M._announce = nil
+function M._load_announce()
+	if M._announce then return M._announce end
 	local prev_test_mode = OPENUF_TEST_MODE
 	OPENUF_TEST_MODE = true
 	local ok_ann, announce = pcall(_require_sibling, "announce")
 	OPENUF_TEST_MODE = prev_test_mode
-	if not ok_ann then return end
+	if not ok_ann then return nil end
+	M._announce = announce
+	return announce
+end
+
+-- Populate st.mac / st.ip / st.hostname once, at startup.
+function M._populate_net_info(st, cfg)
+	local announce = M._load_announce()
+	if not announce then return end
 
 	local iface = cfg and cfg.net and cfg.net.lan_cpueth or "eth1"
 	local mac_tbl = announce.get_mac(iface)
@@ -4458,6 +4472,33 @@ function M._populate_net_info(st, cfg)
 	-- older announce module without get_hostname degrades to the fallback.
 	local hostname = announce.get_hostname and announce.get_hostname()
 	if hostname then st.hostname = hostname end
+end
+
+-- The address again, every heartbeat. Startup is too early for it on a
+-- DHCP-managed AP: the service starts at START=99 while udhcpc is still
+-- broadcasting its DISCOVER, the read above finds no address on br-lan,
+-- st.ip stays nil, and every inform from then on carried ip "0.0.0.0" --
+-- the controller showed both lab APs at 0.0.0.0 after their 2026-10-26
+-- reinstall until one of them happened to be rebooted (AP1's log: udhcpc
+-- started at 01:18:41, the lease arrived at :44). A renewed lease that
+-- moves the address had the same gap for the daemon's whole lifetime. A
+-- real AP reports its current address on each inform, so this does too;
+-- the cost is one `ip -4 addr show` per cycle (announce.get_ip remembers
+-- which netdev holds it). A read that finds nothing keeps the last address:
+-- an AP with no address cannot deliver the inform anyway, and a transient
+-- miss during a renew must not flap the controller's record.
+function M._refresh_net_info(st, cfg)
+	local announce = M._load_announce()
+	if not announce then return end
+	local iface = cfg and cfg.net and cfg.net.lan_cpueth or "eth1"
+	local ip_tbl = announce.get_ip(iface)
+	if not ip_tbl then return end
+	local ip = string.format("%d.%d.%d.%d", ip_tbl[1], ip_tbl[2], ip_tbl[3], ip_tbl[4])
+	if ip ~= st.ip then
+		io.stderr:write(string.format("inform: address is now %s (was %s)\n",
+			ip, tostring(st.ip or "none")))
+		st.ip = ip
+	end
 end
 
 -- Airtime Fairness is debugfs state, back at the kernel's default (on) after
@@ -5851,6 +5892,9 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._sched_resync, st)
 	pcall(M._rrbguard_tick)
 	pcall(M._rrb_peers_tick, st, cfg)
+	-- The address this inform reports, read now rather than at startup (see
+	-- _refresh_net_info: a DHCP lease that arrived after the daemon did).
+	pcall(M._refresh_net_info, st, cfg)
 
 	local ok_b, json_str = pcall(M.build_json, st, cfg, ufhw)
 	-- The cycle's ucihelper pass, opened above, ends here whether or not

@@ -580,6 +580,14 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   it opened itself. Outside a pass everything reads every time, which is what keeps
   per-test stubs independent; harnesses reset `_uplink_cache`, `_phy_info_cache`, the lldp
   caches and call `end_pass()` on the way in and out.
+- **The reported address is read every heartbeat, not once.** `_populate_net_info` runs at
+  startup, and on a DHCP-managed AP that is before the lease: START=99 is after `network`,
+  but udhcpc is still broadcasting its DISCOVER (AP1, 2026-10-26: udhcpc started 01:18:41,
+  the lease arrived :44), so `st.ip` stayed nil and every inform carried `ip "0.0.0.0"` --
+  the controller showed both APs at 0.0.0.0 until a lucky reboot. `_refresh_net_info` in
+  `_tick` asks `announce.get_ip` again before each payload (one `ip addr` per cycle, the
+  holder cached), keeps the last address on a nil read, and logs each change. The announce
+  module is loaded once (`M._load_announce`, `M._announce`); tests stub `inform._announce`.
 - **Kernel state is rebuilt at startup, because the controller never re-pushes it.** After
   a reboot `cfgversion` matches and the reply is `noop` with no `system_cfg`, so anything
   applied only from `apply_config`/`handle_response` is gone for good. `M.run` therefore

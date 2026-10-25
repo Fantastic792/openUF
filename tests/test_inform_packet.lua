@@ -160,7 +160,10 @@ local function with_tick_env(fn)
 		inform.build_json, inform.handle_response, inform._http_post,
 		inform._state_mtime, inform._ucihelper, inform._run_cmd, inform._time
 	local o_warned, o_rrm, o_status = inform._warned_400, inform._rrmscan, inform.STATUS_FILE
+	local o_ann = inform._announce
 	inform.build_json = function() return '{"_type":"state"}' end
+	-- _tick re-reads the address through announce.get_ip; no `ip addr` here.
+	inform._announce = {get_ip = function() return nil end}
 	inform._state_mtime = function() return 1 end
 	inform._warned_400 = false
 	-- The 802.11k enrichment is on unless conf.lua says otherwise, and its
@@ -174,6 +177,7 @@ local function with_tick_env(fn)
 		inform._state_mtime, inform._ucihelper, inform._run_cmd, inform._time =
 		o_build, o_handle, o_post, o_mtime, o_uci, o_run, o_time
 	inform._warned_400, inform._rrmscan, inform.STATUS_FILE = o_warned, o_rrm, o_status
+	inform._announce = o_ann
 	os.remove(STATUS_TMP)
 	if not ok then error(err, 0) end
 end
@@ -6741,6 +6745,55 @@ return {
 			assert_not_nil(got, "reconciled")
 			assert_nil(got.rec, "to nothing")
 			assert_eq(got.prev.vids[1], 20, "from the record the reset cleared")
+		end
+	},
+	{
+		name = "inform: _refresh_net_info reports an address that arrived after startup, and keeps it through a miss",
+		fn = function()
+			-- Both lab APs sat at 0.0.0.0 in the controller after a fresh
+			-- install (2026-10-26): the service starts while udhcpc is still
+			-- asking, the startup read finds nothing, and nothing asked again.
+			local answers, o_ann = {}, inform._announce
+			inform._announce = {get_ip = function(iface)
+				answers.iface = iface
+				return answers.ip
+			end}
+			local st = sample_state(); st.ip = nil   -- a nil override is invisible to pairs()
+			local cfg = {net = {lan_cpueth = "br-lan"}}
+			local out = with_stderr(function() inform._refresh_net_info(st, cfg) end)
+			assert_nil(st.ip, "no lease yet: still unknown")
+			assert_eq(answers.iface, "br-lan", "asked for lan_cpueth's address")
+			assert_eq(out, "", "nothing to log while nothing changed")
+
+			answers.ip = {192, 0, 2, 7}
+			out = with_stderr(function() inform._refresh_net_info(st, cfg) end)
+			assert_eq(st.ip, "192.0.2.7", "the lease that arrived after startup is picked up")
+			assert_contains(out, "address is now 192.0.2.7 (was none)", "and logged once")
+
+			answers.ip = nil
+			out = with_stderr(function() inform._refresh_net_info(st, cfg) end)
+			assert_eq(st.ip, "192.0.2.7", "a miss (a renew in progress) keeps the last address")
+			assert_eq(out, "", "silently")
+
+			answers.ip = {192, 0, 2, 8}
+			out = with_stderr(function() inform._refresh_net_info(st, cfg) end)
+			assert_eq(st.ip, "192.0.2.8", "a lease that moved the address follows it")
+			assert_contains(out, "(was 192.0.2.7)", "naming the old one")
+			inform._announce = o_ann
+		end
+	},
+	{
+		name = "inform: _tick re-reads the address before it builds the payload",
+		fn = function()
+			with_tick_env(function()
+				inform._announce = {get_ip = function() return {192, 0, 2, 9} end}
+				local seen
+				inform.build_json = function(st) seen = st.ip; return '{"_type":"state"}' end
+				inform._http_post = function() return nil, "unreachable" end
+				local st = sample_state(); st.ip = nil
+				with_stderr(function() inform._tick(st, {net = {lan_cpueth = "br-lan"}}, nil, fresh_ctx()) end)
+				assert_eq(seen, "192.0.2.9", "build_json saw the address read this cycle, not the startup one")
+			end)
 		end
 	},
 }
