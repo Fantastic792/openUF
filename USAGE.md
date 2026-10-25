@@ -44,7 +44,7 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 | `lldpd` | LLDP topology announcement and neighbor discovery |
 | `openssl-util` | `openssl` CLI — last-resort AES-**CBC** fallback if `lua-openssl` is unavailable. This path cannot do GCM, so it is not sufficient to complete adoption on its own |
 | `nftables` | Client block/unblock (`openuf/firewall.lua`) **and** the Multicast/Broadcast Blocker (`openuf/bcfilter.lua`). ~490 KB with its kernel modules — the first thing that won't fit on a small-flash board, which leaves both features unavailable (openUF logs that rather than pretending) |
-| `kmod-nft-bridge` | The Multicast/Broadcast Blocker and the L2 hardening (`bridge openuf_l2guard`, § 6a). `nftables` does not pull it in, and without `nft_meta_bridge` the bridge family has no `meta` expression — so the blocker's drop rule is rejected while its table, chain and allow-list set all build normally, and the control reports success while filtering nothing. openUF now logs the rejection and names this package. Client block/unblock matches on `ether saddr` alone and does not need it |
+| `kmod-nft-bridge` | The Multicast/Broadcast Blocker, the L2 hardening (`bridge openuf_l2guard`, § 6a) and the guest portal (`bridge openuf_guest`, § 6b-3). `nftables` does not pull it in, and without `nft_meta_bridge` the bridge family has no `meta` expression — so the blocker's drop rule is rejected while its table, chain and allow-list set all build normally, and the control reports success while filtering nothing. openUF now logs the rejection and names this package. Client block/unblock matches on `ether saddr` alone and does not need it |
 | `kmod-ifb` | The **upload** half of WiFi Speed Limit, queued: each SSID's ingress is redirected to an IFB device and shaped there per client, the way the download side is. Without it openUF falls back to policing (excess dropped, not queued) and says so |
 | `kmod-sched-act-police` | The policing fallback for the upload half when there is no `kmod-ifb`. `tc-tiny` brings `sch_htb` but the ingress `police` action is a separate module a stock filogic image lacks; openUF logs the rejection and names this package |
 | `kmod-leds-gpio` | Only on a board whose device tree declares GPIO LEDs the image has no driver for (an AX3000T registers nothing but its radio LEDs, which are wired to nothing). `install.sh` adds it when it sees that situation |
@@ -1611,6 +1611,108 @@ UCI equivalents: `option uplink_monitor '1'` and `option uplink_monitor_host '1.
 `openuf.main`. Two firmware details are not copied. Carrier loss is not an instant verdict,
 because it would blink a meshing AP's SSIDs during the wired-to-wireless switch. The bridge-FDB
 shortcut is skipped too: it only saves probes.
+
+## 6b-3. Guest portal (Hotspot): ⚠️ lab-validated only (adopted from upstream 2026-10-25)
+
+In this tree, guest WLANs that `selfrun_guest_mode=off` takes down share the down/up ledger rules of the WLAN schedule (§ 6) and the Uplink Connectivity Monitor (§ 6b-2): none of the three brings back up an SSID another one still holds down.
+
+Never run against a real guest WLAN on hardware; treat it as a preview. It turns on by
+itself when the controller pushes a guest WLAN with the portal enabled
+(`redirector.status=enabled` plus the guest `ebtables.*` rules). It turns off, removing
+everything, when the portal or the guest WLAN goes away, or on a factory reset.
+
+**What runs.** `guestportal.lua` builds two nftables tables from the pushed rules.
+
+`bridge openuf_guest` hooks every live netdev of the guest WLANs. For an unauthorized guest:
+- **Allowed:** EAPOL, the portal's ports on the controller, broadcast DHCP, ARP and DNS.
+- **Dropped:** IPv6, other broadcast, multicast, and the restricted subnets
+  (`10/8`, `172.16/12`, `192.168/16` by default).
+- **Plain HTTP:** marked and handed to the bridge's own IP stack.
+- **Everything else:** dropped.
+
+A MAC in the `authorized` set (filled from `state.json`'s `guest_authorized`) may reach
+any host other than the AP, but the restricted subnets still apply.
+
+`ip openuf_guest` redirects the marked HTTP to port **8820**. The inform daemon answers
+there between heartbeats with a `302` to the controller's portal, adding:
+- `?id=<guest MAC>`, looked up in `/proc/net/arp`;
+- `&ap=<AP MAC>`;
+- `&t=<now>`: the controller refuses a `t` more than 60 s off its own clock, so the AP's clock must be right;
+- `&url=<what the guest asked for>`;
+- `&ssid=…`.
+
+Logging in on the portal makes the controller send `authorize-guest`. The guest is let
+through within one heartbeat.
+
+When a guest's authorization ends (`unauthorize-guest`: an admin revoked it, it expired or
+it went over its quota), openUF takes the MAC out of the `authorized` set and disconnects the
+guest from every SSID, as UniFi firmware does. On reconnecting, the device's
+captive-portal check runs again and shows the portal. A repeat for the same MAC within 60 s
+is not kicked again.
+
+**Per-guest speed limit.** When a guest is authorized with a limit (a REST
+`authorize-guest` with `up`/`down` in kbps, or the guest's user group), the controller
+sends `rate-update` right after `authorize-guest`, and again whenever the guest reconnects.
+It is a client's own WiFi Speed Limit like any other (see "WiFi Speed Limit" above): a
+queue per direction for that MAC, `-1` meaning unlimited that way.
+
+**Without the controller (`selfrun_guest_mode`).** Every `mgmt_cfg` carries
+`selfrun_guest_mode`. It is `pass` unless the site's `config.properties` sets
+`config.selfrun_guest_mode` to something else, and then it is `off`. openUF does what
+UniFi firmware does (read from its `mcad` and `syswrapper.sh`, builds 3.9.27–4.0.15):
+selfrun starts after **3 informs in a row** go unanswered (`GUEST_SELFRUN_FAILS`). With the
+backoff (10, 20, 40 s) that is about 70 s after the last answer. Selfrun ends with the first
+answer, and it only does anything while the portal is on.
+- **`pass`, or never received:** openUF adds `meta pkttype other accept` to the `selfrun`
+  chain. Every guest then gets through, as an authorized one would: the restricted subnets
+  and the AP itself stay behind the portal's rules. Nobody could log in meanwhile, because
+  the portal is the controller's. The first answer empties the chain again.
+- **`off`:** the guest WLANs are taken down (`ip link set <vap> down`) and brought back up
+  with the first answer: the netdev comes up and hostapd is told to start its beacon again
+  (`hostapd_cli raw STOP_AP` + `update_beacon`, as when a Blackout Schedule ends). Their
+  names are kept in `st.guest_vaps_down`, so a daemon restart in between leaves them down
+  until the controller answers, and then brings them up. One whose beacon does not restart
+  goes down again and stays in that list, and every later answer tries again.
+- One deliberate difference: when the controller comes back, UniFi firmware forgets every
+  authorized guest and waits for the controller to re-authorize them. openUF keeps its
+  list, and the controller re-sends `authorize-guest` for the same guests anyway.
+- `off` is tested on hardware (ath9k, ath10k, mt76) on its own, with a temporary WLAN; the
+  rest of the guest portal has not run on hardware. Without `hostapd-utils` the WLANs cannot
+  come back on the air: they stay down, and the log says so once.
+
+The daemon also reports a random `guest_token`. Without one, the controller refuses
+every portal login on the AP and logs "Missing Guest Token in AP[…] during guest
+authorization".
+
+**Where it differs from UniFi firmware, on purpose:**
+- **DNS passes for every guest.** UniFi firmware answers an unauthorized guest's DNS
+  itself; openUF runs no resolver.
+- **HTTPS is dropped, not answered.** The client's plain-HTTP connectivity check is what
+  finds the portal.
+- **The redirect needs an IPv4 address on the guest network's bridge.** The answer
+  leaves from there. A guest WLAN on a VLAN where the AP has no address keeps its
+  guests blocked, and they never see the portal.
+
+**Needs** `kmod-nft-bridge` (for `iifname`/`oifname`), and `kmod-nft-nat` for the
+redirect. firewall4 already pulls in `kmod-nft-nat`.
+
+**Check it:**
+
+    nft list table bridge openuf_guest      # selfrun is empty unless guests are let through
+    nft list table ip openuf_guest
+    netstat -lnt | grep 8820
+
+**Log lines and what they mean:**
+- `guestportal: … not bridged`: those guests are blocked but not redirected.
+- `nft rejected …`: a rule failed. The log says which one and why.
+- `guestportal: 3 informs unanswered, selfrun_guest_mode=pass -- letting guests through`:
+  the portal is open until the controller answers again
+  (`… guest portal enforced again`).
+- `guestportal: 3 informs unanswered, selfrun_guest_mode=off -- guest WLANs down (…)`:
+  the guest WLANs are down until the controller answers again
+  (`guestportal: guest WLANs back up (…)`).
+- `guestportal: unrecognised guest rule shape`: the controller pushed a rule openUF
+  doesn't know. It was not applied.
 
 ## 6c. What the AP does on its own since 2026-10-18
 
