@@ -371,6 +371,51 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: the uplink station carries the parent pin and the descendants' blacklist, changed with one reload",
+		fn = function()
+			with_ucihelper(function(db, cmds)
+				ucihelper.backhaul_apply({uplink = {radio = "radio1", ssid = "vwire-x", key = "0123456789abcdef",
+					enabled = true, bssid = "02:00:00:00:0a:01", blacklist = {"02:00:00:00:0c:01", "bogus"}}})
+				local s = db.wireless.openuf_bh_ul_radio1
+				assert_eq(s.bssid, "02:00:00:00:0a:01", "pin written by the push's rewrite")
+				assert_eq(table.concat(s.bssid_blacklist, " "), "02:00:00:00:0c:01", "only MACs in the blacklist")
+				local before = #cmds
+				assert_false(ucihelper.backhaul_set_uplink_lists({bssid = "02:00:00:00:0a:01",
+					blacklist = {"02:00:00:00:0c:01"}}), "the same lists: nothing to do")
+				assert_eq(#cmds, before, "no reload")
+				assert_true(ucihelper.backhaul_set_uplink_lists({blacklist = {"02:00:00:00:0c:01", "02:00:00:00:0d:01"}}),
+					"pin dropped, a second descendant")
+				assert_eq(s.bssid, nil, "pin deleted")
+				assert_eq(#s.bssid_blacklist, 2, "both blacklisted")
+				assert_eq(#cmds, before + 1, "one reload")
+				assert_true(ucihelper.backhaul_set_uplink_enabled(false, {blacklist = {}}), "disabled, lists cleared")
+				assert_eq(s.bssid_blacklist, nil, "an empty blacklist is no option")
+				assert_eq(#cmds, before + 2, "in the same single reload")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: backhaul_set_downlink_ie writes UCI and the running hostapd, without a reload",
+		fn = function()
+			with_ucihelper(function(db, cmds)
+				ucihelper.backhaul_apply({downlink = {radio = "radio1", ssid = "vwire-x", key = "0123456789abcdef"}})
+				local orig = ucihelper.ifname_for_section
+				ucihelper.ifname_for_section = function() return "phy1-ap1" end
+				local before = #cmds
+				local ok = ucihelper.backhaul_set_downlink_ie("dd0d026f55aa")
+				local bad = ucihelper.backhaul_set_downlink_ie("dd0d; reboot")
+				ucihelper.ifname_for_section = orig
+				assert_true(ok, "written")
+				assert_eq(db.wireless.openuf_bh_dl_radio1.vendor_elements, "dd0d026f55aa", "UCI for the next reload")
+				assert_eq(cmds[before + 1], "hostapd_cli -i phy1-ap1 set vendor_elements dd0d026f55aa >/dev/null 2>&1",
+					"handed to hostapd")
+				assert_eq(cmds[before + 2], "hostapd_cli -i phy1-ap1 update_beacon >/dev/null 2>&1", "beacon rebuilt")
+				assert_eq(#cmds, before + 2, "and no wifi reload")
+				assert_false(bad, "only hex is ever spliced into a command")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: wlan_add defaults network to lan",
 		fn = function()
 			with_ucihelper(function(db)
@@ -1695,7 +1740,22 @@ return {
 		end
 	},
 	{
-		name = "ucihelper: apply_config sets wps_device_name/ap_setup_locked when advertise_ap_name is on",
+		name = "ucihelper: ap_name_ie_hex builds a WSC element carrying only the Device Name",
+		fn = function()
+			local ie = ucihelper.ap_name_ie_hex("AP")
+			assert_eq(ie, "dd23" .. "0050f204" .. "104a000110" .. "1044000102" .. "1057000101"
+				.. "101100024150" .. "1049000600372a000120", "whole element, length included")
+			assert_eq(ucihelper.ap_name_ie_hex(""), nil, "empty name: no element")
+			assert_eq(ucihelper.ap_name_ie_hex(nil), nil, "no name: no element")
+			local long = ucihelper.ap_name_ie_hex(string.rep("a", 40))
+			assert_eq(long:sub(47, 50), "0020", "Device Name cut to 32 bytes")
+			-- 31 ASCII bytes then a 2-byte UTF-8 character: cut at 32 would split it.
+			local split = ucihelper.ap_name_ie_hex(string.rep("a", 31) .. "\195\169" .. "b")
+			assert_eq(split:sub(47, 50), "001f", "a split UTF-8 character is dropped whole")
+		end
+	},
+	{
+		name = "ucihelper: apply_config beacons the AP name as a WSC element when advertise_ap_name is on",
 		fn = function()
 			with_ucihelper(function(db)
 				local resp = {
@@ -1705,15 +1765,18 @@ return {
 						 x_passphrase = "hunter22", advertise_ap_name = true},
 					},
 				}
-				ucihelper.apply_config(resp, nil, {device_name = "Living-Room-AP"})
+				local peer = "dd0d026f556f55460100005e005320"
+				ucihelper.apply_config(resp, nil, {device_name = "Living-Room-AP", peer_ie = peer})
 				local s = db.wireless.openuf_radio0_corp
-				assert_eq(s.wps_device_name, "Living-Room-AP", "WPS device name from opts.device_name")
-				assert_eq(s.ap_setup_locked, "1", "PIN-based WPS enrollment locked out")
+				assert_eq(s.vendor_elements, peer .. ucihelper.ap_name_ie_hex("Living-Room-AP"),
+					"sibling element first, then the name element")
+				assert_eq(s.wps_device_name, nil, "WPS itself is not configured")
+				assert_eq(s.wps_pushbutton, nil, "no WPS config method")
 			end)
 		end
 	},
 	{
-		name = "ucihelper: apply_config defaults wps_device_name to 'openUF' without opts.device_name",
+		name = "ucihelper: apply_config names the beacon 'openUF' without opts.device_name",
 		fn = function()
 			with_ucihelper(function(db)
 				local resp = {
@@ -1725,12 +1788,12 @@ return {
 				}
 				ucihelper.apply_config(resp, nil)
 				local s = db.wireless.openuf_radio0_corp
-				assert_eq(s.wps_device_name, "openUF", "falls back to 'openUF'")
+				assert_eq(s.vendor_elements, ucihelper.ap_name_ie_hex("openUF"), "falls back to 'openUF'")
 			end)
 		end
 	},
 	{
-		name = "ucihelper: apply_config omits wps_device_name/ap_setup_locked when advertise_ap_name is off",
+		name = "ucihelper: apply_config beacons no name when advertise_ap_name is off",
 		fn = function()
 			with_ucihelper(function(db)
 				local resp = {
@@ -1742,8 +1805,7 @@ return {
 				}
 				ucihelper.apply_config(resp, nil, {device_name = "Living-Room-AP"})
 				local s = db.wireless.openuf_radio0_corp
-				assert_eq(s.wps_device_name, nil, "no WPS device name written")
-				assert_eq(s.ap_setup_locked, nil, "no ap_setup_locked written")
+				assert_eq(s.vendor_elements, nil, "no element at all without the sibling IE either")
 			end)
 		end
 	},

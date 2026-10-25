@@ -483,6 +483,40 @@ function M.wlan_clear(radio)
 	cursor:commit("wireless")
 end
 
+-- "Show Access Point Name in Beacon": the hostapd vendor_elements hex of a
+-- Wi-Fi Simple Config element (dd .. 00:50:f2 type 4) carrying the name as
+-- its Device Name attribute, or nil for an empty name.
+--
+-- The Device Name attribute is the standard place a beacon carries an AP's
+-- name, but OpenWrt only lets hostapd emit the WSC element once WPS itself
+-- is on (ap.uc wps_enabled: config_methods, i.e. a push button or label).
+-- Built by hand and handed over as a vendor element instead, the name is
+-- broadcast while hostapd's WPS stays off: no registrar, no EAP-WSC, nothing
+-- for a client to enrol through. The element says WPS is configured and its
+-- setup locked, and carries no Selected Registrar or Config Methods, so a
+-- client has nothing to offer the user either.
+--
+-- Version 1.0 plus the WFA Version2 (2.0) extension, as hostapd's own
+-- element. Device Name is at most 32 bytes (WSC 2.0 table 28); a longer
+-- name is cut there, on a UTF-8 boundary.
+function M.ap_name_ie_hex(name)
+	if type(name) ~= "string" or name == "" then return nil end
+	if #name > 32 then
+		name = name:sub(1, 32)
+		-- Drop a split multi-byte sequence's lead and continuation bytes.
+		name = name:gsub("[\192-\255][\128-\191]*$", "")
+	end
+	if name == "" then return nil end
+	local function hex(s) return (s:gsub(".", function(c) return ("%02x"):format(c:byte()) end)) end
+	local body = "0050f204"
+		.. "104a000110"                                  -- Version 1.0
+		.. "1044000102"                                  -- Wi-Fi Protected Setup State: configured
+		.. "1057000101"                                  -- AP Setup Locked
+		.. "1011" .. ("%04x"):format(#name) .. hex(name) -- Device Name
+		.. "1049000600372a000120"                        -- WFA vendor extension: Version2 2.0
+	return "dd" .. ("%02x"):format(#body / 2) .. body
+end
+
 -- Every VLAN id one vap_table entry needs an L2 for: the WLAN's own, plus the
 -- VLAN of each private pre-shared key. Sorted, no duplicates.
 function M.vap_vlan_ids(vap)
@@ -1448,8 +1482,8 @@ end
 --       network-wide to function at all -- see openuf/usteer.lua. nil/false
 --       leaves each vap's own setting in effect. opts.roam_assist_active
 --       (boolean) forces the same, for Roaming Assistant. opts.device_name is the
---       controller-assigned device name, used as the WPS Device Name value
---       when a vap has advertise_ap_name enabled ("Show Access Point Name in
+--       controller-assigned device name, beaconed as a WSC Device Name
+--       (M.ap_name_ie_hex) when a vap has advertise_ap_name enabled ("Show Access Point Name in
 --       Beacon"); defaults to "openUF" if nil. opts.peer_ie is the
 --       vendor_elements hex every VAP beacons so sibling openUF APs can tell
 --       it is not a rogue (sysinfo.peer_ie_hex); nil removes it.
@@ -1753,7 +1787,14 @@ function M.apply_config(resp, cfg, opts)
 			-- without it the controller lists it as a rogue impersonating the
 			-- network). Removed when the identity MAC is unknown rather than
 			-- left announcing a stale one.
-			extra.vendor_elements = (opts and opts.peer_ie) or M.DELETE
+			--
+			-- "Show Access Point Name in Beacon" rides the same blob: a WSC
+			-- element carrying only the name (see M.ap_name_ie_hex).
+			local ies = (opts and opts.peer_ie) or ""
+			if vap.advertise_ap_name then
+				ies = ies .. (M.ap_name_ie_hex((opts and opts.device_name) or "openUF") or "")
+			end
+			extra.vendor_elements = ies ~= "" and ies or M.DELETE
 			if vap.hide_ssid ~= nil then
 				-- "Hide WiFi Name": leave the SSID out of beacons (clients must
 				-- know the name to associate). OpenWrt's wifi-iface option is
@@ -1798,33 +1839,6 @@ function M.apply_config(resp, cfg, opts)
 			end
 			if vap.ratelimit_up_kbps then
 				extra.openuf_ratelimit_up = vap.ratelimit_up_kbps
-			end
-			if vap.advertise_ap_name then
-				-- "Show Access Point Name in Beacon" -- CONFIRMED (via
-				-- decompiling the controller) to require a device-reported
-				-- wifi_caps2 capability bit before the controller even
-				-- pushes this field at all; see inform.lua's build_json
-				-- for that side. There's no standalone "put this string in
-				-- a beacon IE" hostapd option, but there IS a real,
-				-- standard mechanism for broadcasting a human-readable
-				-- device name in every beacon: the Wi-Fi Alliance WPS/WSC
-				-- information element's Device Name attribute, which
-				-- hostapd includes automatically once WPS is active
-				-- (confirmed via hostapd's own README-WPS and OpenWrt's
-				-- documented wifi-iface options: wps_device_name maps
-				-- directly to hostapd's device_name). ap_setup_locked=1 is
-				-- a standard hostapd/WPS hardening flag that disables
-				-- PIN-based external registrar enrollment -- set
-				-- unconditionally here to minimize the WPS surface this
-				-- opens to only what's needed for the name broadcast,
-				-- since no push-button/PIN config method is ever enabled.
-				-- NOT independently confirmed against genuine Ubiquiti
-				-- hardware (no real device available to capture from) --
-				-- this is the standards-based mechanism for the stated
-				-- goal, not a verified replica of Ubiquiti's own
-				-- implementation.
-				extra.wps_device_name = (opts and opts.device_name) or "openUF"
-				extra.ap_setup_locked = "1"
 			end
 			-- NOT written: SAE anti-clogging / sync time. Both are real
 			-- hostapd config keys, but OpenWrt exposes neither as a
@@ -1900,7 +1914,10 @@ function M.apply_config(resp, cfg, opts)
 	-- the station's disabled flag follows the uplink policy's persisted mode.
 	if opts and opts.backhaul then
 		if opts.backhaul.downlink and opts.peer_ie then
+			-- Version 1 for sibling recognition, then the version 2 element
+			-- multi-hop parent choice reads (backhaul.lua).
 			opts.backhaul.downlink.vendor_elements = opts.peer_ie
+				.. (opts.backhaul.downlink.path_ie or "")
 		end
 		local ok_bh, err_bh = pcall(M.backhaul_apply, opts.backhaul)
 		if not ok_bh then
@@ -2475,6 +2492,12 @@ function M.backhaul_apply(bh)
 		cursor:set("wireless", s, "key", ul.key)
 		cursor:set("wireless", s, "network", ul.network or "lan")
 		if valid_mac(ul.bssid) then cursor:set("wireless", s, "bssid", ul.bssid) end
+		-- Downlinks of this AP's own descendants (backhaul.station_lists).
+		local bl = {}
+		for _, m in ipairs(type(ul.blacklist) == "table" and ul.blacklist or {}) do
+			if valid_mac(m) then bl[#bl + 1] = m end
+		end
+		if #bl > 0 then cursor:set("wireless", s, "bssid_blacklist", bl) end
 		-- The station's own name on the wire (vport-<mac>), reported as the
 		-- uplink VAP's essid; the SSID it joins is the mesh one above.
 		if type(ul.vport) == "string" and ul.vport ~= "" then
@@ -2520,9 +2543,34 @@ function M.backhaul_uplink_sections()
 	return out
 end
 
+-- Set (or delete) the station's parent pin and blacklist on cursor; true
+-- when anything changed. lists: {bssid = MAC | nil, blacklist = {MAC, ...}}.
+local function set_station_lists(cursor, name, lists)
+	local changed = false
+	local pin = valid_mac(lists.bssid) and lists.bssid or nil
+	if cursor:get("wireless", name, "bssid") ~= pin then
+		if pin then cursor:set("wireless", name, "bssid", pin)
+		else cursor:delete("wireless", name, "bssid") end
+		changed = true
+	end
+	local bl = {}
+	for _, m in ipairs(type(lists.blacklist) == "table" and lists.blacklist or {}) do
+		if valid_mac(m) then bl[#bl + 1] = m end
+	end
+	local cur = cursor:get("wireless", name, "bssid_blacklist")
+	if type(cur) ~= "table" then cur = cur and {cur} or {} end
+	if table.concat(cur, " ") ~= table.concat(bl, " ") then
+		if #bl > 0 then cursor:set("wireless", name, "bssid_blacklist", bl)
+		else cursor:delete("wireless", name, "bssid_blacklist") end
+		changed = true
+	end
+	return changed
+end
+
 -- Flip every uplink station section; one `wifi reload` when anything changed
--- (netifd restarts only the radio whose config changed). Returns true if so.
-function M.backhaul_set_uplink_enabled(enabled)
+-- (netifd restarts only the radio whose config changed). lists, when given,
+-- is written in the same reload (backhaul.station_lists). Returns true if so.
+function M.backhaul_set_uplink_enabled(enabled, lists)
 	local uci = get_uci()
 	local cursor = uci.cursor()
 	local changed = false
@@ -2532,12 +2580,54 @@ function M.backhaul_set_uplink_enabled(enabled)
 			cursor:set("wireless", s.name, "disabled", want)
 			changed = true
 		end
+		if type(lists) == "table" and set_station_lists(cursor, s.name, lists) then
+			changed = true
+		end
 	end
 	if changed then
 		cursor:commit("wireless")
 		M._run_cmd("wifi reload")
 	end
 	return changed
+end
+
+-- Only the station's parent pin and blacklist; one `wifi reload` when they
+-- changed. Returns true if so.
+function M.backhaul_set_uplink_lists(lists)
+	if type(lists) ~= "table" then return false end
+	local uci = get_uci()
+	local cursor = uci.cursor()
+	local changed = false
+	for _, s in ipairs(M.backhaul_uplink_sections()) do
+		if set_station_lists(cursor, s.name, lists) then changed = true end
+	end
+	if changed then
+		cursor:commit("wireless")
+		M._run_cmd("wifi reload")
+	end
+	return changed
+end
+
+-- The downlink's vendor elements (hex), changed without a reload: written to
+-- UCI for the next one, and handed to the running hostapd, which rebuilds the
+-- beacon -- a reload would drop every child for a changed ancestor list.
+function M.backhaul_set_downlink_ie(hex)
+	if type(hex) ~= "string" or hex == "" or hex:find("[^%x]") then return false end
+	local uci = get_uci()
+	local cursor = uci.cursor()
+	local any = false
+	for _, s in ipairs(M.backhaul_downlink_sections()) do
+		cursor:set("wireless", s.name, "vendor_elements", hex)
+		any = true
+		local ifname = M.ifname_for_section(s.name)
+		if type(ifname) == "string" and ifname:match("^[%w%-%._]+$") then
+			local cli = "hostapd_cli -i " .. ifname .. " "
+			M._run_cmd(cli .. "set vendor_elements " .. hex .. " >/dev/null 2>&1")
+			M._run_cmd(cli .. "update_beacon >/dev/null 2>&1")
+		end
+	end
+	if any then cursor:commit("wireless") end
+	return any
 end
 
 -- The live netdev of a wifi-iface section, from `ubus call network.wireless

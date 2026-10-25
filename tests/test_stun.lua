@@ -159,6 +159,26 @@ return {
 		end
 	},
 	{
+		name = "stun: the name is resolved again after three requests go unanswered",
+		fn = function()
+			local f = fake_socket()
+			local c = stun.new(f)
+			stun.sync(c, "stun://ctrl.example:3478/", true)
+			stun.send_due(c, 100)
+			stun.send_due(c, 130)
+			f.queue = {response("192.0.2.3", 41234)}
+			stun.receive(c)
+			stun.send_due(c, 160)
+			stun.send_due(c, 190)
+			assert_eq(f.resolved, 1, "answered requests keep the address")
+			stun.send_due(c, 220)
+			assert_eq(f.resolved, 1, "three unanswered: not yet")
+			stun.send_due(c, 250)
+			assert_eq(f.resolved, 2, "the fourth send resolves the name again")
+			assert_eq(#f.sent, 6, "and still sends")
+		end
+	},
+	{
 		name = "stun: a response sets the fields and wakes once per change",
 		fn = function()
 			local f = fake_socket()

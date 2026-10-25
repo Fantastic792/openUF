@@ -10,6 +10,25 @@
 	OpenWrt does with `option wds 1` on an AP and on a station; VLAN-tagged
 	frames ride the link as payload, exactly as UniFi's own `ath4.10` layout.
 
+	MULTI-HOP. Every mesh AP is a parent too: the push gives a wireless child
+	its own downlink, so chains form by themselves. What keeps them loop-free
+	-- UniFi runs with STP off, so two APs joined to each other would storm
+	until one is unplugged -- is the version 2 sibling element each downlink
+	beacons (sysinfo.peer_path_ie_hex): its identity, its ancestors up to the
+	wired AP, and its own station's MAC. From it:
+	  * a downlink whose ancestors include this device is a DESCENDANT, kept
+	    in st.backhaul_seen and handed to the station as bssid_blacklist, so
+	    it is never joined. Stale ancestor lists only ever over-include, so a
+	    descendant cannot look eligible; a downlink not yet heard can, which
+	    is why tick() also breaks a loop it finds itself in at once;
+	  * the controller's chosen parent (mesh.serial1, the "uplink" picked in
+	    the UI) is pinned with `bssid` when its downlink is known and is not a
+	    descendant, and the pin is dropped when it has not been joined for
+	    PIN_GIVEUP heartbeats, so an unreachable choice cannot strand a child;
+	  * a parent names each child by the station MAC in the child's element
+	    (child_serialno), which the bridge cannot do once a grandchild sits
+	    behind the same WDS link.
+
 	This module owns three things:
 	  plan()           turn the parsed entries into the sections ucihelper writes
 	  tick()/decide()  the uplink policy the controller's `connectivity` block
@@ -69,6 +88,132 @@ local function is_mac(s)
 	return type(s) == "string" and s:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") ~= nil
 end
 
+-- Multi-hop state (see the header).
+M.PIN_GIVEUP = 6               -- heartbeats unjoined before the pin is dropped
+M.SEEN_TTL = 7 * 86400         -- a downlink not heard for a week is forgotten
+M.SEEN_REFRESH = 86400         -- how stale a persisted `t` may get before it is saved again
+M._unjoined = 0
+M._time = os.time
+
+local function lower(s) return type(s) == "string" and s:lower() or nil end
+
+-- Learn the mesh downlinks in one scan (sysinfo.scan_table entries; those with
+-- peer_mesh carry the version 2 element). Changes st.backhaul_seen and marks
+-- the state dirty when something worth saving changed. Returns the entries
+-- learnt, by BSSID.
+function M.learn(st, nets)
+	local me = st and lower(st.mac)
+	if not (me and is_mac(me)) then return {} end
+	local seen = type(st.backhaul_seen) == "table" and st.backhaul_seen or {}
+	local now = M._time()
+	local got = {}
+	for _, n in ipairs(nets or {}) do
+		local m = type(n) == "table" and n.peer_mesh
+		local bssid, id = lower(n.bssid), lower(n.peer_mac)
+		if type(m) == "table" and is_mac(bssid) and is_mac(id) then
+			local desc = (id == me)
+			for _, a in ipairs(m.ancestors or {}) do
+				if lower(a) == me then desc = true end
+			end
+			local rec = {id = id, sta = is_mac(m.sta) and m.sta:lower() or nil, desc = desc,
+				rooted = m.rooted == true, ancestors = m.ancestors or {}}
+			got[bssid] = rec
+			local old = seen[bssid]
+			if type(old) ~= "table" or old.id ~= rec.id or old.sta ~= rec.sta
+					or (old.desc == true) ~= desc
+					or now - (tonumber(old.t) or 0) > M.SEEN_REFRESH then
+				seen[bssid] = {id = rec.id, sta = rec.sta, desc = desc or nil, t = now}
+				M._dirty = true
+			end
+		end
+	end
+	for bssid, old in pairs(seen) do
+		if type(old) ~= "table" or now - (tonumber(old.t) or 0) > M.SEEN_TTL then
+			seen[bssid] = nil
+			M._dirty = true
+		end
+	end
+	st.backhaul_seen = next(seen) and seen or nil
+	return got
+end
+
+-- What the uplink station may join: {bssid = pin or nil, blacklist = {...}},
+-- from what has been learnt and the controller's chosen parent.
+function M.station_lists(st, drop_pin)
+	local seen = (st and type(st.backhaul_seen) == "table") and st.backhaul_seen or {}
+	local bl, pin = {}, nil
+	local want = st and lower(st.backhaul_parent)
+	for bssid, rec in pairs(seen) do
+		if type(rec) == "table" then
+			if rec.desc then
+				bl[#bl + 1] = bssid
+			elseif not drop_pin and is_mac(want) and rec.id == want then
+				-- One parent can have a downlink per radio: the first by BSSID.
+				if not pin or bssid < pin then pin = bssid end
+			end
+		end
+	end
+	table.sort(bl)
+	return {bssid = pin, blacklist = bl}
+end
+
+local function lists_key(l)
+	return tostring(l and l.bssid or "") .. "|" .. table.concat((l and l.blacklist) or {}, " ")
+end
+
+-- Hand the lists to the station sections when they differ from what was
+-- last written, remembering them in st (so a push's rewrite keeps them).
+-- Returns true when they were written.
+local function write_lists(st, ufuci, lists, enable)
+	local same = lists_key(lists) == (tostring(st.backhaul_pin or "") .. "|" .. tostring(st.backhaul_blacklist or ""))
+	if same and enable == nil then return false end
+	local fn = enable ~= nil and ufuci.backhaul_set_uplink_enabled or ufuci.backhaul_set_uplink_lists
+	if not fn then return false end
+	local ok, err
+	if enable ~= nil then
+		ok, err = pcall(fn, enable, lists)
+	else
+		ok, err = pcall(fn, lists)
+	end
+	if not ok then
+		M._log("could not write the station's parent lists: " .. tostring(err))
+		return false
+	end
+	st.backhaul_pin = lists.bssid
+	st.backhaul_blacklist = #lists.blacklist > 0 and table.concat(lists.blacklist, " ") or nil
+	M._dirty = true
+	return true
+end
+
+-- The version 2 element this device's downlink beacons: rooted and with no
+-- ancestors on the wire; on the air, the joined parent's chain with the
+-- parent in front, rooted as the parent says it is; unrooted while the
+-- station has not joined. sysinfo builds the bytes.
+function M.own_ie(st, sysinfo, mode, joined, parent_rec, sta_mac, parent_id)
+	if not (sysinfo and sysinfo.peer_path_ie_hex and st) then return nil end
+	if mode ~= "wireless" then
+		return sysinfo.peer_path_ie_hex(st.mac, true, nil, {})
+	end
+	if not joined then return sysinfo.peer_path_ie_hex(st.mac, false, sta_mac, {}) end
+	if not parent_rec then
+		-- Joined something that beacons no version 2 element (an older openUF,
+		-- a real UniFi AP): rooted by its word that it is a parent, ancestors
+		-- unknown beyond it.
+		return sysinfo.peer_path_ie_hex(st.mac, true, sta_mac, is_mac(parent_id) and {parent_id} or {})
+	end
+	local anc = {parent_rec.id}
+	for _, a in ipairs(parent_rec.ancestors or {}) do anc[#anc + 1] = a end
+	return sysinfo.peer_path_ie_hex(st.mac, parent_rec.rooted, sta_mac, anc)
+end
+
+function M.split_macs(s)
+	local out = {}
+	for m in tostring(s or ""):gmatch("%S+") do
+		if is_mac(m) then out[#out + 1] = m:lower() end
+	end
+	return out
+end
+
 -- plan(mesh, entries, cfg, st) -> opts.backhaul for ucihelper.apply_config, or nil.
 --   mesh:    _parse_mesh_system_cfg's table (status, essid, psk, serial1 ...)
 --   entries: _parse_wifi_system_cfg's third return (role, radio, ssid, psk ...)
@@ -88,6 +233,7 @@ function M.plan(mesh, entries, cfg, st)
 					ssid    = (e.ssid and e.ssid ~= "") and e.ssid or mesh.essid,
 					key     = (type(e.psk) == "string" and #e.psk >= 8) and e.psk or mesh.psk,
 					devname = e.devname,  -- the controller's own name for it (vwire3), reported back as `name`
+					path_ie = st and type(st.backhaul_ie) == "string" and st.backhaul_ie or nil,
 				}
 			elseif e.role == "uplink" then
 				plan.uplink = {
@@ -96,7 +242,11 @@ function M.plan(mesh, entries, cfg, st)
 					key     = mesh.psk,
 					vport   = e.ssid,  -- the station's own vport-<mac> name, reported as its essid
 					devname = e.devname,  -- the controller's name for it (ath4), also connectivity.uplink_wds
-					bssid   = nil,  -- the parent's downlink BSSID is learned on the air, not pushed
+					-- The parent pin and the descendants' blacklist tick() last
+					-- wrote: a push rewrites the section and must keep them.
+					bssid   = is_mac(st and st.backhaul_pin) and st.backhaul_pin or nil,
+					blacklist = st and type(st.backhaul_blacklist) == "string"
+						and M.split_macs(st.backhaul_blacklist) or nil,
 					enabled = (st ~= nil and st.backhaul_mode == "wireless") or false,
 				}
 			end
@@ -312,8 +462,16 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		M._log(("wired uplink %s on %s -- %s the WDS station"):format(
 			new_mode == "wireless" and "lost" or "back", tostring(wired_desc or "?"),
 			new_mode == "wireless" and "enabling" or "disabling"))
-		local ok, err = pcall(ufuci.backhaul_set_uplink_enabled, new_mode == "wireless")
-		if not ok then M._log("could not switch the station: " .. tostring(err)) end
+		M._unjoined = 0
+		if new_mode == "wireless" then
+			-- Enabled with the parent pin and the descendants' blacklist in
+			-- the same reload: unpinned, its first pick could be one of its
+			-- own children, still beaconing for a few seconds.
+			write_lists(st, ufuci, M.station_lists(st), true)
+		else
+			local ok, err = pcall(ufuci.backhaul_set_uplink_enabled, false)
+			if not ok then M._log("could not switch the station: " .. tostring(err)) end
+		end
 		st.backhaul_mode = new_mode
 		M._dirty = true
 		M._arl_heal = (new_mode == "wired") and M.ARL_HEAL_TICKS or 0
@@ -346,11 +504,63 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		end
 	end
 
+	pcall(M.multihop_tick, st, ufuci, sysinfo, new_mode, sta_if)
+
 	if M._dirty and state_mod and state_mod.save then
 		pcall(state_mod.save, st)
 		M._dirty = false
 	end
 	return new_mode
+end
+
+-- The multi-hop half of a heartbeat (see the header): on the air, learn the
+-- downlinks the station hears, leave a descendant's downlink the moment it
+-- finds itself joined to one, and drop an unreachable parent pin; in either
+-- mode, keep this device's own downlink element current.
+local MAC = "%x%x:%x%x:%x%x:%x%x:%x%x:%x%x"
+function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
+	local sta_mac, joined, parent_rec, parent_id = nil, nil, nil, nil
+	if mode == "wireless" and valid_ifname(sta_if) then
+		sta_mac = lower((M._popen("iw dev " .. sta_if .. " info") or ""):match("addr (" .. MAC .. ")"))
+		joined = lower((M._popen("iw dev " .. sta_if .. " link") or ""):match("Connected to (" .. MAC .. ")"))
+		if sysinfo and sysinfo.scan_table then
+			local ok_s, nets = pcall(sysinfo.scan_table, sta_if)
+			nets = (ok_s and type(nets) == "table") and nets or {}
+			local got = M.learn(st, nets)
+			if joined then
+				parent_rec = got[joined]
+				for _, n in ipairs(nets) do
+					if type(n) == "table" and lower(n.bssid) == joined then parent_id = lower(n.peer_mac) end
+				end
+			end
+		end
+		if joined then
+			M._unjoined = 0
+			local rec = parent_rec or (type(st.backhaul_seen) == "table" and st.backhaul_seen[joined])
+			if type(rec) == "table" and rec.desc then
+				M._log(("joined %s, a downlink of this AP's own descendant -- a loop; leaving it"):format(joined))
+				write_lists(st, ufuci, M.station_lists(st, true))
+				parent_rec = nil
+				joined = nil
+			end
+		else
+			M._unjoined = M._unjoined + 1
+			local drop = M._unjoined >= M.PIN_GIVEUP
+			if drop and M._unjoined == M.PIN_GIVEUP and st.backhaul_pin then
+				M._log(("parent %s not joined in %d heartbeats -- unpinning"):format(
+					tostring(st.backhaul_pin), M.PIN_GIVEUP))
+			end
+			write_lists(st, ufuci, M.station_lists(st, drop))
+		end
+	end
+	if ufuci.backhaul_set_downlink_ie and sysinfo and sysinfo.peer_ie_hex then
+		local ie = M.own_ie(st, sysinfo, mode, joined ~= nil, parent_rec, sta_mac, parent_id)
+		if ie and ie ~= st.backhaul_ie then
+			st.backhaul_ie = ie
+			M._dirty = true
+			pcall(ufuci.backhaul_set_downlink_ie, (sysinfo.peer_ie_hex(st.mac) or "") .. ie)
+		end
+	end
 end
 
 local function channel_of(freq)
@@ -399,7 +609,14 @@ end
 -- same payload, entries with is_unifi/serialno). nil when none or more than one
 -- sibling is behind the netdev -- a grandchild on a multi-hop path would be
 -- learnt behind the same netdev, and a wrong attribution is worse than none.
-function M.child_serialno(sta_dev, scan_radio_table, cfg, sysinfo)
+function M.child_serialno(sta_dev, scan_radio_table, cfg, sysinfo, sta_mac, st)
+	-- The child's own downlink element names its station: exact, at any depth.
+	local want = lower(sta_mac)
+	if is_mac(want) and st and type(st.backhaul_seen) == "table" then
+		for _, rec in pairs(st.backhaul_seen) do
+			if type(rec) == "table" and rec.sta == want and is_mac(rec.id) then return rec.id end
+		end
+	end
 	if type(sta_dev) ~= "string" or sta_dev == "" then return nil end
 	if not (sysinfo and sysinfo.bridge_fdb_ports) then return nil end
 	local siblings = {}

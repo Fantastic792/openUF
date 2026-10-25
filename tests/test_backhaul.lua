@@ -439,4 +439,198 @@ return {
 				"the child behind the WDS netdev")
 		end
 	},
+	-- ── Multi-hop ────────────────────────────────────────────────────────────
+	{
+		name = "backhaul: learn() files a downlink whose ancestors include this AP as a descendant",
+		fn = function()
+			backhaul._dirty = false
+			local st = {mac = "AA:00:00:00:00:0B"}
+			local got = backhaul.learn(st, {
+				-- the wired root A
+				{bssid = "02:00:00:00:0a:01", peer_mac = "aa:00:00:00:00:0a",
+					peer_mesh = {rooted = true, ancestors = {}}},
+				-- C, B's child: its chain runs through B
+				{bssid = "02:00:00:00:0c:01", peer_mac = "aa:00:00:00:00:0c",
+					peer_mesh = {rooted = true, sta = "02:00:00:00:0c:99", ancestors = {"aa:00:00:00:00:0b", "aa:00:00:00:00:0a"}}},
+				-- D, C's child: B two levels up
+				{bssid = "02:00:00:00:0d:01", peer_mac = "aa:00:00:00:00:0d",
+					peer_mesh = {rooted = true, ancestors = {"aa:00:00:00:00:0c", "aa:00:00:00:00:0b", "aa:00:00:00:00:0a"}}},
+				-- an ordinary neighbour with no element
+				{bssid = "02:00:00:00:ee:01"},
+			})
+			assert_eq(got["02:00:00:00:0a:01"].desc, false, "the root is not a descendant")
+			assert_eq(st.backhaul_seen["02:00:00:00:0c:01"].desc, true, "a child is")
+			assert_eq(st.backhaul_seen["02:00:00:00:0d:01"].desc, true, "and a grandchild")
+			assert_eq(st.backhaul_seen["02:00:00:00:0c:01"].sta, "02:00:00:00:0c:99", "the child's station kept")
+			assert_eq(st.backhaul_seen["02:00:00:00:ee:01"], nil, "no element, nothing learnt")
+			assert_true(backhaul._dirty, "worth saving")
+			backhaul._dirty = false
+			backhaul.learn(st, {{bssid = "02:00:00:00:0a:01", peer_mac = "aa:00:00:00:00:0a",
+				peer_mesh = {rooted = true, ancestors = {}}}})
+			assert_false(backhaul._dirty, "the same again is not saved again")
+		end
+	},
+	{
+		name = "backhaul: learn() forgets a downlink not heard for a week",
+		fn = function()
+			local now = 1000000
+			local orig = backhaul._time
+			backhaul._time = function() return now end
+			local st = {mac = "aa:00:00:00:00:0b", backhaul_seen = {
+				["02:00:00:00:0c:01"] = {id = "aa:00:00:00:00:0c", desc = true, t = now - 8 * 86400},
+				["02:00:00:00:0a:01"] = {id = "aa:00:00:00:00:0a", t = now - 3600},
+			}}
+			backhaul.learn(st, {})
+			backhaul._time = orig
+			assert_eq(st.backhaul_seen["02:00:00:00:0c:01"], nil, "a week old: gone")
+			assert_true(st.backhaul_seen["02:00:00:00:0a:01"] ~= nil, "an hour old: kept")
+		end
+	},
+	{
+		name = "backhaul: station_lists() pins the controller's parent unless it is a descendant, and blacklists descendants",
+		fn = function()
+			local st = {backhaul_parent = "aa:00:00:00:00:0a", backhaul_seen = {
+				["02:00:00:00:0a:02"] = {id = "aa:00:00:00:00:0a"},
+				["02:00:00:00:0a:01"] = {id = "aa:00:00:00:00:0a"},
+				["02:00:00:00:0c:01"] = {id = "aa:00:00:00:00:0c", desc = true},
+				["02:00:00:00:0e:01"] = {id = "aa:00:00:00:00:0e"},
+			}}
+			local l = backhaul.station_lists(st)
+			assert_eq(l.bssid, "02:00:00:00:0a:01", "the parent's first downlink")
+			assert_eq(table.concat(l.blacklist, " "), "02:00:00:00:0c:01", "only the descendant")
+			assert_eq(backhaul.station_lists(st, true).bssid, nil, "drop_pin")
+			st.backhaul_parent = "aa:00:00:00:00:0c"
+			assert_eq(backhaul.station_lists(st).bssid, nil, "a descendant is never pinned, even if chosen")
+		end
+	},
+	{
+		name = "backhaul: tick() enables the station with the pin and the blacklist in one go",
+		fn = function()
+			with_seams({wan = false}, "", function()
+				local st = {mac = "aa:00:00:00:00:0b", backhaul_mode = "wired", backhaul_wired_port = "wan",
+					backhaul_parent = "aa:00:00:00:00:0a", backhaul_seen = {
+						["02:00:00:00:0a:01"] = {id = "aa:00:00:00:00:0a"},
+						["02:00:00:00:0c:01"] = {id = "aa:00:00:00:00:0c", desc = true}}}
+				local secs = {{name = "openuf_bh_ul_radio1", radio = "radio1", ssid = MESH.essid, disabled = true}}
+				local uf = fake_ufuci(secs, nil)
+				local got
+				function uf.backhaul_set_uplink_enabled(enabled, lists)
+					got = {enabled = enabled, lists = lists}
+					return true
+				end
+				backhaul.tick(st, {}, uf, fake_sysinfo(nil), nil)
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo(nil), nil), "wireless", "wireless")
+				assert_eq(got.enabled, true, "enabled")
+				assert_eq(got.lists.bssid, "02:00:00:00:0a:01", "pinned to the chosen parent")
+				assert_eq(got.lists.blacklist[1], "02:00:00:00:0c:01", "its child blacklisted")
+				assert_eq(st.backhaul_pin, "02:00:00:00:0a:01", "remembered for the next push")
+				assert_eq(st.backhaul_blacklist, "02:00:00:00:0c:01", "likewise")
+			end)
+		end
+	},
+	{
+		name = "backhaul: multihop_tick() leaves a descendant's downlink it finds itself joined to",
+		fn = function()
+			local orig_popen, orig_log = backhaul._popen, backhaul._log
+			local logs = {}
+			backhaul._log = function(m) logs[#logs + 1] = m end
+			backhaul._popen = function(cmd)
+				if cmd:find(" info$") then return "Interface phy1-sta0\n\taddr 02:00:00:00:0b:99\n" end
+				if cmd:find(" link$") then return "Connected to 02:00:00:00:0c:01 (on phy1-sta0)\n" end
+				return ""
+			end
+			local st = {mac = "aa:00:00:00:00:0b", backhaul_seen = {}}
+			local written
+			local uf = {backhaul_set_uplink_lists = function(l) written = l; return true end}
+			local si = {scan_table = function() return {
+				{bssid = "02:00:00:00:0c:01", peer_mac = "aa:00:00:00:00:0c",
+					peer_mesh = {rooted = true, ancestors = {"aa:00:00:00:00:0b"}}}} end}
+			local ok, err = pcall(backhaul.multihop_tick, st, uf, si, "wireless", "phy1-sta0")
+			backhaul._popen, backhaul._log = orig_popen, orig_log
+			assert_true(ok, tostring(err))
+			assert_true(written ~= nil, "lists rewritten")
+			assert_eq(written.blacklist[1], "02:00:00:00:0c:01", "the descendant's downlink banned")
+			assert_true(logs[1]:find("loop", 1, true) ~= nil, "says why")
+		end
+	},
+	{
+		name = "backhaul: multihop_tick() drops an unreachable parent pin after PIN_GIVEUP heartbeats",
+		fn = function()
+			local orig_popen, orig_log = backhaul._popen, backhaul._log
+			backhaul._log = function() end
+			backhaul._popen = function(cmd)
+				if cmd:find(" link$") then return "Not connected.\n" end
+				return ""
+			end
+			backhaul._unjoined = 0
+			local st = {mac = "aa:00:00:00:00:0b", backhaul_parent = "aa:00:00:00:00:0a",
+				backhaul_pin = "02:00:00:00:0a:01",
+				backhaul_seen = {["02:00:00:00:0a:01"] = {id = "aa:00:00:00:00:0a", t = os.time()}}}
+			local writes = {}
+			local uf = {backhaul_set_uplink_lists = function(l) writes[#writes + 1] = l; return true end}
+			for _ = 1, backhaul.PIN_GIVEUP - 1 do backhaul.multihop_tick(st, uf, {}, "wireless", "phy1-sta0") end
+			local before = #writes
+			backhaul.multihop_tick(st, uf, {}, "wireless", "phy1-sta0")
+			backhaul._popen, backhaul._log = orig_popen, orig_log
+			assert_eq(before, 0, "the pin is kept while there is still hope")
+			assert_eq(#writes, 1, "then rewritten once")
+			assert_eq(writes[1].bssid, nil, "without the pin")
+			assert_eq(st.backhaul_pin, nil, "and remembered so")
+		end
+	},
+	{
+		name = "backhaul: multihop_tick() keeps the downlink's element current without a reload",
+		fn = function()
+			local orig_popen = backhaul._popen
+			backhaul._popen = function(cmd)
+				if cmd:find(" info$") then return "\taddr 02:00:00:00:0b:99\n" end
+				if cmd:find(" link$") then return "Connected to 02:00:00:00:0a:01 (on phy1-sta0)\n" end
+				return ""
+			end
+			local sysinfo = dofile("openuf/sysinfo.lua")
+			local si = {
+				peer_ie_hex = sysinfo.peer_ie_hex, peer_path_ie_hex = sysinfo.peer_path_ie_hex,
+				scan_table = function() return {
+					{bssid = "02:00:00:00:0a:01", peer_mac = "aa:00:00:00:00:0a",
+						peer_mesh = {rooted = true, ancestors = {}}}} end,
+			}
+			local set = {}
+			local uf = {backhaul_set_downlink_ie = function(h) set[#set + 1] = h; return true end,
+				backhaul_set_uplink_lists = function() return false end}
+			local st = {mac = "aa:00:00:00:00:0b"}
+			backhaul.multihop_tick(st, uf, si, "wired", nil)
+			assert_eq(st.backhaul_ie, sysinfo.peer_path_ie_hex("aa:00:00:00:00:0b", true, nil, {}), "wired: rooted, no ancestors")
+			assert_eq(set[1], sysinfo.peer_ie_hex("aa:00:00:00:00:0b") .. st.backhaul_ie, "version 1 kept in front")
+			backhaul.multihop_tick(st, uf, si, "wired", nil)
+			assert_eq(#set, 1, "unchanged: not handed over again")
+			backhaul.multihop_tick(st, uf, si, "wireless", "phy1-sta0")
+			backhaul._popen = orig_popen
+			assert_eq(st.backhaul_ie, sysinfo.peer_path_ie_hex("aa:00:00:00:00:0b", true,
+				"02:00:00:00:0b:99", {"aa:00:00:00:00:0a"}), "on the air: the parent in front, own station named")
+			assert_eq(#set, 2, "handed over once more")
+		end
+	},
+	{
+		name = "backhaul: child_serialno() names a child by the station in its own element, grandchildren or not",
+		fn = function()
+			local st = {backhaul_seen = {
+				["02:00:00:00:0b:01"] = {id = "aa:00:00:00:00:0b", sta = "02:00:00:00:0b:99"},
+				["02:00:00:00:0c:01"] = {id = "aa:00:00:00:00:0c", sta = "02:00:00:00:0c:99"}}}
+			assert_eq(backhaul.child_serialno("phy1-ap1.sta1", {}, {}, nil, "02:00:00:00:0B:99", st),
+				"aa:00:00:00:00:0b", "exact, no bridge lookup needed")
+			assert_eq(backhaul.child_serialno("phy1-ap1.sta1", {}, {}, nil, "02:00:00:00:ff:99", st),
+				nil, "an unknown station falls through (and finds nothing here)")
+		end
+	},
+	{
+		name = "backhaul: plan() carries the pin, the blacklist and the downlink element into the push's rewrite",
+		fn = function()
+			local st = {backhaul_mode = "wireless", backhaul_pin = "02:00:00:00:0a:01",
+				backhaul_blacklist = "02:00:00:00:0c:01 02:00:00:00:0d:01", backhaul_ie = "dd15aa"}
+			local plan = backhaul.plan(MESH, ENTRIES, {}, st)
+			assert_eq(plan.uplink.bssid, "02:00:00:00:0a:01", "pin")
+			assert_eq(table.concat(plan.uplink.blacklist, " "), "02:00:00:00:0c:01 02:00:00:00:0d:01", "blacklist")
+			assert_eq(plan.downlink.path_ie, "dd15aa", "element")
+		end
+	},
 }

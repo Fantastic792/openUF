@@ -103,6 +103,11 @@ local TYPED = {
 	-- The VAP ifnames a WiFi Blackout Schedule took down (wlansched.lua),
 	-- until they are brought back up (also after a restart in between).
 	sched_vaps_down           = "table",
+	-- Uplink Connectivity Monitor (uplinkmon.lua): the controller's switch and
+	-- custom host from the last push, and the BSS netdevs it took down.
+	uplinkmon_enabled         = "boolean",
+	uplinkmon_host            = "string",
+	uplinkmon_down            = "table",
 	-- Per-client WiFi Speed Limits from rate-update ({mac = {up=, down=}}
 	-- kbps, -1 = none), one association each (inform._shaper_resync).
 	sta_rates                 = "table",
@@ -128,6 +133,15 @@ local TYPED = {
 	backhaul_wired_port       = "string",
 	backhaul_wired_phys       = "number",
 	backhaul_parent           = "string",
+	-- Multi-hop (backhaul.lua): the mesh downlinks heard, {bssid = {id, sta,
+	-- desc, t}} -- desc when it is this device's own descendant, which its
+	-- station must never join -- the version 2 element this device's own
+	-- downlink beacons, and the parent pin and blacklist (space-separated
+	-- BSSIDs) last written to the uplink station.
+	backhaul_seen             = "table",
+	backhaul_ie               = "string",
+	backhaul_pin              = "string",
+	backhaul_blacklist        = "string",
 	-- The tagged SSIDs' VLANs carried over the mesh hop on a swconfig board
 	-- ({bridge, vids}, meshvlan.lua): kernel state, rebuilt at startup.
 	meshvlan                  = "table",

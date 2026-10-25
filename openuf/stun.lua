@@ -31,6 +31,11 @@ M.PORT = 3478      -- the controller's STUN port, when stun_url names none
 M.INTERVAL = 30    -- seconds between Binding Requests
 M.RETRY = 5        -- seconds after a failed resolve or send
 M.DRAIN = 64       -- packets read per wake-up at most
+-- Binding Requests in a row without a Binding Response before the
+-- controller's name is resolved again. A UDP send to an address nobody
+-- answers on still succeeds, so a send failure alone would never notice a
+-- controller that moved (a new DHCP lease behind the same name).
+M.RESOLVE_AFTER = 3
 
 local T_BINDING_REQUEST  = 0x0001
 local T_BINDING_RESPONSE = 0x0101
@@ -88,7 +93,7 @@ end
 function M.close(c)
 	if c.sock then pcall(c.sock.close, c.sock) end
 	c.sock, c.ip, c.mapped_ip, c.mapped_port = nil, nil, nil, nil
-	c.next_send = nil
+	c.next_send, c.unanswered = nil, 0
 end
 
 -- Follow the wanted URL: open on a new one, close when there is none.
@@ -118,6 +123,9 @@ end
 -- Send the Binding Request when due. now is in seconds.
 function M.send_due(c, now)
 	if not c.sock or (c.next_send and now < c.next_send) then return false end
+	if c.ip and (c.unanswered or 0) >= M.RESOLVE_AFTER then
+		c.ip, c.unanswered = nil, 0
+	end
 	if not c.ip then
 		local ip = c.socket.dns and c.socket.dns.toip(c.host)
 		if not ip then
@@ -135,6 +143,7 @@ function M.send_due(c, now)
 		return false, err
 	end
 	c.next_send = now + M.INTERVAL
+	c.unanswered = (c.unanswered or 0) + 1
 	return true
 end
 
@@ -154,9 +163,12 @@ function M.receive(c)
 		local kind, ip, port = M.parse(pkt)
 		if kind == "wake" then
 			wake = true
-		elseif kind == "mapped" and (ip ~= c.mapped_ip or port ~= c.mapped_port) then
-			c.mapped_ip, c.mapped_port = ip, port
-			wake = true
+		elseif kind == "mapped" then
+			c.unanswered = 0
+			if ip ~= c.mapped_ip or port ~= c.mapped_port then
+				c.mapped_ip, c.mapped_port = ip, port
+				wake = true
+			end
 		end
 	end
 	return wake

@@ -14,7 +14,13 @@ local bit = (function()
 	-- Lua 5.3+ native operators.
 	-- Use load/loadstring so Lua 5.1 never parses the 5.3+ syntax (parse error
 	-- in dead code would prevent the file loading on OpenWrt).
-	local _l = load or loadstring
+	-- Lua 5.1 has no integer operators, and its load() takes a function,
+	-- so the fallback below would die with "bad argument #1 to '_l'".
+	-- Say what is missing instead.
+	if _VERSION == "Lua 5.1" then
+		error("openuf: no bit library: install lua-bitop (LuaBitOp) or bit32", 0)
+	end
+	local _l = load
 	local function _f(e) return _l("return function(a,b) return "..e.." end")() end
 	return {
 		band   = _f("a&b"),

@@ -185,6 +185,13 @@ config = {
 	-- The threshold itself comes from the controller.
 	roam_assist_diff_db = 8,
 
+	-- Uplink Connectivity Monitor: SSIDs go off the air while the uplink is
+	-- unreachable (uplinkmon.lua). nil = follow the controller's site setting;
+	-- true/false forces it. uplink_monitor_host: what to ping (default: the
+	-- default gateway), e.g. "192.168.1.1" or "1.1.1.1".
+	uplink_monitor = nil,
+	uplink_monitor_host = nil,
+
 	-- Regulatory domain override: an ISO 3166-1 alpha-2 code programmed into
 	-- the driver INSTEAD of the one the controller pushes. nil = off, and the
 	-- controller's own value is used (the normal case).

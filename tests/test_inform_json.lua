@@ -1265,6 +1265,55 @@ return {
 		end
 	},
 	{
+		-- A mesh child is the quietest "station" on its parent; Load balance
+		-- must not count or kick it (that cuts off everything behind it).
+		name = "inform json: Load balance never counts or kicks a mesh child on the downlink",
+		fn = function()
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local orig_sta = inform._sysinfo.sta_table
+			inform._sysinfo.sta_table = function(ifname)
+				if ifname == "wlan0" then
+					return {{mac = "00:00:5e:00:53:01", signal = -50, inactive_ms = 100, tx_packets = 1}}
+				end
+				if ifname == "wlan0-bh" then
+					return {
+						{mac = "02:00:00:00:0b:99", signal = -60, inactive_ms = 30000, tx_packets = 1},
+						{mac = "02:00:00:00:0c:99", signal = -62, inactive_ms = 40000, tx_packets = 1},
+					}
+				end
+				return {}
+			end
+			local base_vaps = inform._ucihelper.get_vap_table
+			inform._ucihelper.get_vap_table = function()
+				local vaps = base_vaps()
+				vaps[#vaps + 1] = {name = "openuf_bh_dl_radio0", essid = "vwire-x", radio = "ng",
+					radio_name = "radio0", usage = "downlink", disabled = false, _ifnames = {"wlan0-bh"}}
+				return vaps
+			end
+			local base_radios = inform._ucihelper.get_radio_table
+			inform._ucihelper.get_radio_table = function()
+				local r = base_radios()
+				r[1].loadbalance_maxsta = 1
+				return r
+			end
+			local kicked = {}
+			inform._ucihelper.kick_station = function(ifname, mac) kicked[#kicked + 1] = mac end
+			inform._minrssi._low_since = {}
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			local ok, err = pcall(function()
+				inform.build_json(st, nil, ufhw)
+				assert_eq(#kicked, 0, "one client on a cap of one; the two mesh children do not count")
+			end)
+			inform._sysinfo.sta_table = orig_sta
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform json: a client on a private pre-shared key's VLAN is reported, and kicked via its BSS",
 		fn = function()
 			-- The VLAN netdev lists its own stations (the VAP's station dump

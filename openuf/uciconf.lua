@@ -158,11 +158,12 @@ end
 
 -- ─── main: the runtime options ─────────────────────────────────────────────
 
-local BOOL_OPTS = {"use_only_unifi_wlan", "l2_announce", "rrm_enrichment", "debug_dump_requests"}
+local BOOL_OPTS = {"use_only_unifi_wlan", "l2_announce", "rrm_enrichment", "debug_dump_requests",
+	"uplink_monitor"}
 local NUM_OPTS  = {"neighbour_scan_interval", "rrm_request_interval", "roam_assist_diff_db",
 	"debug_dump_max_bytes"}
 local STR_OPTS  = {"inform_url", "state_file", "unhandled_file", "debug_dump_file",
-	"country_override", "bootstrap_adopt_user"}
+	"country_override", "bootstrap_adopt_user", "uplink_monitor_host"}
 
 local function shallow_copy(t)
 	local out = {}

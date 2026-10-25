@@ -1047,6 +1047,48 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: peer_path_ie_hex() builds the mesh downlink's version 2 element",
+		fn = function()
+			assert_eq(sysinfo.peer_path_ie_hex("00:00:5E:00:53:21", true, "02:00:00:00:00:01",
+				{"00:00:5e:00:53:20", "00:00:5e:00:53:1f"}),
+				"dd21026f556f55460200005e005321010200000000010200005e00532000005e00531f",
+				"length, version 2, identity, rooted, station, two ancestors parent first")
+			assert_eq(sysinfo.peer_path_ie_hex("00:00:5e:00:53:20", false, nil, {}),
+				"dd15026f556f55460200005e0053200000000000000000", "unrooted, no station, no ancestors")
+			local many = {}
+			for i = 1, 12 do many[i] = ("00:00:5e:00:53:%02x"):format(i) end
+			local long = sysinfo.peer_path_ie_hex("00:00:5e:00:53:20", true, nil, many)
+			assert_eq(long:sub(45, 46), ("%02x"):format(sysinfo.PEER_PATH_MAX), "ancestors capped")
+			assert_eq(sysinfo.peer_path_ie_hex("nope", true), nil, "no identity, no element")
+		end
+	},
+	{
+		name = "sysinfo: scan_table() reads a version 2 element's chain, station and rooted flag",
+		fn = function()
+			with_fixtures({}, {
+				["scan dump"] = fixture("iw_scan_dump.txt"),
+				["ucode -e"]  = "AA:BB:CC:DD:EE:01 00:00:5E:00:53:21 v2 1 02:00:00:00:00:01 "
+					.. "00:00:5e:00:53:20,00:00:5e:00:53:1f\n" .. sysinfo.PEER_SCAN_DONE .. "\n",
+			}, function()
+				local nets = sysinfo.scan_table("wlan0")
+				local m = nets[1].peer_mesh
+				assert_eq(nets[1].peer_mac, "00:00:5e:00:53:21", "identity as before")
+				assert_true(m ~= nil and m.rooted, "rooted")
+				assert_eq(m.sta, "02:00:00:00:00:01", "station")
+				assert_eq(table.concat(m.ancestors, " "), "00:00:5e:00:53:20 00:00:5e:00:53:1f", "chain, parent first")
+				assert_eq(nets[2].peer_mesh, nil, "nothing for a BSS without one")
+			end)
+			with_fixtures({}, {
+				["scan dump"] = fixture("iw_scan_dump.txt"),
+				["ucode -e"]  = "AA:BB:CC:DD:EE:01 00:00:5E:00:53:20 v2 1 00:00:00:00:00:00 \n",
+			}, function()
+				local m = sysinfo.scan_table("wlan0")[1].peer_mesh
+				assert_eq(m.sta, nil, "a zero station is none")
+				assert_eq(#m.ancestors, 0, "the wired AP has no ancestors")
+			end)
+		end
+	},
+	{
 		name = "sysinfo: scan_table() decodes iw's \\xNN SSID escapes",
 		fn = function()
 			-- iw escapes every byte that is not printable ASCII. A hotspot
@@ -2356,7 +2398,7 @@ return {
 				"serial TLV 0x81, 6 bytes, bounds-checked")
 			local cmd = sysinfo.peer_scan_cmd("phy0-ap0")
 			assert_true(cmd:find(pm, 1, true) ~= nil, "the scan command embeds the matcher")
-			assert_true(cmd:find("hit=pm(e.data)", 1, true) ~= nil, "and calls it on every vendor element")
+			assert_true(cmd:find("let h=pm(e.data)", 1, true) ~= nil, "and calls it on every vendor element")
 			local inner = cmd:match("^ucode %-e '(.*)' 2>/dev/null$")
 			assert_true(inner ~= nil and not inner:find("'", 1, true),
 				"no single quote inside the shell-quoted script")

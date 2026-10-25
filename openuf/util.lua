@@ -74,7 +74,13 @@ function M.bit()
 	local ok, b = pcall(require, "bit")
 	if not ok then ok, b = pcall(require, "bit32") end
 	if not ok then
-		local _l = load or loadstring
+		-- Lua 5.1 has no integer operators, and its load() takes a function,
+		-- so the fallback below would die with "bad argument #1 to '_l'".
+		-- Say what is missing instead.
+		if _VERSION == "Lua 5.1" then
+			error("openuf: no bit library: install lua-bitop (LuaBitOp) or bit32", 0)
+		end
+		local _l = load
 		local function _f(e) return _l("return function(a,b) return " .. e .. " end")() end
 		b = {
 			band   = _f("a&b"),

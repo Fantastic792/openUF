@@ -37,6 +37,14 @@ local vectors = {
 	{"00156d0001010001", "null"},                          -- shorter than the fixed head
 	{"00156d00010100010293a6", "null"},                    -- no TLVs
 	{"00156d00010100010293a6ff", "null"},                  -- a tag with no length byte
+	-- the mesh downlink's version 2 element: rooted, no station, no ancestors
+	{"026f556f55460200005e00532001000000000000" .. "00",
+		"00:00:5e:00:53:20 v2 1 00:00:00:00:00:00 "},
+	-- on the air: a station, two ancestors (parent first)
+	{"026f556f55460200005e00532101020000000001" .. "02" .. "00005e005320" .. "00005e00531f",
+		"00:00:5e:00:53:21 v2 1 02:00:00:00:00:01 00:00:5e:00:53:20,00:00:5e:00:53:1f"},
+	-- the ancestor count disagrees with the length
+	{"026f556f55460200005e00532101020000000001" .. "02" .. "00005e005320", "null"},
 }
 
 local out = {sysinfo.peer_match_ucode()}

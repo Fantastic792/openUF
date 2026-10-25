@@ -60,6 +60,7 @@ local wlansched = _require_sibling("wlansched")
 local stun      = _require_sibling("stun")
 local shaper    = _require_sibling("shaper")
 local rrbguard  = _require_sibling("rrbguard")
+local uplinkmon = _require_sibling("uplinkmon")
 
 local M = {}
 local util = package.loaded["openuf.util"]
@@ -88,6 +89,7 @@ if rrmscan and sysinfo then rrmscan._channel_width = sysinfo.channel_width end
 M._minrssi    = minrssi
 M._loadbalance = loadbalance
 M._wlansched  = wlansched
+M._uplinkmon  = uplinkmon
 M._shaper     = shaper
 M._sysconf    = sysconf
 M._l2guard    = l2guard
@@ -1097,6 +1099,12 @@ function M.build_json(st, cfg, ufhw)
 				-- PROTOCOL-VALIDATION.md for the full derivation.
 				local ok_sc, nets = pcall(M._sysinfo.scan_table, ifname)
 				if ok_sc and nets then
+					-- Mesh downlinks heard on any radio, for the multi-hop
+					-- parent choice and child names (backhaul.learn); saved
+					-- with the next backhaul tick.
+					if M._backhaul and M._backhaul.learn and st then
+						pcall(M._backhaul.learn, st, nets)
+					end
 					local scan_table = {}
 					for _, net in ipairs(nets) do
 						scan_table[#scan_table + 1] = {
@@ -1344,7 +1352,7 @@ function M.build_json(st, cfg, ufhw)
 			if vap.usage == "downlink" and M._backhaul and M._backhaul.child_serialno then
 				for i, sta in ipairs(stas) do
 					local ok_c, child = pcall(M._backhaul.child_serialno, sta_dev[i],
-						scan_radio_table, cfg, M._sysinfo)
+						scan_radio_table, cfg, M._sysinfo, sta.mac, st)
 					if ok_c and child then sta.serialno = child end
 				end
 			end
@@ -1415,7 +1423,10 @@ function M.build_json(st, cfg, ufhw)
 					minrssi_obs[#minrssi_obs + 1] = {ifname = ifname, mac = sta.mac,
 						signal = minrssi_signal, threshold = minrssi_threshold}
 				end
-				if maxsta_by_radio[vap.radio_name] then
+				-- Not a backhaul station either: a quiet mesh child is the
+				-- most idle "client" on its parent, and kicking it cuts off
+				-- everything behind it.
+				if not is_backhaul_vap and maxsta_by_radio[vap.radio_name] then
 					lb_obs[#lb_obs + 1] = {radio = vap.radio_name, ifname = ifname,
 						mac = sta.mac, inactive_ms = sta.inactive_ms}
 				end
@@ -2123,13 +2134,6 @@ function M.build_json(st, cfg, ufhw)
 		-- No other bit is claimed: wifi_caps2 also gates real-hardware-only
 		-- features (Mesh MLO parent/child and others, see
 		-- PROTOCOL-VALIDATION.md) that openUF does not implement.
-		-- Bit 0x2000 (8192): Device.supportsRoamTopologyStats(). With it on
-		-- both APs the controller stops deriving roams from sta_table moves
-		-- (always "Success", no tags) and takes them from this AP's roam
-		-- reports alone (assoctrack.lua: association / sta_leave / sta_roam
-		-- notifs, which carry Fast Roaming, failures and the Roaming
-		-- Assistant and Minimum RSSI tags). Claimed only while those are
-		-- sent: without the reports the bit would make roams vanish.
 		wifi_caps2       = (dbg_caps and tonumber(dbg_caps.wifi_caps2))
 			or (0xE2 + (M._assoc_enabled(st, cfg) and 0x2000 or 0)),
 		-- Device-level (not per-radio -- see radio_table_stats above)
@@ -3713,6 +3717,15 @@ function M.handle_response(json_str, st, cfg)
 				if ok_bp then backhaul_plan = plan end
 				local parent = (type(mesh_cfg.serial1) == "string") and mesh_cfg.serial1:lower() or ""
 				if st and st.backhaul_parent ~= parent then st.backhaul_parent = parent end
+			end
+			-- Uplink Connectivity Monitor (uplinkmon.lua): the site switch rides
+			-- in the connectivity block, which is absent when it is off.
+			if M._uplinkmon and st then
+				local um = M._uplinkmon.parse(sys_raw)
+				st.uplinkmon_enabled = (um and um.enabled) or nil
+				-- The custom target, else the gateway the controller names
+				-- (else, at the heartbeat, the default route's).
+				st.uplinkmon_host = um and (um.host or um.gateway) or nil
 			end
 
 			-- The switch.* block and, on DSA, the socket the uplink cable is
@@ -5318,9 +5331,10 @@ function M._sched_resync(st)
 	if #vaps == 0 and not st.sched_vaps_down then return false end
 	local t = os.date("*t", M._time())
 	local down = M._wlansched.down_set(vaps, t.wday - 1, t.hour * 60 + t.min)
-	-- keep: VAPs something else holds down (upstream: guest selfrun; nothing
-	-- here yet), which the schedule must not bring back up.
+	-- keep: VAPs something else holds down (the Uplink Connectivity
+	-- Monitor), which the schedule must not bring back up.
 	local keep = {}
+	for _, n in ipairs(st.uplinkmon_down or {}) do keep[n] = true end
 	local held, changed = M._wlansched.reconcile(down, st.sched_vaps_down, keep)
 	if #changed.down > 0 then
 		io.stderr:write("wlansched: outside the WLAN schedule -- down: "
@@ -5334,6 +5348,65 @@ function M._sched_resync(st)
 	local before = table.concat(st.sched_vaps_down or {}, " ")
 	if before ~= table.concat(held or {}, " ") then
 		st.sched_vaps_down = held
+		M._state.save(st)
+	end
+	return #changed.down > 0 or #changed.up > 0
+end
+
+-- ─── Uplink Connectivity Monitor ────────────────────────────────────────────
+
+-- Each heartbeat (uplinkmon.lua): ping the monitor target; after FAIL_TICKS
+-- failed verdicts take the user and guest SSIDs' BSS netdevs down, and bring
+-- them back on the first answer, as the firmware's uplink-monitor does. Shares the schedule's mechanism (wlansched.reconcile), each
+-- keeping the other's netdevs down, so a WLAN schedule opening never puts an
+-- SSID back on the air while the uplink is dead, nor the uplink returning
+-- one the schedule has off. conf.lua's uplink_monitor (true/false) overrides
+-- the controller's switch; uplink_monitor_host names the host to ping.
+function M._uplinkmon_resync(st, cfg)
+	local um, ufuci = M._uplinkmon, M._ucihelper
+	if not (um and ufuci and ufuci.ap_ifnames and M._wlansched) then return false end
+	local c = cfg and cfg.config or {}
+	local enabled = st.uplinkmon_enabled == true
+	if type(c.uplink_monitor) == "boolean" then enabled = c.uplink_monitor end
+	if not enabled and not st.uplinkmon_down then
+		um.decide(false)
+		return false
+	end
+	local host = c.uplink_monitor_host
+	if host == "" then host = nil end
+	host = host or st.uplinkmon_host
+	-- Not `enabled and um.reachable(host) or nil`: a failed ping (false)
+	-- would read as unknown and the monitor would never act.
+	local reachable = nil
+	if enabled then reachable = um.reachable(host) end
+	local isolated = um.decide(enabled, reachable, st.uplinkmon_down ~= nil)
+	local down = {}
+	if isolated then
+		local ok, names = pcall(ufuci.ap_ifnames)
+		names = (ok and type(names) == "table") and names or {}
+		-- Wireless not answering: leave things as they are rather than read
+		-- an empty list as "bring everything back".
+		if #names == 0 then return false end
+		for _, n in ipairs(names) do
+			-- BSS netdevs only: a private key's VLAN netdev has no hostapd
+			-- of its own to restart a beacon on, and goes with its BSS.
+			if not ufuci.bss_ifname or ufuci.bss_ifname(n) == n then down[n] = true end
+		end
+	end
+	local keep = {}
+	for _, n in ipairs(st.sched_vaps_down or {}) do keep[n] = true end
+	local held, changed = M._wlansched.reconcile(down, st.uplinkmon_down, keep)
+	if #changed.down > 0 then
+		io.stderr:write("uplinkmon: uplink unreachable -- SSIDs off the air: "
+			.. table.concat(changed.down, " ") .. "\n")
+	end
+	if #changed.up > 0 then
+		io.stderr:write("uplinkmon: uplink reachable again -- SSIDs back: "
+			.. table.concat(changed.up, " ") .. "\n")
+	end
+	if #held == 0 then held = nil end
+	if table.concat(st.uplinkmon_down or {}, " ") ~= table.concat(held or {}, " ") then
+		st.uplinkmon_down = held
 		M._state.save(st)
 	end
 	return #changed.down > 0 or #changed.up > 0
@@ -5799,6 +5872,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._rrm_tick, cfg, st)
 	pcall(M._l2guard_resync, st)
 	pcall(M._backhaul_tick, st, cfg)
+	pcall(M._uplinkmon_resync, st, cfg)
 	pcall(M._meshvlan_resync, st, cfg)
 	pcall(M._hairpin_resync)
 	pcall(M._usteer_filter_resync)

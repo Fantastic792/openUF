@@ -323,9 +323,12 @@ code (contract in PROTOCOL-VALIDATION). Remaining, in order of value:
    knows only Ubiquiti OUIs and `serialno`); harmless, but the parent's `downlink_table` stays
    empty. A child could advertise its identity MAC in its association request, or the parent
    could learn it from the sibling element — neither is built.
-5. **Multi-hop and parent preference**: a child that is also a parent is untested; the
-   station joins whichever downlink wpa_supplicant picks, `mesh.serial1` only names the
-   parent for reporting.
+5. **Multi-hop and parent preference** — ⚠️ built 2026-10-25, unit-tested only: the version 2
+   downlink element (ancestors, station MAC), the descendants' `bssid_blacklist`, the reactive
+   loop break, the `mesh.serial1` pin with a give-up, and child names from the element (item 4
+   for children that run this build). Next: three boards in a chain, pull the root's child's
+   cable while the grandchild is up, and confirm no loop forms (`logread`, `bridge fdb`) and
+   the controller draws both hops.
 
 3. **Adoption over a wireless uplink** is untested and separate: a factory-reset openUF
    device has no backhaul credentials. Probably out of scope for a first version.

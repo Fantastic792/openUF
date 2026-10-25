@@ -1018,6 +1018,55 @@ a re-enable.
 
 ---
 
+### `connectivity.*`: SSIDs on uplink loss (upstream 2026-10-10; implemented here 2026-10-25)
+
+**Question.** A UniFi AP that loses its uplink takes its SSIDs down, so clients roam to an
+AP that still reaches the gateway. openUF keeps beaconing. Is that a gap?
+
+**What the firmware does** (firmware-confirmed for 3.9.27 to 4.0.15: `ubntbox`, `mcad`,
+`syswrapper.sh`):
+- `ubntbox` starts `uplink-monitor` (part of `mcad`) only when `system_cfg` says
+  `connectivity.status=enabled` and `wireless.status=enabled`. Otherwise it starts nothing,
+  or on some boards `uplink-monitor -p`. In `-p` mode `update()` returns before it calls
+  `syswrapper.sh state_reload`, so the VAPs are never touched.
+- When it is enabled:
+  - **Target:** the gateway, or the host in `connectivity.uplink`.
+  - **Interval:** every 15 s with a wired uplink (5 s in `init`, 10 s in `up`).
+  - **Probe:** `arping -q -c 1 -I br0` twice if the target is in the subnet, otherwise
+    `ping -q -c 1 -I br0 -W 2` twice.
+  - **Shortcuts:** the target counts as alive without a probe if its MAC was seen in the
+    bridge FDB less than 15 s ago. A failed probe still counts as up if that FDB age is
+    under 90 s.
+  - **Going down:** losing carrier is "down" at once. Any other "down" needs 5 verdicts
+    in a row (about 60 s).
+  - **Recovery:** immediate.
+- "down" leads to `configure_vap up down down`, which takes every user and guest VAP down.
+  `/var/run/system.isolated_wlan_on`, which would have kept them up, has no writer in these
+  builds.
+- After 1800 s isolated while in selfrun, the AP runs `soft-restart`.
+- **Inform:** the firmware sends `isolated`. Current controllers (10.4.57 and 10.6) ignore
+  it and set the device's `isolated` from the inform's top-level `uplink == "down"`, which
+  defaults to `"eth0"`.
+
+**What the controller sends.** The `connectivity` block (CFR, `eWivisHeQsnaqDtx`):
+- `connectivity.status=enabled` only when `device.supportVwire()` (`wifi_caps` bit `0x1`)
+  **and** the site's `connectivity` setting is `enabled`.
+- With it come `connectivity.uplink=<host>` (`uplink_type=custom`) or
+  `connectivity.uplink_gateway=<ip>`, plus `uplink_eth`/`uplink_wds`/`uplink_bridge`.
+- In every other case: `connectivity.status=disabled`.
+
+**This tree (2026-10-25).** Since the mesh work, openUF claims `wifi_caps` `0x1` on every board,
+so a site with the monitor on now pushes `connectivity.status=enabled`. `uplinkmon.lua`
+implements the firmware's behaviour (see README "Uplink Connectivity Monitor"):
+- one verdict per heartbeat, from two pings to the gateway or `connectivity.uplink`;
+- 5 failed verdicts take the user and guest VAPs down;
+- the first answer brings them back.
+
+The carrier-loss shortcut and the FDB shortcut are not copied. Unit-tested only.
+
+On the APs (read-only, 2026-10-10): OpenWrt 25.12 ships no `arping`. `bridge -s fdb` shows a
+`used <tx>/<rx>` age for the gateway's MAC, which would serve as the FDB shortcut.
+
 ## Wireless uplink (mesh): the push, the contract, and the live result — 2026-10-03
 
 Captured on AP2 against the UCG Ultra (Network 10.6.106) by claiming `wifi_caps` bits through

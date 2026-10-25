@@ -567,6 +567,43 @@ function M.peer_ie_hex(mac)
 		.. M.PEER_IE_VER .. hex
 end
 
+-- The mesh downlink beacons a second, longer version of the element, so a
+-- child can choose a parent without forming a loop and a parent can name its
+-- children (backhaul.lua):
+--   dd <len> | 02 6f 55 | 6f 55 46 | 02 | identity MAC | flags | station MAC
+--            | n | n ancestor identity MACs, the parent first
+-- flags bit 0: the AP has a path to the wire (it is wired, or its station is
+-- associated). station MAC: its own uplink station's address, zero while it
+-- has none. The ancestors are the chain of parents up to the wired AP, empty
+-- on the wired AP itself; at most M.PEER_PATH_MAX of them. The downlink
+-- keeps beaconing version 1 beside it, so an older openUF still knows it.
+M.PEER_IE_VER2    = "02"
+M.PEER_PATH_MAX   = 8
+
+local function mac_hex(mac)
+	if type(mac) ~= "string" then return nil end
+	local hex = mac:lower():gsub(":", "")
+	if #hex ~= 12 or hex:find("[^%x]") then return nil end
+	return hex
+end
+
+-- The version 2 element as hostapd vendor_elements hex, or nil when the
+-- identity is not a MAC. sta may be nil; ancestors beyond PEER_PATH_MAX, or
+-- not MACs, are left out.
+function M.peer_path_ie_hex(identity, rooted, sta, ancestors)
+	local id = mac_hex(identity)
+	if not id then return nil end
+	local path = {}
+	for _, a in ipairs(ancestors or {}) do
+		local h = mac_hex(a)
+		if h and #path < M.PEER_PATH_MAX then path[#path + 1] = h end
+	end
+	local body = M.PEER_IE_OUI:gsub(":", "") .. M.PEER_IE_MAGIC .. M.PEER_IE_VER2 .. id
+		.. (rooted and "01" or "00") .. (mac_hex(sta) or "000000000000")
+		.. ("%02x"):format(#path) .. table.concat(path)
+	return "dd" .. ("%02x"):format(#body / 2) .. body
+end
+
 -- Reading it back cannot go through `iw`: OpenWrt's default iw build strips
 -- the printer for vendor elements it does not know, so ours never appears in
 -- `iw scan dump` output, with or without -u. Checked live 2026-09-26 on both
@@ -591,12 +628,17 @@ local function ucode_bytes(hex)
 end
 
 -- The ucode function pm(d): the MAC an element body d announces, or null.
+-- A version 2 element answers "<mac> v2 <flags> <station> <a1,a2,...>".
 -- Kept separate so it can be run on a device against fixed inputs.
 function M.peer_match_ucode()
 	local head = ucode_bytes(M.PEER_IE_OUI:gsub(":", "") .. M.PEER_IE_MAGIC .. M.PEER_IE_VER)
+	local head2 = ucode_bytes(M.PEER_IE_OUI:gsub(":", "") .. M.PEER_IE_MAGIC .. M.PEER_IE_VER2)
 	return 'function mac(d,o){let m=[];for(let i=o;i<o+6;i++)push(m,sprintf("%02x",ord(d,i)));return join(":",m);}'
 		.. 'function pm(d){let n=length(d);'
 		.. 'if(n==13&&substr(d,0,7)=="' .. head .. '")return mac(d,7);'
+		.. 'if(n>=21&&substr(d,0,7)=="' .. head2 .. '"&&n==21+6*ord(d,20)){let p=[];'
+		.. 'for(let i=21;i<n;i+=6)push(p,mac(d,i));'
+		.. 'return mac(d,7)+" v2 "+ord(d,13)+" "+mac(d,14)+" "+join(",",p);}'
 		.. 'if(n<11||ord(d,0)!=0||ord(d,1)!=0x15||ord(d,2)!=0x6d'
 		.. '||ord(d,3)!=0||ord(d,4)!=1||ord(d,5)!=1)return null;'
 		.. 'for(let i=11;i+2<=n;i+=2+ord(d,i+1)){'
@@ -617,7 +659,9 @@ function M.peer_scan_cmd(ifname)
 		.. 'let r=nl.request(nl.const.NL80211_CMD_GET_SCAN,nl.const.NLM_F_DUMP,{dev:"' .. ifname .. '"});'
 		.. 'for(let x in (r||[])){let b=x.bss;if(!b)continue;'
 		.. 'for(let l in [b.information_elements||[],b.beacon_ies||[]]){let hit=null;'
-		.. 'for(let e in l){if(e.type==221){hit=pm(e.data);if(hit)break;}}'
+		-- A version 2 element wins over the version 1 one beside it.
+		.. 'for(let e in l){if(e.type==221){let h=pm(e.data);'
+		.. 'if(h&&(!hit||index(h," v2 ")>=0))hit=h;}}'
 		.. 'if(hit){print(b.bssid," ",hit,"\\n");break;}}}'
 		.. 'if(r!=null)print("' .. M.PEER_SCAN_DONE .. '\\n");'
 	return "ucode -e '" .. script .. "' 2>/dev/null"
@@ -626,17 +670,30 @@ end
 -- {bssid = identity MAC} for every BSS in ifname's scan cache that carries
 -- the sibling-AP element, and whether the reader ran to its end: without the
 -- closing line (no ucode, no nl80211 module, killed) a BSS missing from the
--- map is unknown, not a stranger.
+-- map is unknown, not a stranger. The third value holds what a version 2
+-- (mesh downlink) element adds: {bssid = {rooted, sta, ancestors = {...}}}.
+local MAC_PAT = "%x%x:%x%x:%x%x:%x%x:%x%x:%x%x"
 function M.peer_macs(ifname)
 	local cmd = M.peer_scan_cmd(ifname)
-	if not cmd then return {}, false end
+	if not cmd then return {}, false, {} end
 	local out = M._run_cmd(cmd) or ""
-	local peers = {}
-	for bssid, mac in out:gmatch(
-			"(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)") do
-		peers[bssid:lower()] = mac:lower()
+	local peers, mesh = {}, {}
+	for line in out:gmatch("[^\n]+") do
+		local bssid, mac, rest = line:match("^(" .. MAC_PAT .. ") (" .. MAC_PAT .. ")(.*)$")
+		if bssid then
+			bssid = bssid:lower()
+			peers[bssid] = mac:lower()
+			local flags, sta, path = rest:match("^ v2 (%d+) (" .. MAC_PAT .. ") ?([%x:,]*)$")
+			if flags then
+				local anc = {}
+				for a in path:gmatch(MAC_PAT) do anc[#anc + 1] = a:lower() end
+				sta = sta:lower()
+				mesh[bssid] = {rooted = tonumber(flags) % 2 == 1,
+					sta = sta ~= "00:00:00:00:00:00" and sta or nil, ancestors = anc}
+			end
+		end
 	end
-	return peers, out:find(M.PEER_SCAN_DONE, 1, true) ~= nil
+	return peers, out:find(M.PEER_SCAN_DONE, 1, true) ~= nil, mesh
 end
 
 -- The reader is a ucode fork that loads the nl80211 module, run per radio on
@@ -650,8 +707,11 @@ end
 M._peer_cache = {}
 
 local function peer_tag(ifname, nets)
-	local peers = M.peer_macs(ifname)
-	for _, n in ipairs(nets) do n.peer_mac = peers[n.bssid:lower()] end
+	local peers, _, mesh = M.peer_macs(ifname)
+	for _, n in ipairs(nets) do
+		n.peer_mac = peers[n.bssid:lower()]
+		n.peer_mesh = mesh and mesh[n.bssid:lower()] or nil
+	end
 end
 
 -- Returns a table of neighboring wireless networks visible to ifname, by

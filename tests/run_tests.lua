@@ -173,6 +173,7 @@ local test_files = {
 	"tests/test_stun.lua",
 	"tests/test_loadbalance.lua",
 	"tests/test_wlansched.lua",
+	"tests/test_uplinkmon.lua",
 	"tests/test_rrbguard.lua",
 	"tests/test_shaper.lua",
 	"tests/test_switchvlan.lua",

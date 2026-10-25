@@ -1543,6 +1543,21 @@ are never up together: with STP off in every UniFi push, that would be a bridge 
 mode in effect is `state.json` `backhaul_mode` (`wired`/`wireless`), and `logread` says
 `backhaul: wired uplink lost on <port> -- enabling the WDS station` and the reverse.
 
+**More than one hop** (unit-tested, not yet run on hardware). A wireless child gets a downlink
+of its own too, so chains form by themselves. Each downlink beacons a second sibling element
+(version 2): its identity, whether it has a path to the wire, its own station's MAC and its
+ancestors up to the wired AP. From what its scans hear, each AP keeps `state.json`
+`backhaul_seen`: every downlink whose ancestors include it is a descendant, written to the
+station as `bssid_blacklist` so it is never joined. If the station ever does find itself on a
+descendant (a downlink not heard before), it is blacklisted on that heartbeat and the station
+moves. The parent picked in the controller (Devices → AP → uplink, `mesh.serial1`) is pinned
+with `bssid` once its downlink has been heard and is not a descendant; after six heartbeats
+without joining it the pin is dropped and any eligible parent will do. The element is updated
+in the running hostapd (`hostapd_cli set vendor_elements` + `update_beacon`), so a changed chain
+does not drop the children. `logread | grep backhaul` says `a loop; leaving it` or
+`unpinning` when either happens; `uci show wireless | grep -E "bssid|blacklist"` shows what
+the station may join.
+
 While on the wireless uplink the inform reports what the controller actually reads
 (PROTOCOL-VALIDATION § Wireless uplink): `uplink` is the uplink VAP's name, the uplink
 VAP is a `vap_table` entry of usage `uplink` whose one station is the parent's downlink BSS
@@ -1573,6 +1588,29 @@ ip -d link show br-lan.20                            # vlan id 20, master br-ope
 A client on a tagged SSID of the child should reach its own network over the hop, and a host
 plugged into the child's other socket should keep working. If the guard is missing,
 `logread` says why and the tagged SSIDs simply do not cross the hop; untagged ones still do.
+
+## 6b-2. Uplink Connectivity Monitor
+
+The controller's site setting (Settings → WiFi → Uplink Connectivity Monitor) reaches the AP
+as `connectivity.status=enabled`. The controller sends that only to a device claiming
+`wifi_caps` `0x1`, which openUF does for the mesh. A custom target arrives as
+`connectivity.uplink`. While the setting is on, openUF pings the gateway (or that target) twice
+per heartbeat. After 5 failed checks in a row, the user and guest SSIDs' BSS netdevs go down,
+as UniFi firmware's `uplink-monitor` does: `logread` says `uplinkmon: uplink unreachable --
+SSIDs off the air: phy0-ap0 phy1-ap0`, and `state.json` `uplinkmon_down` lists them. The first
+answer brings them back (`SSIDs back`). The mesh downlink and uplink station are never touched.
+On a meshing AP, pulling the cable does not blink the SSIDs, because the station has joined a
+parent well before the fifth failed check.
+
+```lua
+uplink_monitor = nil,         -- nil: follow the controller; true/false: force
+uplink_monitor_host = nil,    -- e.g. "1.1.1.1" to test the internet, not just the gateway
+```
+
+UCI equivalents: `option uplink_monitor '1'` and `option uplink_monitor_host '1.1.1.1'` in
+`openuf.main`. Two firmware details are not copied. Carrier loss is not an instant verdict,
+because it would blink a meshing AP's SSIDs during the wired-to-wireless switch. The bridge-FDB
+shortcut is skipped too: it only saves probes.
 
 ## 6c. What the AP does on its own since 2026-10-18
 
