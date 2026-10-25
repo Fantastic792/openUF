@@ -2198,6 +2198,50 @@ interface: br-lan (derived)`, `UBNT_ROAM on`, `check OK`. The install path and t
 side are therefore proven on the target release; what remains unproven here is the roam
 itself against a UniFi AP (REVERSE-ENGINEERING.md backlog row 25).
 
+**Made part of openUF, 2026-10-25 (later the same day).** The translator is no longer an
+external install: d-malinowski's `rrb-unifi.uc` (1.3, `767a28c`) is vendored as
+`openuf/rrb/rrb-unifi.uc` (`openuf/rrb/README.md`; its GPL-3.0-or-later is why the whole
+repository moved from MIT to GPL-3.0-or-later the same day, NOTICE keeping jonasevcik's MIT
+notice) and runs as the
+`openuf-rrb` service, with two changes marked `// openUF:` in the file: with `RRB_WAIT=0` it
+waits for the veth pair and for a BSS on it instead of exiting, and it records every UniFi
+BSSID it hears on the LAN in `/var/run/openuf/rrb-peers.json`, with the WLAN's mobility
+domain once a roam announcement verified with that WLAN's key names it. openUF creates the
+veth pair itself (`ucihelper.ensure_ft_veth`, netifd sections in `/etc/config/network`, on
+the first config push with an FT WLAN; removed on Forget), keeps the learned peers in
+`state.json` and forgets `cfgversion` so the controller re-pushes and they become key holders
+(inform's `_rrb_peers_tick`, at most once every ten minutes), restarts the daemon after a push
+that put a BSS on the veth, and only ever points hostapd at the veth while the service is
+installed and enabled. The setup tool's `collect`/`verify`/`peers` live on as `openuf rrb`.
+The learning replaces their SSH-into-the-UAP step on the assumption their own data supports:
+a UniFi AP's R0KH-ID is its BSSID without colons (`nas_identifier=$bssid` in UniFi 8.7.11's
+hostapd config, which their `collect` read). Unverified here: that a UniFi AP's roam
+announcements reach this AP's LAN bridge on a real site (their 1.3 walk tests say they did,
+with the standalone translator). The fork `yesrab/unifi-openwrt-roaming` is not used.
+
+**The built-in translator checked in the VM, 2026-10-25.** Same VM, from a clean slate (the
+standalone translator removed, its veth and sections deleted). The tree pushed with
+`vm/install.sh`: `openuf-rrb` enabled and running, the daemon logging `waiting for the veth
+pair vft0/vft1` since nothing had created it; `openuf rrb status` and `openuf deps --check`
+agreeing (installed, enabled, running, no veth, no peers). Then the push's two steps by hand:
+`ucihelper.ensure_ft_veth` wrote `network.openuf_ftveth` (veth, `vft0`/`vft1`) with the two
+proto-none interfaces, reloaded the network and returned true with `vft0` up, upon which the
+daemon logged `waiting for a hostapd BSS on ft_iface=vft0`; `ftinterop.apply` produced the
+expected options (UniFi domain `5de5`, `ft_psk_generate_local 0`, a learned peer plus the
+wildcards, `hostapd_bss_options ft_iface=vft0`, the deadline deleted, the nasid note since
+the BSSID was not given), written to the hwsim AP and reloaded; after the restart
+`apply_config` performs, the daemon reported `running: hostapd side vft1 (ft_iface vft0),
+lan side br-lan, BSSes: phy0-ap0=02:00:00:00:00:00`, `check OK`, `UBNT_ROAM on`, and
+`/proc/net/packet` had hostapd's `0x88b7` socket on `vft0`'s ifindex with the daemon's on
+`vft1` and `br-lan`. A peers file in the daemon's format was read back by `openuf rrb peers`,
+`ftinterop.learned` and the deps JSON (`learned: 2`). `ucihelper.forget` removed the three
+network sections, `vft0` disappeared, the daemon exited on `recv(): Network is down` and
+procd respawned it straight back into `waiting for the veth pair`. One defect found and fixed
+by this run: two apostrophes inside the single-quoted package table of `openuf-deps.sh`
+truncated the table on the device (every `--check` printed `PACKAGES: parameter not set`);
+the rows are reworded. Not checked here, for want of a UniFi AP: a roam, a real UBNT_ROAM
+announcement reaching the peers file, and `openuf rrb collect`/`verify` against a UAP.
+
 Not adopted as-is: nothing from the commit was left out. Two of this tree's choices differ in
 emphasis rather than behaviour. The `nasid` log line says hostapd's default covers a push with
 no BSSID yet, where theirs reads as a gap. And the raw `hostapd_bss_options 'ft_iface=vft0'`

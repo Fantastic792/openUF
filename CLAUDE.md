@@ -359,12 +359,11 @@ Other things to preserve:
   answers yes in places where the open then fails.
 - **Every question is asked before anything changes**, and each has a matching option so
   the same script runs unattended. Adding a prompt means adding an option.
-- **The rrb-unifi translator's packages go in the packages phase, its files in the openUF
-  phase.** `ucode-mod-socket` and `kmod-veth` join `OPTIONAL` when the translator is wanted
-  (`--rrb-unifi`, the default), so they arrive while the box still has internet; the files
-  come from the fork through `openuf-deps`, which `install.sh` runs on the file path and
-  `setup.sh` runs itself after the package install. Its veth creation is a guarded network
-  reload that `openuf-deps` confirms; it adds an interface and tears nothing down.
+- **The 802.11r translator's packages go in the packages phase.** `ucode-mod-socket` and
+  `kmod-veth` are in `OPTIONAL`, so they arrive while the box still has internet; the daemon
+  itself is in the tree (`openuf/rrb/`) and `install.sh` enables its service, which `setup.sh`
+  also does on its package path. No question, no option: `openuf.rrb.enabled '0'` switches the
+  daemon off and `unifi_ft_interop` the whole feature.
 - **Value-taking options** must go through `need_val`, or a forgotten value silently
   configures the empty string.
 
@@ -444,18 +443,16 @@ host at a time, with `dist.sh --verify` gating every push.
 running `syswrapper.sh set-adopt` only, which self-locks once adopted and re-enables on
 factory reset.
 
-**The rrb-unifi translator is installed from the project's fork, by `openuf-deps`, after
-the service start.** `install.sh install` (hence `setup.sh` and `update.sh`) runs
-`hook/openuf-deps.sh --install --only-rrb-unifi` unless `--no-rrb-unifi`: it downloads the
-four files from `OPENUF_RRB_URL` (default the fork's `main`), refuses anything that is not the
-tool, runs the translator's own `rrb-unifi-setup install --yes`, confirms that tool's
-network-reload watchdog at once (an isolated veth pair cannot cut the SSH session the
-watchdog protects), starts the service, and on an adopted AP forgets `cfgversion` with the
-daemon stopped so the controller re-pushes and the FT WLANs move onto the veth. It is never
-fatal: no internet, no `kmod-veth` in the feed or under 1 MB free costs the feature and
-nothing else. The LuCI overview's install button runs the same command. Keep the step after
-`"$INIT_SCRIPT" start` so the re-push has a daemon to restart, and keep everything about the
-translator's files in that one function: `setup.sh`'s package path calls it too.
+**The 802.11r translator for genuine UniFi APs ships with the tree.** `openuf/rrb/rrb-unifi.uc`
+(d-malinowski's rrb-unifi, vendored; `openuf/rrb/README.md` names the upstream
+commit and every change, each marked `// openUF:` in the file) runs as `/etc/init.d/openuf-rrb`,
+which `install.sh` copies from `openuf/etc/init.d/` and enables after openUF's own service.
+Its packages, `ucode-mod-socket` and `kmod-veth`, are two more `try_optional`s. The veth pair
+is NOT the installer's business: `ucihelper.ensure_ft_veth` writes it into `/etc/config/network`
+on the first config push that carries an FT WLAN, and `install.sh uninstall` and
+`ucihelper.forget` remove it. Fixes to the daemon come from
+https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
+`../unifi-openwrt-roaming` has it as `upstream`), never from a fork of it.
 
 ---
 
@@ -766,6 +763,16 @@ translator's files in that one function: `setup.sh`'s package path calls it too.
   needs the external rrb-unifi translator's veth as hostapd's `ft_iface`, written as the raw
   `hostapd_bss_options` form (the translator reads the generated `ft_iface=<bridge>` line that
   precedes it), and only when the veth exists: hostapd fails a BSS whose `ft_iface` is missing.
+- **hostapd is pointed at the translator's veth only while something forwards it.**
+  `ftinterop.ft_iface` writes `hostapd_bss_options 'ft_iface=vft0'` only when the `openuf-rrb`
+  service is installed, `openuf.rrb.enabled` is not `0`, and the netdev exists, and
+  `ucihelper.ensure_ft_veth` creates the pair only under the same conditions: a veth nobody
+  forwards would swallow every RRB frame, openUF-to-openUF key pulls included, and the symptom
+  would be "FT silently falls back to a full handshake" on every roam. The daemon's own changes
+  (waiting instead of exiting, the peers file) are marked `// openUF:` in a file whose upstream
+  is d-malinowski's repository, not this one: keep them small and re-applicable. The whole
+  repository is GPL-3.0-or-later since 2026-10-25 because of it; NOTICE carries the MIT notice
+  for jonasevcik's original work, which MIT requires to travel with the code.
 - **Two kernel modules are not implied by their packages.** `kmod-nft-bridge` for the
   Multicast/Broadcast Blocker's `meta` rule (everything else in that table builds without
   it, so the control looks enabled and filters nothing) and `kmod-sched-act-police` for the
@@ -874,7 +881,13 @@ credited to this repo), so diff before assuming a commit is new.
   (PROTOCOL-VALIDATION.md, "Adopted from d-malinowski/openUF"); it is proposed to upstream but
   not merged there, so a later upstream sync may bring the same change back under
   `openuf/ftinterop.lua` -- diff before re-applying. Their `pr/hh5a-modelmap` (a BT Home Hub 5A
-  map, lantiq/xrx200) has not been reviewed. Their hardware is a HH5A and a U7 Lite; label it.
+  map, lantiq/xrx200) was merged by jonasevcik on 2026-10-25 (`d6745b8`, the first upstream
+  commits past `2f263f3`) and is not yet reviewed here. Their hardware is a HH5A and a U7 Lite;
+  label it. **The translator has an upstream of its own**: `openuf/rrb/rrb-unifi.uc` is
+  https://github.com/d-malinowski/unifi-openwrt-roaming at 1.3 (`767a28c`), vendored
+  2026-10-25 with the changes marked `// openUF:`; take fixes from there (the local clone
+  `../unifi-openwrt-roaming` has it as `upstream`), re-apply the marked changes, and update
+  `openuf/rrb/README.md`'s commit. The fork `yesrab/unifi-openwrt-roaming` is not a source.
 - **Mechanics that worked in syncs 3 and 4:** `git add -A` first, then per commit **in
   upstream's order** `git show --format= <c> -- openuf/ tests/ ':!openuf/guestportal.lua'
   ':!tests/test_guestportal.lua' | git apply --3way` (the fetch puts their blobs in our
@@ -929,8 +942,8 @@ openuf/
   stun.lua          the STUN client whose mapped address the controller wakes
   rrbguard.lua      repairs hostapd's stale 802.11r key-exchange socket (wpad restart)
   ftinterop.lua     802.11r with genuine UniFi APs (conf `unifi_ft_interop`, on by default
-                    for new installations; without the translator it only changes the
-                    mobility-domain formula and FT-PSK's key path): UniFi's
+                    for new installations; with the translator switched off it only changes
+                    the mobility-domain formula and FT-PSK's key path): UniFi's
                     mobility domain, explicit key holders for the peers the rrb-unifi
                     translator lists, nasid = BSSID, hostapd's ft_iface on the translator's veth
   util.lua          shared helpers: file/command reads, exec_ok, is_mac, bit shim, sysfs
@@ -962,7 +975,13 @@ openuf/
                     conversion as --check/--convert/--revert), openuf-deps.sh
                     (/usr/sbin/openuf-deps, `openuf deps`: what openUF needs
                     installed as JSON, the basic-to-full wpad swap, and the
-                    rrb-unifi translator from the project's fork)
+                    translator service's start), openuf-rrb.sh (`openuf rrb
+                    status|peers|collect|verify`, adapted from rrb-unifi-setup)
+  rrb/              the 802.11r translator for genuine UniFi APs: rrb-unifi.uc
+                    (d-malinowski's, vendored; README.md there
+                    names the upstream commit and the `// openUF:` changes), run as
+                    etc/init.d/openuf-rrb; learns the UniFi APs on the LAN into
+                    /var/run/openuf/rrb-peers.json for ftinterop.lua
   etc/init.d/openuf procd service: announce + inform instances; finds either prefix
 package/            the OpenWrt feed: openuf (net/), luci-app-openuf (the LuCI pages, the device
                     page htdocs/openuf/ and its gate root/usr/share/ucode/openuf/gate.uc) and

@@ -62,8 +62,9 @@ for src in $(find openuf -type f ! -name '._*' ! -name .DS_Store | sort); do
 done
 
 # Preserve the executable bit the installer relies on.
-chmod +x "$STAGE/etc/init.d/openuf" "$STAGE/hook/syswrapper.sh" \
-	"$STAGE/hook/adopt-shell.sh" "$STAGE/hook/openuf-cli.sh" "$STAGE/hook/openuf-convert.sh"
+chmod +x "$STAGE/etc/init.d/openuf" "$STAGE/etc/init.d/openuf-rrb" "$STAGE/hook/syswrapper.sh" \
+	"$STAGE/hook/adopt-shell.sh" "$STAGE/hook/openuf-cli.sh" "$STAGE/hook/openuf-convert.sh" \
+	"$STAGE/hook/openuf-rrb.sh" "$STAGE/rrb/rrb-unifi.uc"
 
 # Build stamp: which commit this tarball is, so `openuf-update --check` on a
 # device can say what it runs. "-dirty" means uncommitted changes were in the
@@ -76,7 +77,7 @@ printf '%s %s\n' "$(git describe --always --dirty 2>/dev/null || echo unknown)" 
 # downloaded the tarball with no way to run the guided install. update.sh is
 # what upgrades an installed AP from this same tarball (tools/deploy.sh hands
 # it over; install.sh installs it as /usr/bin/openuf-update).
-cp install.sh setup.sh update.sh LICENSE "$BUILD/"
+cp install.sh setup.sh update.sh LICENSE NOTICE "$BUILD/"
 
 # ── Verify ──────────────────────────────────────────────────────────────────
 # README.md/USAGE.md are deliberately not shipped: ~21 KB transferred to and
@@ -136,7 +137,7 @@ rm -f "$TARBALL"
 # COPYFILE_DISABLE: macOS bsdtar otherwise adds a `._<name>` AppleDouble entry
 # for every file that carries extended attributes, and update.sh extracts them
 # onto the device as junk files beside the real ones.
-COPYFILE_DISABLE=1 tar czf "$TARBALL" -C "$BUILD" openuf install.sh setup.sh update.sh LICENSE
+COPYFILE_DISABLE=1 tar czf "$TARBALL" -C "$BUILD" openuf install.sh setup.sh update.sh LICENSE NOTICE
 
 before=$(find openuf -type f -exec cat {} + | wc -c | tr -d ' ')
 after=$(find "$STAGE" -type f -exec cat {} + | wc -c | tr -d ' ')

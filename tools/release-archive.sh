@@ -29,7 +29,7 @@ rm -rf build/release
 mkdir -p "$OUT"
 cp -r build/openuf "$OUT/openuf"
 printf '%s\n' "$VER" > "$OUT/openuf/VERSION"
-cp install.sh setup.sh update.sh LICENSE README.md USAGE.md "$OUT/"
+cp install.sh setup.sh update.sh LICENSE NOTICE README.md USAGE.md "$OUT/"
 
 rm -f "$NAME.tar.gz" "$NAME.tar.gz.sha256"
 # --owner/--group are GNU tar; a BSD tar (macOS) has no such flags. The

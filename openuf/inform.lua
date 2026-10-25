@@ -60,6 +60,7 @@ local wlansched = _require_sibling("wlansched")
 local stun      = _require_sibling("stun")
 local shaper    = _require_sibling("shaper")
 local rrbguard  = _require_sibling("rrbguard")
+local ftinterop = _require_sibling("ftinterop")
 
 local M = {}
 local util = package.loaded["openuf.util"]
@@ -99,6 +100,7 @@ M._assoctrack = assoctrack
 M._satisfaction = satisfaction
 M._stun      = stun
 M._rrbguard  = rrbguard
+M._ftinterop = ftinterop
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
 -- flat list build_json merges from. Clients report asynchronously and only
@@ -3761,7 +3763,8 @@ function M.handle_response(json_str, st, cfg)
 							roam_assist_active = roam_assist_active,
 							device_name = device_name, keep_vlans = port_vlans,
 							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac),
-							backhaul = backhaul_plan})
+							backhaul = backhaul_plan,
+							rrb_peers = st and st.rrb_peers})
 					M._deny_reloaded()   -- apply_config ran `wifi reload`
 				end
 			end
@@ -5299,6 +5302,48 @@ function M._rrbguard_tick()
 	return g.tick(now, hour)
 end
 
+-- ─── UniFi peers the translator heard (ftinterop.lua, rrb/rrb-unifi.uc) ────
+
+-- Every heartbeat: the openuf-rrb daemon records each UniFi BSSID it hears on
+-- the LAN, with the mobility domain once a roam announcement verified with
+-- that WLAN's key names it (its peers file). A BSSID with a domain is a key
+-- holder for that WLAN: it goes into st.rrb_peers (state.json, so a reboot
+-- keeps it) and, on an adopted AP, cfgversion is forgotten so the controller
+-- pushes the full config again and apply_config writes the new r0kh/r1kh
+-- lines. At most one such re-push every RRB_PEERS_REPUSH_GAP, since a push
+-- reloads the FT WLANs' BSSes. Returns nil (nothing new), "learned" (kept,
+-- no re-push yet) or "repush".
+M.RRB_PEERS_REPUSH_GAP = 600
+M._rrb_peers_next_repush = 0
+function M._rrb_peers_tick(st, cfg)
+	if not (st and cfg and cfg.config and cfg.config.unifi_ft_interop) then return nil end
+	local fti = M._ftinterop
+	if not (fti and fti.learned) then return nil end
+	local learned = fti.learned(fti._read_file)
+	if #learned == 0 then return nil end
+	st.rrb_peers = st.rrb_peers or {}
+	local new = {}
+	for _, p in ipairs(learned) do
+		if p.md and st.rrb_peers[p.bssid] ~= p.md then
+			st.rrb_peers[p.bssid] = p.md
+			new[#new + 1] = p.bssid .. " (" .. p.md .. ")"
+		end
+	end
+	if #new == 0 then return nil end
+	io.stderr:write("openuf: rrb: UniFi peer(s) learned: " .. table.concat(new, ", ") .. "\n")
+	local now = M._time()
+	if st.adopted and now >= M._rrb_peers_next_repush then
+		st.cfgversion = ""
+		M._rrb_peers_next_repush = now + M.RRB_PEERS_REPUSH_GAP
+		M._state.save(st)
+		io.stderr:write("openuf: rrb: cfgversion forgotten so the controller pushes the "
+			.. "full config again; the new peer(s) become key holders then\n")
+		return "repush"
+	end
+	M._state.save(st)
+	return "learned"
+end
+
 -- ─── WiFi Blackout Schedule ─────────────────────────────────────────────────
 
 -- WiFi Blackout Schedule (wlansched.lua): each heartbeat, every scheduled
@@ -5805,6 +5850,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._block_resync, st)
 	pcall(M._sched_resync, st)
 	pcall(M._rrbguard_tick)
+	pcall(M._rrb_peers_tick, st, cfg)
 
 	local ok_b, json_str = pcall(M.build_json, st, cfg, ufhw)
 	-- The cycle's ucihelper pass, opened above, ends here whether or not

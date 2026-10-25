@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2026 Yesrab Ali <yesrab.ali111@gmail.com>
 #
-# This is free software, licensed under the MIT License.
+# This is free software, licensed under the GNU General Public License v3.0 or later.
 # See /LICENSE for more information.
 #
 
@@ -15,7 +15,7 @@ LUCI_URL:=https://github.com/yesrab/openUF
 
 PKG_VERSION:=0.10.0
 PKG_RELEASE:=1
-PKG_LICENSE:=MIT
+PKG_LICENSE:=GPL-3.0-or-later
 PKG_MAINTAINER:=Yesrab Ali <yesrab.ali111@gmail.com>
 
 # Both scripts must be defined before luci.mk is included: it calls

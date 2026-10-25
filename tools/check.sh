@@ -185,20 +185,25 @@ else
 fi
 echo ""
 
-# ── rrb-unifi translator ─────────────────────────────────────────────────────
-# 802.11r fast roaming with genuine UniFi APs (USAGE § 6). Informational: an
-# AP without it keeps everything but that, and install.sh adds it.
-echo "[ rrb-unifi translator ]"
-if [ -f /usr/sbin/rrb-unifi.uc ] && [ -f /etc/init.d/rrb-unifi ]; then
-	_rv=$(sed -n 's/^VERSION=//p' /usr/sbin/rrb-unifi-setup 2>/dev/null | head -1)
-	ok "rrb-unifi ${_rv:-?} installed"
-	_ft=$(sed -n "s/^[[:space:]]*option ft_iface '\{0,1\}\([^' ]*\)'\{0,1\}.*/\1/p" /etc/config/rrb-unifi 2>/dev/null | head -1)
-	if [ -e "/sys/class/net/${_ft:-vft0}" ]; then ok "veth ${_ft:-vft0} present"; else info "veth ${_ft:-vft0} absent (created from /etc/config/network at boot)"; fi
-	if /etc/init.d/rrb-unifi running >/dev/null 2>&1; then ok "rrb-unifi running"; else info "rrb-unifi not running (it starts once a WLAN uses the veth)"; fi
-	info "UniFi peers listed: $(grep -c 'list ft_peer' /etc/config/rrb-unifi 2>/dev/null || echo 0)"
+# ── 802.11r translator (openuf/rrb/) ─────────────────────────────────────────
+# Fast roaming with genuine UniFi APs (USAGE § 6). Informational: an AP without
+# its two packages keeps everything but that.
+echo "[ 802.11r translator for UniFi APs ]"
+_d=""; for d in /usr/lib/openuf /opt/openuf; do [ -f "$d/rrb/rrb-unifi.uc" ] && { _d=$d; break; }; done
+if [ -n "$_d" ]; then
+	ok "translator $_d/rrb/rrb-unifi.uc ($(sed -n "s/^const VERSION = '\([^']*\)'.*/\1/p" "$_d/rrb/rrb-unifi.uc" | head -1))"
 else
-	info "not installed — install.sh adds it (openuf deps --install); without it openUF APs still roam among themselves"
+	info "not installed yet (install.sh copies it with the tree)"
 fi
+[ -e /usr/lib/ucode/socket.so ] && ok "ucode-mod-socket" || info "ucode-mod-socket missing — install.sh adds it (apk add ucode-mod-socket)"
+ls /lib/modules/*/veth.ko >/dev/null 2>&1 && ok "kmod-veth" || info "kmod-veth not found as a module — install.sh adds it (apk add kmod-veth), unless veth is built in"
+if [ -x /etc/init.d/openuf-rrb ]; then
+	/etc/init.d/openuf-rrb enabled && ok "openuf-rrb enabled" || info "openuf-rrb not enabled"
+	/etc/init.d/openuf-rrb running >/dev/null 2>&1 && ok "openuf-rrb running" || info "openuf-rrb not running"
+fi
+_ft=$(uci -q get openuf.rrb.ft_iface 2>/dev/null); _ft=${_ft:-vft0}
+[ -e "/sys/class/net/$_ft" ] && ok "veth $_ft present" || info "veth $_ft absent (openUF creates it on the first config push with an FT WLAN)"
+[ -f /var/run/openuf/rrb-peers.json ] && info "UniFi APs heard on the LAN: $(grep -o '"[0-9a-f][0-9a-f]:[0-9a-f:]*":{' /var/run/openuf/rrb-peers.json | wc -l | tr -d ' ')"
 echo ""
 
 # ── Summary ──────────────────────────────────────────────────────────────────

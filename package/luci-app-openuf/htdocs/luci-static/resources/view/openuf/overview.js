@@ -119,23 +119,21 @@ function installButton(w, missing, th, r) {
 	const choices = arr(w.choices);
 	const select = E('select', { 'class': 'cbi-input-select' },
 		choices.map(c => E('option', { 'value': c, 'selected': (c == w.suggested) ? '' : null }, c)));
-	const wantRrb = !!(r && !r.installed);
+	const startRrb = !!(r && r.installed && r.enabled && !r.running && !arr(r.missing).length);
 	let label;
 	if (swap)
 		label = missing.length ? _('Replace hostapd with the full build and install the missing packages') : _('Replace hostapd with the full build');
 	else if (missing.length)
-		label = wantRrb ? _('Install the missing packages and the rrb-unifi translator') : _('Install the missing packages');
-	else if (wantRrb)
-		label = _('Install the rrb-unifi translator');
+		label = _('Install the missing packages');
+	else if (startRrb)
+		label = _('Start the 802.11r translator');
 	else
 		label = _('Install the Halo theme');
 	const btn = E('button', { 'class': 'btn cbi-button cbi-button-positive', 'click': function() {
 		const chosen = swap ? select.value : null;
 		ui.showModal(label, [
 			swap ? E('p', {}, _('%s is removed and %s installed. The radios are down for about ten seconds in between, then brought back up on the new build, and openUF is restarted. Do this over a cable, not over WiFi.').format(w.installed || _('the basic build'), chosen))
-			     : E('p', {}, wantRrb
-			         ? _('The packages are downloaded from the OpenWrt repository, the rrb-unifi translator from its GitHub source, and installed; openUF is restarted and, on an adopted device, asks the controller for its configuration again so the WiFi networks move onto the translator. The device needs internet access for this.')
-			         : _('The packages are downloaded from the OpenWrt repository and installed, then openUF is restarted. The device needs internet access for this.')),
+			     : E('p', {}, _('The packages are downloaded from the OpenWrt repository and installed, then openUF is restarted. The device needs internet access for this.')),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 				E('button', { 'class': 'btn cbi-button-positive', 'click': ui.createHandlerFn(this, function() {
@@ -212,29 +210,33 @@ function softwareBlock(s) {
 			E('td', { 'class': 'td' }, _('The Halo look for LuCI, matching the device page; installed only on devices with flash to spare'))
 		]));
 	}
-	// The rrb-unifi translator: 802.11r fast roaming with genuine UniFi
-	// access points. Not an OpenWrt package; openuf deps fetches it from the
-	// project's fork and the translator's own setup tool installs it.
+	// The 802.11r translator for genuine UniFi access points: part of openUF
+	// (the openuf-rrb service), so the row is about its state, not about a
+	// package; what it needs from the feeds is in the package rows above.
 	const r = d.rrb_unifi;
 	if (r) {
 		let state;
-		if (r.installed) {
+		if (!r.installed)
+			state = E('span', { 'class': 'label warning' }, _('no: the openuf-rrb service is missing (reinstall openUF)'));
+		else if (!r.enabled)
+			state = E('span', { 'class': 'label' }, _('switched off (openuf.rrb.enabled)'));
+		else if (arr(r.missing).length)
+			state = E('span', { 'class': 'label warning' }, _('waiting for %s').format(arr(r.missing).join(', ')));
+		else {
 			const bits = [];
-			if (r.version) bits.push('v' + r.version);
+			if (r.version) bits.push(r.version);
 			bits.push(r.running ? _('running') : _('not running'));
-			if (!r.veth) bits.push(_('veth missing'));
-			state = installed(true, false, bits.join(', '));
-		} else if (arr(r.missing).length) {
-			state = E('span', { 'class': 'label warning' }, _('no: needs %s').format(arr(r.missing).join(', ')));
-		} else {
-			state = E('span', { 'class': 'label notice' }, _('not yet: the install button adds it'));
+			bits.push(r.veth ? _('veth up') : _('veth not yet: created on the first push with an FT WiFi network'));
+			state = installed(r.running, false, bits.join(', '));
 		}
-		const peers = r.installed ? (r.peers > 0 ? _('; %d UniFi access point(s) listed').format(r.peers) : _('; no UniFi access point listed yet (rrb-unifi-setup collect, then peers)')) : '';
+		const peers = (r.learned > 0 || r.listed > 0)
+			? _('; UniFi access points known: %d heard on the LAN, %d listed by hand').format(r.learned || 0, r.listed || 0)
+			: _('; no UniFi access point heard on the LAN yet (they announce every client that joins them)');
 		t.appendChild(E('tr', { 'class': 'tr' }, [
-			E('td', { 'class': 'td' }, 'rrb-unifi'),
+			E('td', { 'class': 'td' }, 'openuf-rrb'),
 			E('td', { 'class': 'td' }, _('optional')),
 			E('td', { 'class': 'td' }, state),
-			E('td', { 'class': 'td' }, _('Fast roaming (802.11r) between this device and genuine UniFi access points: converts hostapd\'s inter-AP key exchange to UniFi\'s framing') + peers)
+			E('td', { 'class': 'td' }, _('Fast roaming (802.11r) between this device and genuine UniFi access points: converts hostapd\'s inter-AP key exchange to UniFi\'s framing, and learns which UniFi access points are on the LAN') + peers)
 		]));
 	}
 	const parts = [ t ];
@@ -242,7 +244,7 @@ function softwareBlock(s) {
 		parts.push(E('p', {}, _('openUF will not start with a basic hostapd build: it rejects the 802.11v option every network from the controller carries and takes the radio down with it. The full build of the same crypto library is suggested, so nothing else on the device changes and no extra flash is used.')));
 	if (missing.length)
 		parts.push(E('p', {}, _('A missing mandatory package stops openUF from running; a missing optional one leaves that feature off. Everything is installed from the OpenWrt package repository, so the device needs internet access for this.')));
-	if (w.full === false || missing.length || (th && th.wanted) || (r && !r.installed))
+	if (w.full === false || missing.length || (th && th.wanted) || (r && r.installed && r.enabled && !r.running && !arr(r.missing).length))
 		parts.push(installButton(w, missing, th, r));
 	return E('div', {}, parts);
 }
