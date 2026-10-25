@@ -1714,6 +1714,27 @@ redirect. firewall4 already pulls in `kmod-nft-nat`.
 - `guestportal: unrecognised guest rule shape`: the controller pushed a rule openUF
   doesn't know. It was not applied.
 
+## 6d. Self-check: is each feature really in effect?
+
+`tools/selfcheck.sh` runs on an adopted AP and checks, one feature at a time, that what the
+controller turned on is actually in place: PPSK VLAN netdevs bridged, OWE in hostapd, schedule
+holds, speed-limit qdiscs, blocker and hardening tables, the mesh station (4-address, joined,
+pin and blacklist), the uplink monitor, the guest portal's tables and listener, the AP-name
+element, and Airtime Fairness. It is read-only: it never writes or reloads anything and sends
+at most one ping.
+
+    sh tools/selfcheck.sh                 # from the source tree install.sh was run from
+    sh tools/selfcheck.sh mesh guest      # only some groups
+
+It is not installed with openUF (the package ships `openuf/` only). Run it from the extracted
+source tree, or copy just that file over: `scp -O tools/selfcheck.sh root@<ap>:/tmp/`.
+
+Each line is `OK`, `FAIL`, `SKIP` (the controller has not turned that feature on: nothing to
+check, not a pass) or `INFO`. The exit status is 1 if anything failed. Many features are
+unit-tested only (⚠️ in the README); a clean run on real hardware is what moves them to ✅. The
+`INFO the real test:` lines name the client-side test to finish the job, such as iperf3 for
+speed limits or joining the guest SSID.
+
 ## 6c. What the AP does on its own since 2026-10-18
 
 These came from upstream's reading of the UniFi AP firmware (UAP BZ2 3.9.27 to 4.0.15,
