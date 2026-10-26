@@ -285,6 +285,51 @@ Formalities the feeds check on submission: `PKG_MAINTAINER`, `PKG_LICENSE:=MIT`,
 `conffiles`, procd init, an executable answering `--version` with `PKG_VERSION`, tabs in the
 JavaScript (`js-beautify -t -a -j -w 110`), a `.pot` under `po/templates`.
 
+## The Setup page (luci-app-openuf, admin/services/openuf/setup, 2026-10-27)
+
+What a router needs before a controller can adopt it, as one page in `setup.sh`'s order,
+each step with a badge from the device's own answer (`getStatus`, `listPresets`,
+`getConvertState`; no new backend method, no new ACL grant):
+
+1. **This device**: the board, the automatic profile match, the profile dropdown (locked
+   while adopted, like Settings); "Custom profile" points at the Settings page.
+2. **Software openUF needs**: hostapd full or basic, the missing packages, and the same
+   install button as the Overview.
+3. **Controller**: one field that takes an address, `address:port` or a full URL, turned
+   into the inform URL the way `setup.sh --controller` does (bare address → port 8080) with
+   a live preview; L2 announce; the reminder to set the controller's Inform Host. The badge
+   follows the daemon live: answering, reached and waiting to be adopted (the 404), or not
+   reached with the reason.
+4. **Region and WiFi** (optional): country override, exclusive WLANs; the note that the
+   country and time zone come from the controller's site settings.
+5. **Access-point mode**: `openuf-convert --check`, and the same convert dialog as
+   Settings, offered last because the device reboots onto a new address.
+6. **Adoption**: live badge and what to click in the controller.
+
+Save & Apply writes steps 1, 3 and 4 into `openuf.main` (seeded from the probe first on a
+tarball install, as Settings does) and the reload trigger restarts openUF. The Overview
+points a not-yet-adopted device at the page. The install button, the convert dialog, the
+seeding and the address parser live in `htdocs/luci-static/resources/openuf/common.js`
+(`'require openuf.common as common'`), shared by Overview, Settings and Setup, so the three
+cannot drift. Settings also gained the two options the loader read but no page offered:
+`uplink_monitor` (follow the controller / always on / always off; unset stays unset, since
+the loader refuses `''` as a boolean) and `uplink_monitor_host`, both now in `probe status`
+so a first save keeps them.
+
+Checked: every shipped script parses (in a browser engine, as CI's `node --check` does),
+the address parser on eleven inputs, the JSON files, the Lua suite. **Not yet rendered in a
+real LuCI**: the first run on a router, or a LuCI VM, is where the pages are seen.
+
+## Releasing from a fork (2026-10-27)
+
+The release workflow builds whichever repository it runs in: the package's download URL is
+substituted with `$GITHUB_REPOSITORY` at build time, so a fork's release downloads its own
+source archive. The committed defaults (`setup.sh` and `update.sh` `OPENUF_REPO`, the
+Makefiles' URLs, the install one-liners in README and USAGE) name `Fantastic792/openUF`, the
+fork this branch is released from; author credits and maintainer lines are unchanged. A fork
+has Actions switched off until its owner enables them (the repository's Actions tab), and
+`setup.sh`'s one-liner reads `main`, so the branch to release must be `main` there.
+
 ## One install path per device (2026-10-19)
 
 A Deco M4R set up with `setup.sh` (then a file install under `/opt/openuf`) and later given

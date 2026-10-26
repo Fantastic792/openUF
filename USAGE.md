@@ -84,7 +84,7 @@ adopted `state.json`, else `conf.lua`'s default) actually is `https://`.
 ### The guided installer (`setup.sh`)
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh
+wget -qO- https://raw.githubusercontent.com/Fantastic792/openUF/main/setup.sh | sh
 ```
 
 This is the path to use unless you have a reason not to. It does everything in this
@@ -286,13 +286,13 @@ the same lean tree a release would ship:
 
 ```sh
 # On the OpenWrt device
-wget -O openuf-src.tar.gz https://codeload.github.com/yesrab/openUF/tar.gz/main
+wget -O openuf-src.tar.gz https://codeload.github.com/Fantastic792/openUF/tar.gz/main
 tar xzf openuf-src.tar.gz && cd openUF-main
 sh install.sh install
 ```
 
 Releases are tagged `vX.Y.Z`; each one publishes a pre-stripped `openuf-X.Y.Z.tar.gz`
-plus its `.sha256` via GitHub Actions under `https://github.com/yesrab/openUF/releases`.
+plus its `.sha256` via GitHub Actions under `https://github.com/Fantastic792/openUF/releases`.
 It is the archive the OpenWrt package builds from, it unpacks to `openuf-X.Y.Z/`, and it
 installs the same way. If you're
 working from a git checkout instead (e.g. for development), the old transfer-then-install

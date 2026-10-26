@@ -185,6 +185,9 @@ jobs:
           sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$SHA256/" package/openuf/Makefile
           # The committed URL says v<version>; a tag made by hand may lack the v.
           sed -i "s|/releases/download/[^/]*/|/releases/download/$TAG/|" package/openuf/Makefile
+          # And the repository this run is in: a fork's release must download
+          # its own archive, not the one the committed URL names.
+          sed -i "s|https://github.com/[^/]*/[^/]*/releases/|https://github.com/$GITHUB_REPOSITORY/releases/|" package/openuf/Makefile
           grep -E '^PKG_(VERSION|HASH|SOURCE_URL):=' package/openuf/Makefile
       - name: Build with the OpenWrt SDK
         uses: openwrt/gh-action-sdk@main

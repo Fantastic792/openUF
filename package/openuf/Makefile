@@ -17,7 +17,7 @@ PKG_RELEASE:=1
 # substitutes PKG_VERSION and PKG_HASH from the tag it is building; a feed
 # submission carries the real hash.
 PKG_SOURCE:=openuf-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://github.com/yesrab/openUF/releases/download/v$(PKG_VERSION)/
+PKG_SOURCE_URL:=https://github.com/Fantastic792/openUF/releases/download/v$(PKG_VERSION)/
 PKG_HASH:=skip
 
 PKG_MAINTAINER:=Yesrab Ali <yesrab.ali111@gmail.com>
@@ -31,7 +31,7 @@ define Package/openuf
   CATEGORY:=Network
   SUBMENU:=Wireless
   TITLE:=UniFi access point emulation
-  URL:=https://github.com/yesrab/openUF
+  URL:=https://github.com/Fantastic792/openUF
   DEPENDS:=+lua +luabitop +lua-cjson +luasocket +lua-openssl +libuci-lua +iw \
 	+lldpd +ip-bridge +hostapd-utils +usteer +nftables +kmod-nft-bridge \
 	+tc-tiny +kmod-ifb +kmod-sched-act-police

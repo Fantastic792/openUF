@@ -3,7 +3,7 @@
 #
 # One command, run over SSH on the device itself:
 #
-#   wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh
+#   wget -qO- https://raw.githubusercontent.com/Fantastic792/openUF/main/setup.sh | sh
 #
 # It interviews you, converts the router into a pure access point, installs
 # every dependency openUF needs, installs openUF with a hardware profile that
@@ -42,7 +42,7 @@ VERSION="1.1"
 # editing this file:
 #   OPENUF_REPO=owner/repo  OPENUF_REF=branch-or-tag  sh setup.sh
 #   OPENUF_SRC=/root/openUF sh setup.sh          # a tree already on the device
-OPENUF_REPO=${OPENUF_REPO:-yesrab/openUF}
+OPENUF_REPO=${OPENUF_REPO:-Fantastic792/openUF}
 OPENUF_REF=${OPENUF_REF:-main}
 OPENUF_SRC=${OPENUF_SRC:-}
 OPENUF_TARBALL_URL=${OPENUF_TARBALL_URL:-"https://codeload.github.com/$OPENUF_REPO/tar.gz/$OPENUF_REF"}

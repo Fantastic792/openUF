@@ -1,6 +1,6 @@
 # openUF
 
-[![Tests](https://github.com/yesrab/openUF/actions/workflows/test.yml/badge.svg)](https://github.com/yesrab/openUF/actions/workflows/test.yml)
+[![Tests](https://github.com/Fantastic792/openUF/actions/workflows/test.yml/badge.svg)](https://github.com/Fantastic792/openUF/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Lua 5.1+](https://img.shields.io/badge/Lua-5.1%2B-blue.svg)](https://www.lua.org/)
 
@@ -261,7 +261,7 @@ installed and the flash has room to spare. See USAGE.md § "The device page".
 One command on the device, over SSH:
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh
+wget -qO- https://raw.githubusercontent.com/Fantastic792/openUF/main/setup.sh | sh
 ```
 
 `setup.sh` is the whole conversion, guided: it identifies the board, asks what it
@@ -313,7 +313,7 @@ Everything it asks can also be passed as an option, so the same script drives an
 unattended install:
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/yesrab/openUF/main/setup.sh | sh -s -- \
+wget -qO- https://raw.githubusercontent.com/Fantastic792/openUF/main/setup.sh | sh -s -- \
     --yes --controller 10.0.0.5 --modelmap jiorouter-ax6000-jidu6101 --no-reboot
 ```
 
@@ -332,7 +332,7 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 #    tree; install.sh comment-strips it on the way in. A tagged release
 #    (vX.Y.Z) publishes a pre-stripped openuf-X.Y.Z.tar.gz under Releases
 #    instead; it unpacks to openuf-X.Y.Z/ and installs the same way.
-wget -O openuf-src.tar.gz https://codeload.github.com/yesrab/openUF/tar.gz/main
+wget -O openuf-src.tar.gz https://codeload.github.com/Fantastic792/openUF/tar.gz/main
 tar xzf openuf-src.tar.gz && cd openUF-main
 sh install.sh install
 #    Re-running this later upgrades in place and KEEPS the device's conf.lua

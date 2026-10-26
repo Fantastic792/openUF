@@ -11,7 +11,7 @@ LUCI_TITLE:=LuCI support for openUF (UniFi AP emulation)
 LUCI_DESCRIPTION:=A dashboard as LuCI's landing page (health, network path, throughput, radios, clients, controller), overview, settings and log for openUF, and the device page that replaces LuCI's front door once openUF manages the box: status for anyone on the network, settings behind the root password, LuCI one hidden step away.
 LUCI_DEPENDS:=+luci-base +openuf +uhttpd-mod-ucode
 LUCI_PKGARCH:=all
-LUCI_URL:=https://github.com/yesrab/openUF
+LUCI_URL:=https://github.com/Fantastic792/openUF
 
 PKG_VERSION:=0.10.0
 PKG_RELEASE:=1
