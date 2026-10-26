@@ -31,7 +31,8 @@
 	Same order as the JIDU6101 and the OPPOSITE of the Archer C5 v1 map.
 	Nothing in openUF depends on it (each radio's band is read from its own UCI
 	`band`/`hwmode`), but it is the first thing to check against a
-	`uci show wireless` dump. ⚠️ Confirm with: `iw phy phy0 info | grep -m1 MHz`.
+	`uci show wireless` dump. ⚠️ Confirm with: `iw phy phy0 info | grep -m1 '\* [0-9].* MHz'` (a bare `grep -m1 MHz`
+	hits the HE capability line "STBC Tx <= 80MHz" first on an 802.11ax radio).
 
 	Like the JIDU6101 this is a **DSA** board, not swconfig, which decides
 	which of openUF's two port-reporting shapes applies -- see

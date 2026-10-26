@@ -330,11 +330,15 @@ def check_profile(r, sec):
         r.ok("LED green:status exists (Locate, LED toggle)")
     else:
         r.fail("no green:status LED; available: %s -- fix dev.conf.led" % " ".join(leds))
-    dfs = log_matching(sec, r"start_dfs_cac\(\) failed|AP-DISABLED")
+    # AP-DISABLED alone is not a DFS failure: hostapd logs it for every BSS on
+    # every ordinary `wifi reload` (each config push), so matching it failed
+    # every AP that had been provisioned (QEMU test VM, 2026-10-27). A failed
+    # CAC is start_dfs_cac() failed, or the interface leaving DFS for DISABLED.
+    dfs = log_matching(sec, r"start_dfs_cac\(\) failed|DFS->DISABLED")
     if dfs:
         show_log(r, dfs, "fail", "a radio went down on DFS/CAC")
     else:
-        r.ok("no DFS CAC failure or AP-DISABLED in the log")
+        r.ok("no DFS CAC failure in the log")
 
 
 def check_controller_device(r, dev, mac):

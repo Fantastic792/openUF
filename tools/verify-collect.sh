@@ -66,7 +66,10 @@ echo "### radios"
 for p in /sys/class/ieee80211/*; do
 	[ -d "$p" ] || continue
 	phy=${p##*/}
-	echo "$phy $(iw phy "$phy" info 2>/dev/null | grep -m1 'MHz' | sed 's/^[[:space:]]*//')"
+	# The first FREQUENCY line, "* 2412.0 MHz [1] ...": a bare `grep -m1 MHz`
+	# hit the HE capability lines ("STBC Tx <= 80MHz"), which iw prints before
+	# the frequency list on any 802.11ax radio (seen on the QEMU test VM).
+	echo "$phy $(iw phy "$phy" info 2>/dev/null | grep -m1 -E '^[[:space:]]*\* [0-9]+(\.[0-9]+)? MHz' | sed 's/^[[:space:]]*//')"
 done
 uci -q show wireless 2>/dev/null | grep -E '^wireless\.[^.]+\.(band|hwmode|disabled)=' | grep -v 'openuf_'
 
@@ -114,7 +117,7 @@ echo "### log"
 # Every daemon line carries one of these prefixes (io.stderr through procd),
 # plus Lua's own "lua: <file>:<line>:" for an error that escaped a pcall.
 logread 2>/dev/null \
-	| grep -E '(inform|backhaul|uplinkmon|guestportal|ucihelper|unhandled|announce|stun|shaper|switchvlan|netconfig|bcfilter|l2guard|wlansched|sysconf): |lua: |traceback|AP-DISABLED|DFS-CAC|start_dfs_cac' \
+	| grep -E '(inform|backhaul|uplinkmon|guestportal|ucihelper|unhandled|announce|stun|shaper|switchvlan|netconfig|bcfilter|l2guard|wlansched|sysconf): |lua: |traceback|AP-DISABLED|DFS-CAC|DFS->|start_dfs_cac' \
 	| tail -n 600
 
 echo "### selfcheck"

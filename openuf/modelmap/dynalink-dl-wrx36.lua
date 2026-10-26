@@ -56,7 +56,8 @@
 	(target/linux/qualcommax/dts/ipq8071-ap8220.dts:54,61,
 	ipq8072-zbt-z800ax.dts:85,92, ipq8074-rax120v2.dts:82,88). Nothing here
 	depends on it: band is read from each radio's own UCI `band`.
-	⚠️ Confirm with `iw phy phy0 info | grep -m1 MHz` on the first unit.
+	⚠️ Confirm with `iw phy phy0 info | grep -m1 '\* [0-9].* MHz'` on the first unit (a bare
+	`grep -m1 MHz` hits the HE capability line "STBC Tx <= 80MHz" first).
 
 	Presented to the controller as a U6-InWall (ufmodel/u6iw.lua), the
 	identity the JioRouter maps use and the one validated end to end: WiFi 6
