@@ -45,6 +45,11 @@ sh tools/deploy.sh <ap-ip>...           # OPENUF_SSH_PASS=... for a password-pro
 # which on a device that also has the package installed is the dormant copy.
 sh tools/hotpatch.sh [--repush] <ap-ip>  # --repush blanks cfgversion for a full config push
 
+# Judge a deployed AP from both sides: selfcheck.sh + logread over ssh
+# (tools/verify-collect.sh) and the controller's stat/device record. Read-only;
+# UNIFI_API_KEY, or UNIFI_USER (+ password prompt). Report in verify-<ap>-<time>/
+python3 tools/verify.py --router <ap-ip> --controller https://<controller>:8443
+
 # Shell syntax — BOTH, every time (see "Shell code" below)
 bash -n setup.sh && dash -n setup.sh
 ```

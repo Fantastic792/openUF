@@ -6,6 +6,12 @@ openuf-*.tar.gz
 openuf-*.tar.gz.sha256
 data/
 
+# tools/verify.py reports: a device's logs and controller records
+verify-*/
+
+# Python's bytecode cache, left by running tools/verify.py or test_controller.py
+__pycache__/
+
 # macOS Finder metadata. Written into any directory the Finder has merely
 # looked at, so it turns up in docs/ as readily as the root.
 .DS_Store
