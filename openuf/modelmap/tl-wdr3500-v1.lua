@@ -13,7 +13,7 @@
 	the AES-GCM backend (lua-openssl -> libopenssl3) needs ~1.7 MB compressed
 	and a stock build leaves ~1.6 MB of overlay, which no crypto backend fits
 	in. It needs a custom image with lua-openssl, luasocket, lua-cjson and
-	luabitop built into squashfs -- see README's hardware requirements.
+	luabitop built into squashfs -- see REFERENCE.md's hardware requirements.
 
 	Even then, expect nftables NOT to fit alongside everything else (~490 KB
 	with its kernel modules). Without it these two features are unavailable and

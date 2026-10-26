@@ -41,7 +41,7 @@ return baseclass.extend({
 			if (c[k] != null && c[k] !== '')
 				uci.set('openuf', 'main', k, String(c[k]));
 		const flags = [ 'use_only_unifi_wlan', 'l2_announce', 'rrm_enrichment', 'debug_dump_requests',
-			'uplink_monitor' ];
+			'uplink_monitor', 'unifi_ft_interop' ];
 		for (const k of flags)
 			if (c[k] != null)
 				uci.set('openuf', 'main', k, c[k] ? '1' : '0');
@@ -55,15 +55,24 @@ return baseclass.extend({
 	// 802.11v option every controller WLAN carries and takes the radio down.
 	// openUF refuses to start until a full build is there; this button runs
 	// `openuf deps --install`, which does the swap and installs whatever else
-	// is missing, then reloads the page.
-	installButton: function(w, missing) {
+	// is missing, then reloads the page. th and r are deps --check's theme
+	// and rrb_unifi (the 802.11r translator): with nothing to install, a
+	// translator that should run and does not is what the button is for.
+	installButton: function(w, missing, th, r) {
 		const swap = (w.full === false);
 		const choices = arr(w.choices);
 		const select = E('select', { 'class': 'cbi-input-select' },
 			choices.map(c => E('option', { 'value': c, 'selected': (c == w.suggested) ? '' : null }, c)));
-		const label = swap
-			? (missing.length ? _('Replace hostapd with the full build and install the missing packages') : _('Replace hostapd with the full build'))
-			: (missing.length ? _('Install the missing packages') : _('Install the Halo theme'));
+		const startRrb = !!(r && r.installed && r.enabled && !r.running && !arr(r.missing).length);
+		let label;
+		if (swap)
+			label = missing.length ? _('Replace hostapd with the full build and install the missing packages') : _('Replace hostapd with the full build');
+		else if (missing.length)
+			label = _('Install the missing packages');
+		else if (startRrb)
+			label = _('Start the 802.11r translator');
+		else
+			label = _('Install the Halo theme');
 		const btn = E('button', { 'class': 'btn cbi-button cbi-button-positive', 'click': function() {
 			const chosen = swap ? select.value : null;
 			ui.showModal(label, [

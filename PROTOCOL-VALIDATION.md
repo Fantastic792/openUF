@@ -591,6 +591,13 @@ Two things real hardware does that the validation container had to be taught:
   the admin-configured Device SSH credentials — correct behavior, because `announce.lua`'s
   `IsDefault` byte (`0x17` in the TLV blob, `make_blob_17_1a`) correctly declares the device
   unadopted.
+- The reverse lesson, learned on a device: dropbear checks the account's shell against
+  `/etc/shells` **before** the password (`getusershell(3)`), and OpenWrt ships that file with
+  `/bin/ash` alone. The forced shell was not listed, so on AP2 (2026-10-25) the gateway's three
+  SSH attempts in twelve seconds each ended in `User 'ubnt' has invalid shell, rejected` and the
+  mobile app asked for root credentials instead ("advanced adoption"). The container's OpenSSH
+  has no such check, which is why the account passed here and never on a device until
+  `hook/openuf-bootstrap.sh` registered the shell.
 
 `mgmt_url` is the **web UI deep link** (`https://host:8443/manage/site/default`), *not* an
 alias for `inform_url`. Treating them as the same key makes the device overwrite its working
@@ -2481,6 +2488,127 @@ controller's `system.properties` (and its Inform Host override), a published por
 devices to the wrong one.
 
 
+## Adopted from d-malinowski/openUF (`pr/unifi-ft-interop`), 2026-10-25
+
+One commit (`94ac182`, 2026-10-22) from a third fork, not from upstream: `ftinterop.lua`, a
+hook in `apply_config`, the `unifi_ft_interop` switch, seven tests. Re-implemented here in
+this tree's layout (the switch also reaches `openuf.main`, `probe export` and both LuCI pages,
+which upstream does not have). One deliberate difference: **they ship the switch off, this
+tree ships it on for new installations** (the user's decision, 2026-10-25). Without the
+translator the switch changes only the mobility-domain formula (UniFi's, which every openUF AP
+still shares) and FT-PSK's key path (a pull over RRB instead of local derivation, the path
+FT-SAE always took); `ft_iface` is written only when the veth exists. The one site that should
+set it off is one with genuine UniFi APs and no translator, where clients would try a fast
+transition towards those APs and fall back to a full reconnect. To keep an AP without the
+translator from logging a diagnosis of every missing piece on every push, `ftinterop.lua`
+checks for `/etc/config/rrb-unifi` or `/etc/init.d/rrb-unifi` and otherwise says one line per
+FT WLAN. **Every piece of hardware evidence in this section is theirs**:
+a BT Home Hub 5A (lantiq/xrx200, OpenWrt 24.10.4 then 25.12.6, `wpad-mbedtls`) and a U7 Lite
+on UniFi 8.7.11, adopted into a UCG Ultra, a Samsung S24 walking between them. Nothing has run
+from this lab, which has no genuine UniFi AP (REVERSE-ENGINEERING.md backlog row 25).
+
+### 802.11r with genuine UniFi APs
+
+The claim this tree made until now, "FT between openUF and a real UAP cannot work, because
+real UAPs learn their peers through a Ubiquiti-only hostapd extension", holds only without a
+translator. Their captures on both APs show the two hostapds speak the same protocol with a
+different frame layout:
+
+```
+stock hostapd: 00 13 74 00 01 | type | auth_len (LE16) | auth TLVs | AES-SIV(enc TLVs)
+UniFi:         00 13 74 00 01 | type | src AP (6) | dst AP (6) | auth_len | auth TLVs | AES-SIV(...)
+```
+
+UniFi's frames are exactly 12 bytes longer (96/142 vs 84/130 bytes): it sends RRB from the
+AP's Ethernet MAC rather than the BSSID, so it names both APs in the payload. **The crypto is
+identical**: every captured frame from both vendors decrypted offline with the same key,
+derived as hostapd's `rkh_derive_key()` does (`HMAC-SHA256(iapp_key, "FT OLDKEY\0" || 0x01)`,
+AES-SIV AD = [src BSSID, auth TLVs, type]). Their `rrb-unifi` daemon (ucode, GPL-3.0) inserts
+or strips the 12 bytes between a veth (hostapd's `ft_iface`) and the LAN bridge. Before it,
+FT failed in both directions: the phone stuck to one AP or fell back to a full 4-way handshake.
+The UniFi AP's log for a stock frame is `FT: RRB-OUI frame too short`.
+
+| Their claim | Their evidence | Here |
+|---|---|---|
+| UniFi firmware's mobility domain is the first two bytes of SHA1("salt" .. SSID zero-padded to 32 bytes) | ✅ Reproduces the `mobility_domain` in the U7's own hostapd config for the test SSID ("corp" → `5de5`) | `ftinterop.mobility_domain`, pinned by test; `derive_mobility_domain` stays openUF's own and different, so a client never tries FT across the two without the translator |
+| OpenWrt's `ft_psk_generate_local=1` default for PSK writes no key holders, so a UAP pulling a PMK-R1 gets no answer; `0` plus explicit `r0kh`/`r1kh` for the UAP's BSSes keyed with `iapp_key` (the controller sends both APs the same one, confirmed by fingerprint) and `nas_identifier` = own BSSID (UniFi's R0KH-ID convention, from which the UAP derives the pull's destination) | ✅ **Pull, UAP → OpenWrt**: sequence sync (types 4/5) then pull request/response (1/2) in the translator log, `AP-STA-CONNECTED … auth_alg=ft` with no 4-way, both radios. ✅ **Push, OpenWrt → UAP**: type 3 to both U7 BSSes, accepted; the walk shows `auth_algo: ft` in the U7's log, associated in 10–20 ms | The one place this tree sets `ft_psk_generate_local` (CLAUDE.md's rule gets its exception). `nasid` is written when the VAP has a live netdev; OpenWrt's `hostapd.uc` (24.10 and 25.12) defaults `nas_identifier` to the same value, so a WLAN's first push is right too |
+| Through openUF (`unifi_ft_interop = true`, HH5A adopted into a UCG Ultra), the running hostapd config carries exactly the FT options of the hand-made config | ✅ U7 → HH5A `auth_alg=ft`; ✅ HH5A → U7, WiFiman reports "AP roaming". One full reconnect followed a disconnect with no FT attempt logged: not a failed fast transition, cause not established | Same options generated; nothing observed here |
+| The translator's roam announcements (`UBNT_ROAM`, ethertype `0x890d` to `01:80:c2:00:00:1c`: `01 f0 1a 00 \| sender BSSID \| wlan_id (= mobility domain) \| AES key wrap (RFC 3394, the r0kh key) of [time LE32, client MAC]`) make the UniFi AP drop a client the moment it arrives on OpenWrt, so the controller lists the roam on time with its Fast Roaming tag | Their 1.3 walk tests with openUF | Lives entirely in the translator (it reads the wildcard `r0kh` key from the running hostapd config); openUF writes nothing for it |
+
+**Checked here, 2026-10-25, in the QEMU VM** (OpenWrt 25.12.6 armsr, two mac80211_hwsim
+radios, internet over its WAN; no controller, no UniFi AP). `openuf deps --install
+--only-rrb-unifi` on a box without the translator: installed `ucode-mod-socket` and
+`kmod-veth`, fetched the four files from the fork (`yesrab/unifi-openwrt-roaming` at `main`,
+translator 1.3), the setup tool wrote `network.vft`/`ftlink`/`ftpeer`, the guarded network
+reload created `vft0`/`vft1` and the confirmation file landed, the service was enabled and
+started, four lines went into `/etc/sysupgrade.conf`; `--check` then reported
+`installed/veth/running` true. A second run said "current" and changed nothing. Then the
+interop option set by hand on the hwsim AP's `wifi-iface` (`ieee80211r`, `mobility_domain
+5de5`, `ft_psk_generate_local 0`, `pmk_r1_push 1`, one peer plus the wildcards in
+`r0kh`/`r1kh`, `hostapd_bss_options 'ft_iface=vft0'`): the BSS came up; `/var/run/hostapd-
+phy0.conf` carried the generator's own `ft_iface=br-lan` followed by `ft_iface=vft0` from the
+raw option, `wpa_key_mgmt=WPA-PSK FT-PSK`, the key-holder lines and `reassociation_deadline=
+20000` (25.12's default); `/proc/net/packet` showed hostapd's `0x88b7` socket bound to
+`vft0`'s ifindex (and the translator's two on `vft1` and `br-lan`); `rrb-unifi check` said
+`phy0-ap0 ... ft_iface=br-lan,vft0 -> served, BSSID 02:00:00:00:00:00, hostapd up`, `LAN
+interface: br-lan (derived)`, `UBNT_ROAM on`, `check OK`. The install path and the OpenWrt
+side are therefore proven on the target release; what remains unproven here is the roam
+itself against a UniFi AP (REVERSE-ENGINEERING.md backlog row 25).
+
+**Made part of openUF, 2026-10-25 (later the same day).** The translator is no longer an
+external install: d-malinowski's `rrb-unifi.uc` (1.3, `767a28c`) is vendored as
+`openuf/rrb/rrb-unifi.uc` (`openuf/rrb/README.md`; its GPL-3.0-or-later is why the whole
+repository moved from MIT to GPL-3.0-or-later the same day, NOTICE keeping jonasevcik's MIT
+notice) and runs as the
+`openuf-rrb` service, with two changes marked `// openUF:` in the file: with `RRB_WAIT=0` it
+waits for the veth pair and for a BSS on it instead of exiting, and it records every UniFi
+BSSID it hears on the LAN in `/var/run/openuf/rrb-peers.json`, with the WLAN's mobility
+domain once a roam announcement verified with that WLAN's key names it. openUF creates the
+veth pair itself (`ucihelper.ensure_ft_veth`, netifd sections in `/etc/config/network`, on
+the first config push with an FT WLAN; removed on Forget), keeps the learned peers in
+`state.json` and forgets `cfgversion` so the controller re-pushes and they become key holders
+(inform's `_rrb_peers_tick`, at most once every ten minutes), restarts the daemon after a push
+that put a BSS on the veth, and only ever points hostapd at the veth while the service is
+installed and enabled. The setup tool's `collect`/`verify`/`peers` live on as `openuf rrb`.
+The learning replaces their SSH-into-the-UAP step on the assumption their own data supports:
+a UniFi AP's R0KH-ID is its BSSID without colons (`nas_identifier=$bssid` in UniFi 8.7.11's
+hostapd config, which their `collect` read). Unverified here: that a UniFi AP's roam
+announcements reach this AP's LAN bridge on a real site (their 1.3 walk tests say they did,
+with the standalone translator). The fork `yesrab/unifi-openwrt-roaming` is not used.
+
+**The built-in translator checked in the VM, 2026-10-25.** Same VM, from a clean slate (the
+standalone translator removed, its veth and sections deleted). The tree pushed with
+`vm/install.sh`: `openuf-rrb` enabled and running, the daemon logging `waiting for the veth
+pair vft0/vft1` since nothing had created it; `openuf rrb status` and `openuf deps --check`
+agreeing (installed, enabled, running, no veth, no peers). Then the push's two steps by hand:
+`ucihelper.ensure_ft_veth` wrote `network.openuf_ftveth` (veth, `vft0`/`vft1`) with the two
+proto-none interfaces, reloaded the network and returned true with `vft0` up, upon which the
+daemon logged `waiting for a hostapd BSS on ft_iface=vft0`; `ftinterop.apply` produced the
+expected options (UniFi domain `5de5`, `ft_psk_generate_local 0`, a learned peer plus the
+wildcards, `hostapd_bss_options ft_iface=vft0`, the deadline deleted, the nasid note since
+the BSSID was not given), written to the hwsim AP and reloaded; after the restart
+`apply_config` performs, the daemon reported `running: hostapd side vft1 (ft_iface vft0),
+lan side br-lan, BSSes: phy0-ap0=02:00:00:00:00:00`, `check OK`, `UBNT_ROAM on`, and
+`/proc/net/packet` had hostapd's `0x88b7` socket on `vft0`'s ifindex with the daemon's on
+`vft1` and `br-lan`. A peers file in the daemon's format was read back by `openuf rrb peers`,
+`ftinterop.learned` and the deps JSON (`learned: 2`). `ucihelper.forget` removed the three
+network sections, `vft0` disappeared, the daemon exited on `recv(): Network is down` and
+procd respawned it straight back into `waiting for the veth pair`. One defect found and fixed
+by this run: two apostrophes inside the single-quoted package table of `openuf-deps.sh`
+truncated the table on the device (every `--check` printed `PACKAGES: parameter not set`);
+the rows are reworded. Not checked here, for want of a UniFi AP: a roam, a real UBNT_ROAM
+announcement reaching the peers file, and `openuf rrb collect`/`verify` against a UAP.
+
+Not adopted as-is: nothing from the commit was left out. Two of this tree's choices differ in
+emphasis rather than behaviour. The `nasid` log line says hostapd's default covers a push with
+no BSSID yet, where theirs reads as a gap. And the raw `hostapd_bss_options 'ft_iface=vft0'`
+is kept on purpose even though 25.12 has a first-class `ft_iface` UCI option: the translator
+derives a BSS's LAN bridge from the `ft_iface=` line the generator writes before the override
+and its `check` tells the user to set `hostapd_bss_options`, and 24.10 has no such option.
+`reassociation_deadline` goes back to OpenWrt's default under the switch (20000 TU on 25.12,
+1000 on 24.10), the timing their validation ran with; whether UniFi's 3000 would do as well is
+untested and the only open question the adoption adds.
+
 ## Feature matrix
 
 Every controller-UI control exercised against a live openUF device. "Confirmed" means driven
@@ -2559,6 +2687,7 @@ through the real UI with the resulting wire payload captured or the effect verif
 | 69 | `cmd: scan` | `{type, mode, freq?, radio_name?}` from the controller's scan request | ⚠️ Adopted 2026-10-18 (upstream's cmd audit), mapped onto this tree's chunked sweep: the named radio, the band of the frequency, or every radio |
 | 70 | Real UniFi AP as a sibling | vendor element `00:15:6d` type 1, TLV `0x81` = serialno → `is_unifi`/`serialno` | ⚠️ Adopted 2026-10-18; upstream saw a neighbour's current-firmware AP. No UniFi AP on this site |
 | 71 | Hygiene from upstream's audit | `bridge openuf_usteer` (usteerd's sync kept off the VAPs), `l2guard.reconcile_hairpin`, one `nft -f` transaction per table, mt76 counter underflow read as 0, two random 11k-scan times (the firmware's own spread, kept), `util.lua` sysfs reads, per-cycle garbage collection. Not taken, by decision: the LLDP and sibling-tag caches and the hourly beacon requests -- reports here follow reality on the next heartbeat | ⚠️ Adopted 2026-10-18; all of it upstream's evidence (both their boards). Not measured on a JioRouter |
+| 72 | 802.11r with genuine UniFi APs (`unifi_ft_interop`) | UniFi's mobility domain (first two bytes of SHA1("salt" .. SSID padded to 32)), `ft_psk_generate_local 0`, `nasid` = BSSID, per-peer `r0kh`/`r1kh` from `/etc/config/rrb-unifi` plus the wildcards, `hostapd_bss_options 'ft_iface=vft0'` when the veth exists; the external rrb-unifi translator reframes the RRB frames | ⚠️ Adopted 2026-10-25 from d-malinowski/openUF; their hardware evidence only (BT Home Hub 5A ↔ U7 Lite, FT-PSK, both directions). On by default for new installations (the user's decision; d-malinowski ships it off); set to `0` the section is byte-identical to before. ✅ The install path (`openuf deps --install --only-rrb-unifi` from the fork, veth, service) and the hostapd side (BSS up with the option set, the `0x88b7` socket on `vft0`, `rrb-unifi check OK`) proven in the 25.12.6 QEMU VM on 2026-10-25. **The roam against a UniFi AP is not run here: the lab has none** (REVERSE-ENGINEERING.md backlog row 25) |
 
 ---
 

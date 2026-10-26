@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2026 Yesrab Ali <yesrab.ali111@gmail.com>
 #
-# This is free software, licensed under the MIT License.
+# This is free software, licensed under the GNU General Public License v3.0 or later.
 # See /LICENSE for more information.
 #
 
@@ -21,8 +21,11 @@ PKG_SOURCE_URL:=https://github.com/Fantastic792/openUF/releases/download/v$(PKG_
 PKG_HASH:=skip
 
 PKG_MAINTAINER:=Yesrab Ali <yesrab.ali111@gmail.com>
-PKG_LICENSE:=MIT
-PKG_LICENSE_FILES:=LICENSE
+# The whole tree, the vendored 802.11r translator included (NOTICE lists the
+# copyright holders, and carries the MIT notice for the parts from the
+# original openUF).
+PKG_LICENSE:=GPL-3.0-or-later
+PKG_LICENSE_FILES:=LICENSE NOTICE
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -34,7 +37,7 @@ define Package/openuf
   URL:=https://github.com/Fantastic792/openUF
   DEPENDS:=+lua +luabitop +lua-cjson +luasocket +lua-openssl +libuci-lua +iw \
 	+lldpd +ip-bridge +hostapd-utils +usteer +nftables +kmod-nft-bridge \
-	+tc-tiny +kmod-ifb +kmod-sched-act-police
+	+tc-tiny +kmod-ifb +kmod-sched-act-police +ucode-mod-socket +kmod-veth
   PKGARCH:=all
 endef
 
@@ -46,6 +49,10 @@ define Package/openuf/description
   Configuration is /etc/config/openuf (a hardware profile from the shipped
   presets or a custom one, the identity to present, the inform URL). The web
   front end is luci-app-openuf.
+
+  Includes the 802.11r translator for roaming between this AP and genuine
+  UniFi APs (the openuf-rrb service, see /usr/lib/openuf/rrb/README.md),
+  which needs ucode-mod-socket and kmod-veth.
 
   Needs a FULL wpad build (wpad-openssl, wpad-wolfssl or wpad-mbedtls; a
   wpad-basic-* build rejects the 802.11v option every controller WLAN
@@ -100,8 +107,12 @@ define Package/openuf/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(LN) ../lib/openuf/hook/openuf-convert.sh $(1)/usr/sbin/openuf-convert
 	$(LN) ../lib/openuf/hook/openuf-deps.sh $(1)/usr/sbin/openuf-deps
+	$(INSTALL_DIR) $(1)/usr/lib/openuf/rrb
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/rrb/rrb-unifi.uc $(1)/usr/lib/openuf/rrb/
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/openuf/rrb/README.md $(1)/usr/lib/openuf/rrb/
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/etc/init.d/openuf $(1)/etc/init.d/openuf
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/etc/init.d/openuf-rrb $(1)/etc/init.d/openuf-rrb
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/openuf.config $(1)/etc/config/openuf
 	$(INSTALL_DIR) $(1)/etc/openuf

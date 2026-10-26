@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2026 Yesrab Ali <yesrab.ali111@gmail.com>
 #
-# This is free software, licensed under the MIT License.
+# This is free software, licensed under the GNU General Public License v3.0 or later.
 # See /LICENSE for more information.
 #
 
@@ -15,8 +15,20 @@ LUCI_URL:=https://github.com/Fantastic792/openUF
 
 PKG_VERSION:=0.10.0
 PKG_RELEASE:=1
-PKG_LICENSE:=MIT
+PKG_LICENSE:=GPL-3.0-or-later
 PKG_MAINTAINER:=Yesrab Ali <yesrab.ali111@gmail.com>
+
+# No csstidy. luci.mk runs every .css under htdocs through csstidy
+# --template=highest, which merges selectors that share declarations across
+# the whole file (the cascade order goes with it) and rebuilds margin/padding
+# shorthands by splitting on spaces -- `margin: calc(-1 * var(--card-py)) ...`
+# came out as `margin:calc(-1;`, an unclosed paren that made the browser
+# discard the five hundred rules after it. Seen on the v0.2.2 packages (AP2,
+# 2026-10-26): an unstyled login page and a sidebar that could not be used.
+# luci-theme-footstrap opts out for the same reason. jsmin stays: its output
+# for these files is byte-for-byte what the device ran, and it keeps template
+# literals and regex literals intact (checked with luci-base's jsmin.c).
+LUCI_MINIFY_CSS:=0
 
 # Both scripts must be defined before luci.mk is included: it calls
 # BuildPackage at its end, and luci.mk's own postinst is used only when the

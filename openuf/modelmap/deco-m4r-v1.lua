@@ -40,7 +40,7 @@
 	    link, eth0, swconfig-era; TWO sockets wired, physical ports 3 and 5
 	  • 16 MB SPI-NOR, firmware partition 0xe00000 (14 MiB); OpenWrt's image
 	    limit is 13824k. ⚠️ Free overlay after a stock image is unmeasured,
-	    but README's 5 MB for lua-openssl should fit, as on the Archer A7
+	    but REFERENCE.md's 5 MB for lua-openssl should fit, as on the Archer A7
 	  • one case light with two GPIO channels: green (power), blue (5 GHz)
 	  • no USB
 	Expected radio order: radio0 = 5 GHz (ath10k), radio1 = 2.4 GHz (ath9k).

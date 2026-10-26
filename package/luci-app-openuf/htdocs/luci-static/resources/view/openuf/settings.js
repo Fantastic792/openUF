@@ -253,6 +253,11 @@ return view.extend({
 		o.depends('use_only_unifi_wlan', '1');
 		o.datatype = 'uciname';
 
+		o = s.taboption('features', form.Flag, 'unifi_ft_interop', _('Fast roaming with genuine UniFi access points'),
+			_('Lets clients roam between this device and real UniFi access points without a full reconnect (802.11r). Needs the rrb-unifi translator installed on this device and its list of UniFi access points. Without the translator openUF access points still roam among themselves; turn this off only on a site that has real UniFi access points and no translator, where clients would otherwise try a fast roam towards them and fall back to a full reconnect.'));
+		o.default = '1';
+		o.rmempty = false;
+
 		o = s.taboption('features', form.Flag, 'rrm_enrichment', _('Ask clients to report nearby networks'),
 			_('Fills the controller\'s Environment view without taking the radios off their channels: one capable client at a time is asked to look around and report what it sees (802.11k).'));
 		o.default = '1';

@@ -109,7 +109,7 @@ function deviceBlock(s) {
 // The install button (openuf deps --install) lives in openuf/common.js,
 // shared with the Setup page. Rendered once, outside the polled block (see
 // render()).
-const installButton = function(w, missing) { return common.installButton(w, missing); };
+const installButton = function(w, missing, th, r) { return common.installButton(w, missing, th, r); };
 
 function softwareBlock(s) {
 	const d = s.deps || {};
@@ -167,13 +167,42 @@ function softwareBlock(s) {
 			E('td', { 'class': 'td' }, _('The Halo look for LuCI, matching the device page; installed only on devices with flash to spare'))
 		]));
 	}
+	// The 802.11r translator for genuine UniFi access points: part of openUF
+	// (the openuf-rrb service), so the row is about its state, not about a
+	// package; what it needs from the feeds is in the package rows above.
+	const r = d.rrb_unifi;
+	if (r) {
+		let state;
+		if (!r.installed)
+			state = E('span', { 'class': 'label warning' }, _('no: the openuf-rrb service is missing (reinstall openUF)'));
+		else if (!r.enabled)
+			state = E('span', { 'class': 'label' }, _('switched off (openuf.rrb.enabled)'));
+		else if (arr(r.missing).length)
+			state = E('span', { 'class': 'label warning' }, _('waiting for %s').format(arr(r.missing).join(', ')));
+		else {
+			const bits = [];
+			if (r.version) bits.push(r.version);
+			bits.push(r.running ? _('running') : _('not running'));
+			bits.push(r.veth ? _('veth up') : _('veth not yet: created on the first push with an FT WiFi network'));
+			state = installed(r.running, false, bits.join(', '));
+		}
+		const peers = (r.learned > 0 || r.listed > 0)
+			? _('; UniFi access points known: %d heard on the LAN, %d listed by hand').format(r.learned || 0, r.listed || 0)
+			: _('; no UniFi access point heard on the LAN yet (they announce every client that joins them)');
+		t.appendChild(E('tr', { 'class': 'tr' }, [
+			E('td', { 'class': 'td' }, 'openuf-rrb'),
+			E('td', { 'class': 'td' }, _('optional')),
+			E('td', { 'class': 'td' }, state),
+			E('td', { 'class': 'td' }, _('Fast roaming (802.11r) between this device and genuine UniFi access points: converts hostapd\'s inter-AP key exchange to UniFi\'s framing, and learns which UniFi access points are on the LAN') + peers)
+		]));
+	}
 	const parts = [ t ];
 	if (w.full === false)
 		parts.push(E('p', {}, _('openUF will not start with a basic hostapd build: it rejects the 802.11v option every network from the controller carries and takes the radio down with it. The full build of the same crypto library is suggested, so nothing else on the device changes and no extra flash is used.')));
 	if (missing.length)
 		parts.push(E('p', {}, _('A missing mandatory package stops openUF from running; a missing optional one leaves that feature off. Everything is installed from the OpenWrt package repository, so the device needs internet access for this.')));
-	if (w.full === false || missing.length || (th && th.wanted))
-		parts.push(installButton(w, missing));
+	if (w.full === false || missing.length || (th && th.wanted) || (r && r.installed && r.enabled && !r.running && !arr(r.missing).length))
+		parts.push(installButton(w, missing, th, r));
 	return E('div', {}, parts);
 }
 

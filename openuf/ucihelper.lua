@@ -20,6 +20,7 @@ M._bcfilter   = nil  -- nil = load openuf/bcfilter.lua on first use
 -- "WiFi Speed Limit" enforcement (tc). Injectable for the same reason.
 -- Minimum RSSI's constants (wire offset, refusal margin).
 M._minrssi    = nil  -- nil = load openuf/minrssi.lua on first use
+M._ftinterop  = nil  -- nil = load openuf/ftinterop.lua on first use
 M._run_cmd    = os.execute
 
 -- Injectable: command execution that captures stdout (for read-only introspection,
@@ -103,6 +104,7 @@ end
 
 local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end
 local function get_minrssi()  return get_sibling("minrssi",  M._minrssi)  end
+local function get_ftinterop() return get_sibling("ftinterop", M._ftinterop) end
 
 -- Map a UCI wifi-device's channel number to the controller's band identifier.
 -- The real controller's radio_table schema requires this "radio" field
@@ -591,7 +593,7 @@ local AUTODISABLED = OPENUF_PREFIX .. "autodisabled"
 --
 -- An SSID the *user* had already disabled is never stamped, so switching the
 -- option off later does not silently switch their SSID back on. The option is
--- documented (README/USAGE) and shipped as true in conf.lua, but a missing
+-- documented (REFERENCE/USAGE) and shipped as true in conf.lua, but a missing
 -- config is treated as false: openUF should not start disabling a stranger's
 -- SSIDs just because a caller failed to thread cfg through.
 --
@@ -926,6 +928,70 @@ local function mac_of(ifname)
 	local raw = ifname and M._read_file("/sys/class/net/" .. ifname .. "/address")
 	local mac = type(raw) == "string" and raw:match("(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
 	return mac and mac:lower() or nil
+end
+
+-- The BSSID a VAP has right now: its live netdev's address, resolved the
+-- same way the per-VAP features resolve it (find_vap_iface). Asked during
+-- apply_config, before the reload, so a VAP being rebuilt still answers
+-- with the netdev it is about to get back. nil when the radio has no live
+-- interface for it (a WLAN on its first push).
+function M.vap_bssid(radio, ssid)
+	return mac_of(M.get_ifname_for_vap(radio, ssid))
+end
+
+-- ─── The translator's veth pair (unifi_ft_interop) ───────────────────────────
+-- hostapd's ft_iface moves onto vft0 and the openuf-rrb daemon holds vft1
+-- (rrb/README.md). The pair is a netifd `config device` of type veth plus two
+-- proto-none interfaces, so netifd creates it at boot before the radios come
+-- up (a BSS whose ft_iface is missing fails to start) and `forget` removes
+-- it. The names come from openuf.rrb (ft_iface / peer_iface, as the service
+-- reads them).
+M.FT_VETH_SECTIONS = {"openuf_ftveth", "openuf_ftlink", "openuf_ftpeer"}
+
+local function ft_veth_names(cursor)
+	local ft = cursor and cursor:get("openuf", "rrb", "ft_iface")
+	local peer = cursor and cursor:get("openuf", "rrb", "peer_iface")
+	if type(ft) ~= "string" or not util.valid_ifname(ft) then ft = "vft0" end
+	if type(peer) ~= "string" or not util.valid_ifname(peer) then peer = "vft1" end
+	return ft, peer
+end
+
+-- True when hostapd's end of the pair exists afterwards. Writes the sections
+-- only when they are missing or name other interfaces, reloads the network
+-- at once (the push that called this is about to write the VAPs that use the
+-- veth, and ftinterop decides per VAP on whether the netdev exists), and
+-- gives netifd a few seconds to create it.
+function M.ensure_ft_veth(cursor)
+	cursor = cursor or get_uci().cursor()
+	local ft, peer = ft_veth_names(cursor)
+	local function present()
+		return M._read_file("/sys/class/net/" .. ft .. "/ifindex") ~= nil
+	end
+	if present() then return true end
+	local dev, link, peerif = M.FT_VETH_SECTIONS[1], M.FT_VETH_SECTIONS[2], M.FT_VETH_SECTIONS[3]
+	if cursor:get("network", dev, "name") ~= ft
+		or cursor:get("network", dev, "peer_name") ~= peer then
+		cursor:set("network", dev, "device")
+		cursor:set("network", dev, "type", "veth")
+		cursor:set("network", dev, "name", ft)
+		cursor:set("network", dev, "peer_name", peer)
+		cursor:set("network", link, "interface")
+		cursor:set("network", link, "proto", "none")
+		cursor:set("network", link, "device", ft)
+		cursor:set("network", peerif, "interface")
+		cursor:set("network", peerif, "proto", "none")
+		cursor:set("network", peerif, "device", peer)
+		cursor:commit("network")
+	end
+	M._run_cmd("/etc/init.d/network reload 2>/dev/null")
+	M._network_dirty = false
+	for _ = 1, 5 do
+		if present() then return true end
+		M._run_cmd("sleep 1")
+	end
+	io.stderr:write("openuf: the translator's veth " .. ft .. " did not appear after the "
+		.. "network reload; hostapd stays on the bridge this push\n")
+	return false
 end
 
 -- The bridge a netdev is enslaved to, or nil when it carries its own address.
@@ -1587,6 +1653,23 @@ function M.apply_config(resp, cfg, opts)
 	-- Every VLAN this push still wants an L2 for; anything else gets pruned
 	-- after the loop.
 	local wanted_vlans = {}
+	-- Whether ftinterop put a BSS on the translator's veth this push (the
+	-- openuf-rrb service is restarted after the reload below).
+	local interop_veth = false
+	-- unifi_ft_interop: the translator's veth pair is created here, before
+	-- the VAPs are written, so ftinterop sees it on this very push. Only with
+	-- the translator installed and enabled: a veth nobody forwards would
+	-- swallow every key exchange, openUF-to-openUF too.
+	if cfg and cfg.config and cfg.config.unifi_ft_interop then
+		local fti = get_ftinterop()
+		if fti and fti.translator_active(get_uci().cursor()) then
+			local any_ft = false
+			for _, vap in ipairs(vap_table) do
+				if vap.fast_roaming_enabled or vap.wpa3_fast_roaming_enabled then any_ft = true end
+			end
+			if any_ft then M.ensure_ft_veth(get_uci().cursor()) end
+		end
+	end
 	for _, vap in ipairs(vap_table) do
 		if vap.ssid and vap.radio then
 			local extra = {}
@@ -1667,6 +1750,26 @@ function M.apply_config(resp, cfg, opts)
 					extra.r0kh = { "ff:ff:ff:ff:ff:ff,*," .. vap.iapp_key }
 					extra.r1kh = { "00:00:00:00:00:00,00:00:00:00:00:00,"
 						.. vap.iapp_key }
+				end
+				-- unifi_ft_interop: fast roaming with genuine UniFi APs through
+				-- the translator (rrb/, the openuf-rrb service). ftinterop.lua
+				-- rewrites the options above (UniFi's mobility domain,
+				-- ft_psk_generate_local=0 with explicit key holders for the
+				-- UniFi peers the translator heard or openuf.rrb lists, nasid =
+				-- BSSID, hostapd's ft_iface on the translator's veth). Off, the
+				-- section is exactly what the block above produced.
+				if cfg and cfg.config and cfg.config.unifi_ft_interop then
+					local fti = get_ftinterop()
+					if fti then
+						fti.apply(extra, vap, M.vap_bssid(vap.radio, vap.ssid),
+							get_uci().cursor(), M.DELETE, opts and opts.rrb_peers)
+						if type(extra.hostapd_bss_options) == "table" then
+							interop_veth = true
+						end
+					else
+						io.stderr:write("openuf: unifi_ft_interop is on but "
+							.. "ftinterop.lua is missing\n")
+					end
 				end
 			end
 			if opts and (opts.band_steering_active or opts.roam_assist_active) then
@@ -1967,6 +2070,15 @@ function M.apply_config(resp, cfg, opts)
 
 	-- Reload wireless
 	M._run_cmd("wifi reload")
+	-- unifi_ft_interop: a BSS was just put on the translator's veth. The
+	-- daemon derives the served BSSes and the LAN bridge from the running
+	-- hostapd configs at start, and its own reload trigger fires on LuCI's
+	-- reload_config, never on this `wifi reload`. So it is restarted here,
+	-- after the reload has written the configs it will read. A push is a
+	-- rare event, and the daemon keeps what it learned in its peers file.
+	if interop_veth and M._read_file("/etc/init.d/openuf-rrb") then
+		M._run_cmd("/etc/init.d/openuf-rrb restart")
+	end
 	-- netifd may hand the interfaces new netdev names on the way back up, and
 	-- the wireless config this reload just wrote is the very thing the radio
 	-- rows were read from, so the lookups below must not reuse anything read
@@ -2040,6 +2152,23 @@ function M.forget()
 	M.wlan_clear()
 	M.prune_vlan_networks({})
 	M.set_wlan_exclusive(false)
+	-- The translator's veth pair (ensure_ft_veth): a controller's FT WLANs
+	-- were what used it.
+	local present = {}
+	for _, t in ipairs({"device", "interface"}) do
+		cursor:foreach("network", t, function(s) present[s[".name"]] = true end)
+	end
+	local removed = false
+	for _, s in ipairs(M.FT_VETH_SECTIONS) do
+		if present[s] then
+			cursor:delete("network", s)
+			removed = true
+		end
+	end
+	if removed then
+		cursor:commit("network")
+		M._network_dirty = true
+	end
 	if M._network_dirty then
 		M._run_cmd("/etc/init.d/network reload 2>/dev/null")
 		M._network_dirty = false

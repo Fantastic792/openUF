@@ -51,6 +51,8 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 | `hostapd-utils` | `hostapd_cli` — immediate deauth of a just-blocked wireless client, client kick (Roaming Assistance) and Minimum RSSI enforcement |
 | `tc-tiny` | `tc` — WiFi Speed Limit (`openuf/shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
 | `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `openuf/usteer.lua`. Roaming Assistant needs it too, for its view of which AP hears a client how loudly |
+| `openuf/rrb/rrb-unifi.uc` (part of openUF, not a package; the `openuf-rrb` service) | 802.11r fast roaming between openUF and **genuine UniFi APs** (§ 6): d-malinowski's rrb-unifi translator, vendored (`openuf/rrb/README.md`), a ucode daemon on a veth pair that converts hostapd's inter-AP key exchange to UniFi's framing and learns which UniFi APs are on the LAN. Switched off with `openuf.rrb.enabled '0'` |
+| `ucode-mod-socket`, `kmod-veth` | What the translator needs: raw packet sockets from ucode, and the veth pair hostapd's `ft_iface` moves onto. Optional like the others: without them only roaming to genuine UniFi APs is missing |
 | `wpad-wolfssl` (or `wpad-openssl`, `wpad-mbedtls`, `wpad`) | Full hostapd build with 802.11k/v support — required for BSS Transition and Band Steering. Any of the full builds will do; `wpad-basic-*` lacks `bss_transition` entirely and errors with "unknown configuration item 'bss_transition'" |
 
 `install.sh install` installs all of the above automatically when missing, so a
@@ -89,7 +91,7 @@ wget -qO- https://raw.githubusercontent.com/Fantastic792/openUF/main/setup.sh | 
 
 This is the path to use unless you have a reason not to. It does everything in this
 guide's sections 1–3 plus the access-point conversion, in an order chosen so a failure
-never leaves the device unreachable — see the README's Quick start for the phase list
+never leaves the device unreachable — see REFERENCE.md's Quick start for the phase list
 and the reasoning.
 
 Piping into `sh` and still being able to answer questions works because the script
@@ -331,6 +333,10 @@ What `install.sh install` does:
   an old copy onto a new OpenWrt is a silent version mismatch
 - Symlinks `/opt/openuf/hook/syswrapper.sh` → `/usr/bin/syswrapper.sh`
 - Creates `/etc/init.d/openuf` with two procd service instances (announce + inform)
+- Installs and enables `/etc/init.d/openuf-rrb`, the 802.11r translator for genuine UniFi
+  APs (§ 6; the daemon is `openuf/rrb/rrb-unifi.uc`, copied with the tree). It idles until
+  a config push carries an FT WLAN. Its two packages, `ucode-mod-socket` and `kmod-veth`,
+  go in with the other optional ones
 - Enables and starts the service
 - Enables and starts `lldpd`
 
@@ -800,6 +806,7 @@ reads nothing else, so what it shows is what the daemon would run.
 config = {
     use_only_unifi_wlan = true,  -- disable non-openuf_ SSIDs during provisioning
     keep_wlan_sections  = {},    -- AP sections that option must leave alone (see below)
+    unifi_ft_interop = true,     -- 802.11r with genuine UniFi APs; needs the rrb-unifi translator to do anything there, see § 6
     inform_url  = "http://unifi:8080/inform",   -- first-boot URL; state.json's wins once set
     state_file  = "/etc/openuf/state.json",     -- honoured by inform, announce and syswrapper
     l2_announce = true,          -- see below
@@ -1017,6 +1024,14 @@ sh install.sh install --bootstrap-adopt
   that permits exactly one thing: running `syswrapper.sh set-adopt <url>
   <key>`. Any other command, or a plain interactive login attempt, is refused
   outright — the account can never be used as a general-purpose shell.
+- That shell is also listed in `/etc/shells`. dropbear checks a login's shell
+  against that file (`getusershell(3)`) before it looks at the password, and
+  OpenWrt ships the file with `/bin/ash` alone — an unlisted shell is `User
+  'ubnt' has invalid shell, rejected` in `logread`, the controller's SSH
+  attempts fail, and the mobile app asks for the root credentials instead
+  ("advanced adoption"). An account created before 2026-10-25 lacks the entry;
+  `openuf bootstrap-account` (package install) or `sh install.sh install
+  --bootstrap-adopt` (file install) adds it to an existing account.
 - Once the device is adopted, `inform.lua` locks the account (`passwd -l`) —
   it detects this within one poll interval (~10s) of the SSH-driven
   `set-adopt` writing new state. It re-enables the account automatically on
@@ -1219,6 +1234,79 @@ live: a station that had negotiated FT-SAE still reassociated with `auth_alg=sae
 apart, force one with `hostapd_cli bss_tm_req` and read the target AP's log: `auth_alg=ft`
 **and no `EAPOL-4WAY-HS-COMPLETED`** is fast; `auth_alg=sae` followed by a 4-way is the
 fallback.
+
+**Fast roaming with genuine UniFi APs (`unifi_ft_interop`).** Stock hostapd and UniFi's
+hostapd use the same FT key hierarchy and the same AES-SIV protected RRB payloads, but UniFi
+frames RRB differently: it inserts the source and destination AP addresses (12 bytes) after
+the RRB type, because it sends from the AP's Ethernet MAC rather than the BSSID
+(PROTOCOL-VALIDATION.md, "802.11r with genuine UniFi APs"). openUF carries the translator
+that converts between the two framings: `openuf/rrb/rrb-unifi.uc`, d-malinowski's
+[rrb-unifi](https://github.com/d-malinowski/unifi-openwrt-roaming) vendored (that repository
+stays the source of fixes; `openuf/rrb/README.md` lists what was changed), run as the
+`openuf-rrb` service on a veth pair: hostapd's `ft_iface` is `vft0`, the daemon holds `vft1`
+and the LAN bridge. Nothing on the UniFi AP is changed. The switch is **on by default for new
+installations** (`unifi_ft_interop` in `conf.lua`, `option unifi_ft_interop` in
+`openuf.main`, a toggle on both LuCI pages). On, every FT WLAN gets what a UniFi peer needs:
+
+| UCI option | Off | On (default) |
+|---|---|---|
+| `mobility_domain` | openUF's own hash of the SSID | UniFi firmware's: first two bytes of SHA1("salt" .. SSID zero-padded to 32 bytes) |
+| `ft_psk_generate_local` | unset (OpenWrt: 1 for PSK) | `0`, so the key holders below are written |
+| `nasid` (R0KH-ID) | unset (hostapd's default is already the BSSID) | this BSS's BSSID without colons, written explicitly so `openuf rrb verify` can read it |
+| `r0kh` / `r1kh` | wildcards keyed with `iapp_key` | one entry per UniFi peer BSS of the WLAN (learned, or listed by hand), plus the wildcards |
+| `hostapd_bss_options` | unset | `ft_iface=vft0`, the translator's veth end, only while the translator is installed and enabled and the veth exists |
+| `reassociation_deadline` | 3000 | OpenWrt's default |
+
+**How the pieces fit.** The first config push that carries an FT WLAN writes the veth pair
+into `/etc/config/network` (`openuf_ftveth`, a `config device` of type veth, with two
+proto-none interfaces) and reloads the network, so netifd creates it at boot before the radios
+come up from then on; openUF restarts the daemon after every push that put a BSS on the veth,
+since the daemon derives the BSSes and the LAN bridge from the running hostapd configs when
+it starts. The daemon records every UniFi BSSID it hears on the LAN
+(`/var/run/openuf/rrb-peers.json`), with the WLAN's mobility domain once a roam announcement
+verified with that WLAN's key names it (a UniFi AP announces every client that joins it). The
+inform loop keeps those in `state.json` (`rrb_peers`) and, on an adopted AP, forgets
+`cfgversion` so the controller pushes the full config again and the new peer becomes a key
+holder, at most once every ten minutes. A UniFi AP's R0KH-ID is its BSSID without colons,
+their firmware's convention; `openuf.rrb` can list a peer by hand
+(`list peer 'bssid,r0kh-id'`) for a site where the daemon hears nothing. The daemon's other
+settings are the same section: `enabled`, `ft_iface`, `peer_iface`, `lan_iface`,
+`roam_announce`, `verbose`; the init script documents them. The veth goes with everything
+else on Forget.
+
+Without the translator's packages the switch costs nothing on a site with no genuine UniFi
+AP: every openUF AP computes the same (UniFi-formula) mobility domain and the wildcard key
+holders, so they keep roaming among themselves; FT-PSK keys are then pulled over RRB instead
+of derived locally, the path FT-SAE always took. `hostapd_bss_options` is only written while
+the daemon is installed, enabled and its veth exists, so hostapd is never pointed at a veth
+nobody forwards. The one case to turn the switch **off** is a site with genuine UniFi APs
+where the translator is switched off: with UniFi's mobility domain, clients try a fast
+transition towards those APs and fall back to a full reconnect, which is slower than never
+trying. Which installations get the new default: a fresh `setup.sh`/`install.sh` or a fresh
+package install; an `install.sh` upgrade keeps the device's older `conf.lua`, which has no
+such key, so it stays off there; a package upgrade ships the new `conf.lua` and a UCI-managed
+device takes its defaults for every option `openuf.main` leaves out, so it turns on unless
+`option unifi_ft_interop '0'` is set first.
+
+From the shell: `openuf rrb status` (the service, the veth, what the daemon derives),
+`openuf rrb peers` (heard and hand-listed peers), and, for a check against a UniFi AP's own
+settings, `openuf rrb collect <user>@<unifi-ap>` (reads its hostapd config over SSH, only a
+hash of the passphrase) followed by `openuf rrb verify`; `openuf rrb peers --write` lists the
+collected BSSes by hand. The raw `hostapd_bss_options` form is deliberate even on 25.12,
+which has a first-class `ft_iface` option: the translator learns a BSS's LAN bridge from the
+`ft_iface=` line OpenWrt generates before the override, and 24.10 has no such option.
+
+Troubleshooting: openUF logs `ftinterop:` lines to the system log when something is missing.
+`the openuf-rrb translator service is not installed` means the init script is gone (reinstall
+openUF); `ft_iface not present` means the veth is not up (`openuf rrb status`; the daemon logs
+`waiting for the veth pair` until the first push with an FT WLAN); `no UniFi peer known for
+this WLAN yet` means nothing has been heard on the LAN and nothing is listed, so UniFi peers
+can pull keys from this AP but get none pushed; `the controller sent no iapp_key` means the
+push carried no FT key (Fast Roaming off for the WLAN). Only WPA2-PSK with FT-PSK is verified
+against a UniFi AP so far, and only by the translator's author (a BT Home Hub 5A against a U7
+Lite); this lab has no UniFi AP. FT-SAE should take the same path but is untested. hostapd's
+key-exchange socket then lives on the veth, and `rrbguard.lua`'s stale-socket check covers it
+the same way.
 
 **VLAN-tagged SSIDs** (assigning a WiFi network to a non-native network) need three
 things on the AP, and openUF builds all three:
@@ -1772,7 +1860,9 @@ backlog row 23). Each is on by default and needs nothing in `conf.lua`.
 - **802.11r** key holders are keyed with the controller's per-WLAN `iapp_key` (so every
   openUF AP on the WLAN is a peer without sharing the passphrase's derivation), PMK-R1 is
   pushed, and a stale key-exchange socket in hostapd (seen upstream after weeks of uptime)
-  is repaired by restarting wpad when no client is connected or in the 04:00 hour.
+  is repaired by restarting wpad when no client is connected or in the 04:00 hour. With
+  `unifi_ft_interop` on, the key holders also name the genuine UniFi APs the rrb-unifi
+  translator lists, and hostapd exchanges keys through the translator's veth (§ 6).
 - **Hygiene:** usteerd's AP-to-AP table broadcasts are dropped before they leave a VAP,
   the bridge hairpin flag is re-asserted on BSSes OpenWrt force-isolates (Multicast
   Enhancement, Proxy ARP), the nightly 11k-scan runs at two random times in the hour, and
@@ -1861,7 +1951,9 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 |---|---|
 | Device doesn't appear in UniFi Discover | `announce.lua` not running, or UDP port 10001 blocked |
 | Controller shows device as "Disconnected" | `inform.lua` not running, or wrong `inform_url` |
+| Controller shows the device's IP as `0.0.0.0` although it has one | A build before 2026-10-26 read the address once at startup; on a DHCP-managed AP the service can start before the lease arrives (seen on both lab APs after a fresh install). `/etc/init.d/openuf restart` re-reads it; current builds re-read it every heartbeat |
 | Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or reinstall with `--bootstrap-adopt` |
+| Mobile app or controller asks for root credentials ("advanced adoption") although the `ubnt` account exists | `logread` shows `User 'ubnt' has invalid shell, rejected`: the account's forced shell is not in `/etc/shells`, which dropbear checks before the password. Run `openuf bootstrap-account`, or `sh install.sh install --bootstrap-adopt` on a file install — both register it for an existing account |
 | Device stays stuck at "Adopting" forever | No AES-GCM backend — `lua-openssl` missing or built without AEAD support. The CLI `openssl-util` fallback is CBC-only and will not work (see § 1) |
 | Controller rejects device ("firmware incompatible") | Adjust `fw.ver` in `ufmodel/u6iw.lua` |
 | hostapd fails: "unknown configuration item 'bss_transition'" | A `wpad-basic-*` build is installed — replace it with `apk add wpad-wolfssl` |

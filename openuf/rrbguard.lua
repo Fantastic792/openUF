@@ -3,7 +3,9 @@
 
 	hostapd exchanges PMK-R1 keys with the other APs over one packet socket
 	per ft_iface (ethertype 0x88b7, the RRB OUI frames), bound to br-lan by
-	ifindex when the first FT BSS starts. It keeps that socket across wifi
+	ifindex when the first FT BSS starts (to the rrb-unifi translator's veth
+	end instead under unifi_ft_interop, ftinterop.lua; the same check covers
+	it). It keeps that socket across wifi
 	reloads and only reopens it when no BSS uses it any more. If br-lan is
 	replaced under it, the kernel sets the socket's ifindex to -1 and every
 	pull or push fails with ENXIO ("l2_packet_send - send: No such device or

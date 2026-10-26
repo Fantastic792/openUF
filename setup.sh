@@ -937,6 +937,10 @@ if [ -d /sys/bus/platform/devices/leds ] \
 	OPTIONAL="$OPTIONAL kmod-leds-gpio"
 fi
 case "$INFORM_URL" in https*) OPTIONAL="$OPTIONAL luasec" ;; esac
+# The 802.11r translator for genuine UniFi APs ships with openUF (openuf/rrb/);
+# its two packages go in here, in the packages phase, while this box is still
+# the router with internet.
+OPTIONAL="$OPTIONAL ucode-mod-socket kmod-veth"
 
 MISSING=""
 for p in $REQUIRED; do pkg_installed "$p" || MISSING="$MISSING $p"; done
@@ -1347,6 +1351,12 @@ else
 	[ -f "$PKG_DIR/inform.lua" ] \
 		|| die "the package manager reported success but $PKG_DIR/inform.lua is missing"
 	ok "installed openuf and luci-app-openuf${P_THEME:+ and luci-theme-halo}"
+
+	# The 802.11r translator for genuine UniFi APs is in the package (the
+	# openuf-rrb service): enable it now; it idles until a config push
+	# carries an FT WLAN. Never fatal.
+	/etc/init.d/openuf-rrb enable 2>/dev/null && ok "openuf-rrb (802.11r translator) enabled" \
+		|| warn "openuf-rrb could not be enabled (openuf rrb status)"
 
 	head1 "Configuring openUF"
 

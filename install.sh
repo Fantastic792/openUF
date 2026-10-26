@@ -6,8 +6,9 @@
 #
 # Usage:
 #   ./install.sh install [--bootstrap-adopt] [--replace-conf]
-#                           — copy files, enable service. An existing
-#                             /opt/openuf/conf.lua is KEPT unless --replace-conf
+#                           — copy files, enable the openuf and openuf-rrb
+#                             services. An existing /opt/openuf/conf.lua is
+#                             KEPT unless --replace-conf
 #   ./install.sh uninstall  — remove files, disable service
 
 INSTALL_DIR=/opt/openuf
@@ -245,6 +246,10 @@ case "$ACTION" in
 		# Install init.d service
 		cp openuf/etc/init.d/openuf "$INIT_SCRIPT"
 		chmod +x "$INIT_SCRIPT"
+		# The 802.11r translator for genuine UniFi APs (openuf/rrb/, see its
+		# REFERENCE.md): its own procd service, started and stopped with openUF's.
+		cp openuf/etc/init.d/openuf-rrb /etc/init.d/openuf-rrb
+		chmod +x /etc/init.d/openuf-rrb "$INSTALL_DIR/rrb/rrb-unifi.uc" 2>/dev/null
 
 		# ── Dependencies, now that openUF itself is safely installed ──────
 		# REQUIRED: openUF cannot function without these. They may already be
@@ -325,6 +330,11 @@ case "$ACTION" in
 		# download cap applies and the upload cap silently does not.
 		try_optional kmod-ifb "WiFi Speed Limit, upload half (queued)"
 		try_optional kmod-sched-act-police "WiFi Speed Limit, upload fallback (tc police)"
+		# The 802.11r translator for genuine UniFi APs (openuf/rrb/): raw
+		# packet sockets from ucode, and the veth pair hostapd's key exchange
+		# moves onto.
+		try_optional ucode-mod-socket "802.11r roaming with genuine UniFi APs (translator sockets)"
+		try_optional kmod-veth        "802.11r roaming with genuine UniFi APs (translator veth)"
 		# No coreutils-stat any more: inform.lua used to fork `stat -c %Y` to
 		# notice an out-of-process state.json write and fell back to the file's
 		# contents when the applet was missing (a real WDR3500 has none). The
@@ -364,6 +374,16 @@ case "$ACTION" in
 		# same PID before and after). On a first install restart is a start.
 		"$INIT_SCRIPT" enable 2>/dev/null
 		"$INIT_SCRIPT" restart
+
+		# The 802.11r translator for genuine UniFi APs (USAGE § 6): enabled
+		# and started; it idles until a config push carries an FT WLAN, when
+		# openUF creates its veth and points hostapd at it. Needs
+		# ucode-mod-socket and kmod-veth (try_optional above); without them
+		# only roaming to genuine UniFi APs is missing.
+		/etc/init.d/openuf-rrb enable 2>/dev/null
+		if ! /etc/init.d/openuf-rrb start 2>/dev/null; then
+			echo "WARNING: the 802.11r translator (openuf-rrb) did not start; fast roaming to genuine UniFi APs needs it (openuf rrb status)."
+		fi
 
 		# Enable lldpd
 		if [ -f /etc/init.d/lldpd ]; then
@@ -416,6 +436,19 @@ case "$ACTION" in
 			"$INIT_SCRIPT" disable 2>/dev/null
 			rm -f "$INIT_SCRIPT"
 		fi
+		# The 802.11r translator's service, and the veth pair openUF wrote
+		# into /etc/config/network for it (ucihelper.ensure_ft_veth).
+		if [ -f /etc/init.d/openuf-rrb ]; then
+			/etc/init.d/openuf-rrb stop 2>/dev/null
+			/etc/init.d/openuf-rrb disable 2>/dev/null
+			rm -f /etc/init.d/openuf-rrb
+		fi
+		if command -v uci >/dev/null 2>&1 && uci -q get network.openuf_ftveth >/dev/null 2>&1; then
+			for _s in openuf_ftveth openuf_ftlink openuf_ftpeer; do uci -q delete network.$_s; done
+			uci commit network
+			/etc/init.d/network reload 2>/dev/null
+			echo "Removed the translator's veth pair from /etc/config/network."
+		fi
 
 		# Remove symlink, and the updater command
 		rm -f "$BIN_LINK" /usr/bin/openuf-update /usr/bin/openuf /usr/sbin/openuf-convert /usr/sbin/openuf-deps
@@ -436,6 +469,13 @@ case "$ACTION" in
 			sed -i '/^ubnt:/d' /etc/passwd
 			sed -i '/^ubnt:/d' /etc/shadow
 			echo "Removed SSH bootstrap account 'ubnt'."
+		fi
+		# The shell that account was registered with in /etc/shells (dropbear
+		# refuses a login whose shell is not listed there) goes with it --
+		# whichever prefix made the account, since the entry is the path.
+		if grep -q '/hook/adopt-shell\.sh$' /etc/shells 2>/dev/null; then
+			sed -i '/\/hook\/adopt-shell\.sh$/d' /etc/shells
+			echo "Removed the bootstrap shell from /etc/shells."
 		fi
 		if grep -q "^openuf:" /etc/group 2>/dev/null; then
 			sed -i '/^openuf:/d' /etc/group

@@ -129,7 +129,7 @@ return view.extend({
 			s2body.push(field(_('hostapd build'), w.full ? badge('done', w.installed || _('full')) : badge('todo', _('%s: basic, openUF will not start').format(w.installed || 'wpad-basic'))));
 			s2body.push(field(_('Missing packages'), missing.length ? E('span', {}, missing.join(', ')) : badge('done', _('none'))));
 			if (w.full === false || missing.length)
-				s2body.push(common.installButton(w, missing));
+				s2body.push(common.installButton(w, missing, d.theme, d.rrb_unifi));
 		}
 		const s2 = step(2, _('Software openUF needs'),
 			d.ok ? badge('done', _('everything installed')) : (depsKnown ? badge('todo', _('something to install')) : badge('wait', _('unknown'))),

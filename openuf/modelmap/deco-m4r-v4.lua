@@ -39,7 +39,7 @@
 	    port 0 and port 1
 	  • 16 MB SPI-NOR, firmware partition 0xf60000 (15.4 MiB); OpenWrt's
 	    image limit is 15744k. ⚠️ Free overlay after a stock image is
-	    unmeasured, but README's 5 MB for lua-openssl should fit
+	    unmeasured, but REFERENCE.md's 5 MB for lua-openssl should fit
 	  • one RGB case light ("logo": red / green / blue GPIOs) plus four more
 	    green GPIO LEDs (rssi, lan, sys, wifi2g) whose visibility through
 	    the case the tree does not say

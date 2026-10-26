@@ -58,6 +58,16 @@ openuf/uciconf.lua                /etc/config/openuf -> the `dev`/`config` table
 
 ## Decisions
 
+- **The 802.11r translator is part of the `openuf` package, not a package of its own**
+  (2026-10-25). d-malinowski's rrb-unifi (GPL-3.0-or-later) is vendored as `openuf/rrb/`
+  and installed to `/usr/lib/openuf/rrb/` with its LICENSE and README; its procd script is
+  `openuf/etc/init.d/openuf-rrb`; `DEPENDS` carries `+ucode-mod-socket +kmod-veth`;
+  `PKG_LICENSE` is `GPL-3.0-or-later` (the whole repository since 2026-10-25; NOTICE lists the copyright holders). The veth pair is written
+  by the daemon's user, openUF, into `/etc/config/network` on the first FT push, so neither a
+  uci-defaults nor a postinst touches the network. Fixes come from
+  https://github.com/d-malinowski/unifi-openwrt-roaming (see `openuf/rrb/README.md`), re-applied
+  with the `// openUF:` changes.
+
 | Topic | Decision | Why |
 |---|---|---|
 | Install prefix | `/usr/lib/openuf/` for the modules, presets and hook; `/usr/bin/syswrapper.sh` symlink (the controller's SSH adoption runs it by name); `/usr/bin/openuf` a tiny CLI (`--version`, `status`, `reset-inform`); `/etc/openuf/` for `state.json` and the ledger | Feed packages do not install under `/opt`. The cwd-relative `dofile` design stays: only the init script and the hook name the directory |
@@ -280,8 +290,8 @@ script is syntax-checked in `verify`).
    when it lives inside `openwrt/luci`.
 3. **publish**: attach the `.ipk`, `.apk` and the source archive to the release.
 
-Formalities the feeds check on submission: `PKG_MAINTAINER`, `PKG_LICENSE:=MIT`,
-`PKG_LICENSE_FILES:=LICENSE`, two-space metadata blocks and tabbed recipes, unindented
+Formalities the feeds check on submission: `PKG_MAINTAINER`, `PKG_LICENSE:=GPL-3.0-or-later`,
+`PKG_LICENSE_FILES:=LICENSE NOTICE`, two-space metadata blocks and tabbed recipes, unindented
 `conffiles`, procd init, an executable answering `--version` with `PKG_VERSION`, tabs in the
 JavaScript (`js-beautify -t -a -j -w 110`), a `.pot` under `po/templates`.
 
@@ -365,6 +375,27 @@ account had no password at all. `hook/openuf-bootstrap.sh` now creates the accou
 (`!`), then hashes with what the image has (the openssl CLI; busybox `passwd -a sha512`
 fed on stdin under `setsid`, so it does not ask the terminal; `uhttpd -m`), and says so
 when none of them worked -- locked beats open. `install.sh` calls the same hook.
+
+A fourth, found on AP2 on 2026-10-25 -- the first L2 adoption of a device through the mobile
+app since the hook existed: dropbear checks a login's shell against `/etc/shells` before the
+password (`getusershell(3)`; the code is the same in 24.10's 2024.86 and 25.12's 2025.89), and
+OpenWrt's base-files has shipped that file with `/bin/ash` alone since 2006. The forced shell was
+never listed, so every `ubnt` login on a real device was `User 'ubnt' has invalid shell,
+rejected` (three attempts from the gateway in twelve seconds) and the app fell back to asking
+for root credentials. It had only ever passed against the validation container's OpenSSH, which
+has no such check. The hook now registers the shell, repairs an existing account's entry when
+run again, and `install.sh uninstall` removes it.
+
+A fifth, in the v0.2.2 packages the SDK built (AP2, 2026-10-26): LuCI's `luci.mk` runs every
+`.css` under `htdocs` through `csstidy --template=highest`, which merges selectors that share
+declarations across the whole file (the cascade order goes with it) and rebuilds `margin`/`padding`
+shorthands by splitting on spaces, so `margin: calc(-1 * var(--card-py)) …` came out as
+`margin:calc(-1;` -- an unclosed paren the browser reads as one declaration running to the end
+of the file. Chrome kept 145 of the theme's 869 rules; the login page had no styling and the
+sidebar neither opened nor collapsed. `luci-theme-halo` and `luci-app-openuf` now set
+`LUCI_MINIFY_CSS:=0` (luci-theme-footstrap's precedent, for `:has()` and `color-mix()`). JS
+minification stays on: jsmin's output for these files is byte for byte what the device ran,
+passes a syntax check, and keeps template and regex literals intact.
 
 The release workflow attaches `luci-theme-halo` since this branch; v0.1.8 and earlier ship
 only `openuf` and `luci-app-openuf`, so a web install from those says so and skips the theme.

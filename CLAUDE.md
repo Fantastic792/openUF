@@ -298,7 +298,7 @@ named `generic-*` is listed under "Generic"; anything else under "Board-specific
 
 Three places name the profiles and will drift silently:
 
-- `README.md` → **Supported hardware**, with an honest ⚠️ if it is not confirmed on the
+- `REFERENCE.md` → **Supported hardware**, with an honest ⚠️ if it is not confirmed on the
   hardware, and the flash/space caveat if there is one.
 - `USAGE.md` → **Hardware model map**, the `dev = dofile("modelmap/…")` list.
 - `openuf/conf.lua`'s own header comment, which lists the known-working maps.
@@ -321,7 +321,7 @@ Three places name the profiles and will drift silently:
 [ ] ⚠️ marks on everything not confirmed on real hardware
 [ ] board-specific test added to tests/test_modelmap.lua
 [ ] lua tests/run_tests.lua passes
-[ ] README / USAGE / conf.lua header updated
+[ ] REFERENCE / USAGE / conf.lua header updated
 ```
 
 ## Adding a UniFi identity (ufmodel)
@@ -366,6 +366,11 @@ Other things to preserve:
   answers yes in places where the open then fails.
 - **Every question is asked before anything changes**, and each has a matching option so
   the same script runs unattended. Adding a prompt means adding an option.
+- **The 802.11r translator's packages go in the packages phase.** `ucode-mod-socket` and
+  `kmod-veth` are in `OPTIONAL`, so they arrive while the box still has internet; the daemon
+  itself is in the tree (`openuf/rrb/`) and `install.sh` enables its service, which `setup.sh`
+  also does on its package path. No question, no option: `openuf.rrb.enabled '0'` switches the
+  daemon off and `unifi_ft_interop` the whole feature.
 - **Value-taking options** must go through `need_val`, or a forgotten value silently
   configures the empty string.
 
@@ -443,7 +448,22 @@ host at a time, with `dist.sh --verify` gating every push.
 
 `--bootstrap-adopt` creates the locked-down non-root `ubnt`/`ubnt` account, scoped to
 running `syswrapper.sh set-adopt` only, which self-locks once adopted and re-enables on
-factory reset.
+factory reset. The account's shell must be listed in `/etc/shells` or dropbear rejects the
+login before the password (`User 'ubnt' has invalid shell, rejected`): `hook/openuf-bootstrap.sh`
+registers it, also for an account that exists already, and `uninstall` removes it. The
+validation container's OpenSSH never checked, so this was invisible until a real L2 adoption
+(AP2, 2026-10-25).
+
+**The 802.11r translator for genuine UniFi APs ships with the tree.** `openuf/rrb/rrb-unifi.uc`
+(d-malinowski's rrb-unifi, vendored; `openuf/rrb/README.md` names the upstream
+commit and every change, each marked `// openUF:` in the file) runs as `/etc/init.d/openuf-rrb`,
+which `install.sh` copies from `openuf/etc/init.d/` and enables after openUF's own service.
+Its packages, `ucode-mod-socket` and `kmod-veth`, are two more `try_optional`s. The veth pair
+is NOT the installer's business: `ucihelper.ensure_ft_veth` writes it into `/etc/config/network`
+on the first config push that carries an FT WLAN, and `install.sh uninstall` and
+`ucihelper.forget` remove it. Fixes to the daemon come from
+https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
+`../unifi-openwrt-roaming` has it as `upstream`), never from a fork of it.
 
 ---
 
@@ -567,6 +587,14 @@ factory reset.
   it opened itself. Outside a pass everything reads every time, which is what keeps
   per-test stubs independent; harnesses reset `_uplink_cache`, `_phy_info_cache`, the lldp
   caches and call `end_pass()` on the way in and out.
+- **The reported address is read every heartbeat, not once.** `_populate_net_info` runs at
+  startup, and on a DHCP-managed AP that is before the lease: START=99 is after `network`,
+  but udhcpc is still broadcasting its DISCOVER (AP1, 2026-10-26: udhcpc started 01:18:41,
+  the lease arrived :44), so `st.ip` stayed nil and every inform carried `ip "0.0.0.0"` --
+  the controller showed both APs at 0.0.0.0 until a lucky reboot. `_refresh_net_info` in
+  `_tick` asks `announce.get_ip` again before each payload (one `ip addr` per cycle, the
+  holder cached), keeps the last address on a nil read, and logs each change. The announce
+  module is loaded once (`M._load_announce`, `M._announce`); tests stub `inform._announce`.
 - **Kernel state is rebuilt at startup, because the controller never re-pushes it.** After
   a reboot `cfgversion` matches and the reply is `noop` with no `system_cfg`, so anything
   applied only from `apply_config`/`handle_response` is gone for good. `M.run` therefore
@@ -724,6 +752,15 @@ factory reset.
   lp5521 (ceiling 255), where 1 is 0.4 %: the case light went dark the moment openUF started,
   Locate included, since the timer trigger blinks at the current brightness. Unreadable or
   non-numeric falls back to 1.
+- **The SDK build minifies CSS with csstidy, and csstidy breaks this CSS.** `luci.mk` runs
+  `csstidy --template=highest` on every stylesheet under `htdocs`: selectors sharing declarations
+  are merged across the file and `margin`/`padding` shorthands are rebuilt by splitting on spaces,
+  so a `calc(-1 * …)` margin became `margin:calc(-1;` and the browser dropped every rule after it
+  (v0.2.2 on AP2, 2026-10-26: unstyled login, unusable sidebar). Both LuCI packages set
+  `LUCI_MINIFY_CSS:=0` before including `luci.mk`; keep it, and keep jsmin (its output was
+  verified byte for byte against luci-base's `jsmin.c`). A package that renders fine from the
+  tree and badly from a release is this until proven otherwise: compare the device's file with
+  the tree's, and count what Chrome parses (`new CSSStyleSheet().replaceSync(text).cssRules`).
 - **The device page is a uhttpd ucode handler that uhttpd loads ONCE, at start.**
   `luci-app-openuf`'s uci-defaults puts `/cgi-bin/luci=/usr/share/ucode/openuf/gate.uc` into
   `uhttpd.*.ucode_prefix` (replacing LuCI's own line, or adding it where stock 25.12 serves
@@ -758,6 +795,22 @@ factory reset.
   constant to encode with; the old conversion drifted 12 dB between drivers.
 - **Never set `ft_psk_generate_local`.** It is FT-PSK-only, and pinning it stops OpenWrt
   configuring the key holders FT-SAE needs, so WPA3 clients silently lose fast roaming.
+  The one exception is `ftinterop.lua` under `unifi_ft_interop`: it sets `0` and writes the
+  explicit `r0kh`/`r1kh` key holders in the same breath, so the relationship FT-SAE needs
+  exists; a UniFi AP never derives keys locally and pulls from this AP instead. That path also
+  needs the external rrb-unifi translator's veth as hostapd's `ft_iface`, written as the raw
+  `hostapd_bss_options` form (the translator reads the generated `ft_iface=<bridge>` line that
+  precedes it), and only when the veth exists: hostapd fails a BSS whose `ft_iface` is missing.
+- **hostapd is pointed at the translator's veth only while something forwards it.**
+  `ftinterop.ft_iface` writes `hostapd_bss_options 'ft_iface=vft0'` only when the `openuf-rrb`
+  service is installed, `openuf.rrb.enabled` is not `0`, and the netdev exists, and
+  `ucihelper.ensure_ft_veth` creates the pair only under the same conditions: a veth nobody
+  forwards would swallow every RRB frame, openUF-to-openUF key pulls included, and the symptom
+  would be "FT silently falls back to a full handshake" on every roam. The daemon's own changes
+  (waiting instead of exiting, the peers file) are marked `// openUF:` in a file whose upstream
+  is d-malinowski's repository, not this one: keep them small and re-applicable. The whole
+  repository is GPL-3.0-or-later since 2026-10-25 because of it; NOTICE carries the MIT notice
+  for jonasevcik's original work, which MIT requires to travel with the code.
 - **Two kernel modules are not implied by their packages.** `kmod-nft-bridge` for the
   Multicast/Broadcast Blocker's `meta` rule (everything else in that table builds without
   it, so the control looks enabled and filters nothing) and `kmod-sched-act-police` for the
@@ -861,6 +914,18 @@ credited to this repo), so diff before assuming a commit is new.
   the guest portal (REVERSE-ENGINEERING.md backlog row 24).
   Each sync is a row in REVERSE-ENGINEERING.md's session log and an "Adopted from upstream,
   <date>" section in PROTOCOL-VALIDATION.md -- update both, and move this line.
+- **A third fork is a remote too: `dmalinowski` → d-malinowski/openUF.** Its
+  `pr/unifi-ft-interop` (one commit, `94ac182`) was adopted on 2026-10-25 as `ftinterop.lua`
+  (PROTOCOL-VALIDATION.md, "Adopted from d-malinowski/openUF"); it is proposed to upstream but
+  not merged there, so a later upstream sync may bring the same change back under
+  `openuf/ftinterop.lua` -- diff before re-applying. Their `pr/hh5a-modelmap` (a BT Home Hub 5A
+  map, lantiq/xrx200) was merged by jonasevcik on 2026-10-25 (`d6745b8`, the first upstream
+  commits past `2f263f3`) and is not yet reviewed here. Their hardware is a HH5A and a U7 Lite;
+  label it. **The translator has an upstream of its own**: `openuf/rrb/rrb-unifi.uc` is
+  https://github.com/d-malinowski/unifi-openwrt-roaming at 1.3 (`767a28c`), vendored
+  2026-10-25 with the changes marked `// openUF:`; take fixes from there (the local clone
+  `../unifi-openwrt-roaming` has it as `upstream`), re-apply the marked changes, and update
+  `openuf/rrb/README.md`'s commit. The fork `yesrab/unifi-openwrt-roaming` is not a source.
 - **Mechanics that worked in syncs 3 and 4:** `git add -A` first, then per commit **in
   upstream's order** `git show --format= <c> -- openuf/ tests/ ':!openuf/guestportal.lua'
   ':!tests/test_guestportal.lua' | git apply --3way` (the fetch puts their blobs in our
@@ -914,6 +979,11 @@ openuf/
   wlansched.lua     WiFi Blackout Schedule: the firmware's schedule lines, netdev down/up
   stun.lua          the STUN client whose mapped address the controller wakes
   rrbguard.lua      repairs hostapd's stale 802.11r key-exchange socket (wpad restart)
+  ftinterop.lua     802.11r with genuine UniFi APs (conf `unifi_ft_interop`, on by default
+                    for new installations; with the translator switched off it only changes
+                    the mobility-domain formula and FT-PSK's key path): UniFi's
+                    mobility domain, explicit key holders for the peers the rrb-unifi
+                    translator lists, nasid = BSSID, hostapd's ft_iface on the translator's veth
   util.lua          shared helpers: file/command reads, exec_ok, is_mac, bit shim, sysfs
                     master_of/driver_of, nft_apply (one `nft -f` transaction per table)
   unhandled.lua     /etc/openuf/unhandled.json: every _type, cmd, mgmt_cfg key and
@@ -942,7 +1012,14 @@ openuf/
                     openuf-convert.sh (/usr/sbin/openuf-convert: setup.sh's AP
                     conversion as --check/--convert/--revert), openuf-deps.sh
                     (/usr/sbin/openuf-deps, `openuf deps`: what openUF needs
-                    installed as JSON, and the basic-to-full wpad swap)
+                    installed as JSON, the basic-to-full wpad swap, and the
+                    translator service's start), openuf-rrb.sh (`openuf rrb
+                    status|peers|collect|verify`, adapted from rrb-unifi-setup)
+  rrb/              the 802.11r translator for genuine UniFi APs: rrb-unifi.uc
+                    (d-malinowski's, vendored; README.md there
+                    names the upstream commit and the `// openUF:` changes), run as
+                    etc/init.d/openuf-rrb; learns the UniFi APs on the LAN into
+                    /var/run/openuf/rrb-peers.json for ftinterop.lua
   etc/init.d/openuf procd service: announce + inform instances; finds either prefix
 package/            the OpenWrt feed: openuf (net/), luci-app-openuf (the LuCI pages, the device
                     page htdocs/openuf/ and its gate root/usr/share/ucode/openuf/gate.uc) and
@@ -960,7 +1037,7 @@ REVERSE-ENGINEERING.md   the open questions: unimplemented surfaces + experiment
 ```
 
 `PROTOCOL-VALIDATION.md` records what was confirmed against a live controller versus
-inferred from decompilation, and **supersedes README/USAGE where they disagree**. If you
+inferred from decompilation, and **supersedes REFERENCE/USAGE where they disagree**. If you
 are about to change protocol behaviour, check there first for why it is the way it is.
 
 `REVERSE-ENGINEERING.md` is the other half: what is *not* implemented, what is known about
