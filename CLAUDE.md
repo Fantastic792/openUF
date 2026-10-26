@@ -48,6 +48,8 @@ sh tools/hotpatch.sh [--repush] <ap-ip>  # --repush blanks cfgversion for a full
 # Judge a deployed AP from both sides: selfcheck.sh + logread over ssh
 # (tools/verify-collect.sh) and the controller's stat/device record. Read-only;
 # UNIFI_API_KEY, or UNIFI_USER (+ password prompt). Report in verify-<ap>-<time>/
+# Any board: the profile is read off the device (probe.lua status); --profile
+# <modelmap> also FAILs when the device runs a different one.
 python3 tools/verify.py --router <ap-ip> --controller https://<controller>:8443
 
 # Shell syntax — BOTH, every time (see "Shell code" below)

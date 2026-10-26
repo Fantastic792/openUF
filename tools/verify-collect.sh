@@ -73,8 +73,58 @@ for p in /sys/class/ieee80211/*; do
 done
 uci -q show wireless 2>/dev/null | grep -E '^wireless\.[^.]+\.(band|hwmode|disabled)=' | grep -v 'openuf_'
 
+# Which phy each UCI radio runs on, from the live interface names netifd
+# reports (phyN-apM), and the frequency that interface OPERATES on: the band
+# a radio really runs. A phy's first listed frequency is not that -- a phy
+# can support several bands (mac80211_hwsim, single-wiphy MT7996), and then
+# it always reads 2412. A radio with no interface up yet has no line.
+echo "### radiophy"
+ubus call network.wireless status 2>/dev/null | lua -e '
+	local ok, cjson = pcall(require, "cjson")
+	if not ok then return end
+	local okd, st = pcall(cjson.decode, io.read("*a"))
+	if not okd or type(st) ~= "table" then return end
+	for radio, r in pairs(st) do
+		for _, i in ipairs(type(r) == "table" and r.interfaces or {}) do
+			local phy = type(i.ifname) == "string" and i.ifname:match("^(phy%d+)%-")
+			if phy and i.ifname:match("^[%w%-%._]+$") then print(radio .. " " .. phy .. " " .. i.ifname) break end
+		end
+	end
+' 2>/dev/null | while read -r radio phy ifname; do
+	echo "$radio $phy $(iw dev "$ifname" info 2>/dev/null | sed -n 's/.*channel [0-9]* (\([0-9]*\) MHz).*/\1/p')"
+done
+
 echo "### leds"
 ls /sys/class/leds 2>/dev/null
+
+# The hardware profile as the daemon resolves it (conf.lua, then UCI when it
+# is in charge): probe.lua is the same resolver the LuCI app reads. Only the
+# profile and identity are printed -- `probe status` also carries state.
+# Plus the profile's own radio-order line, which says which radio is which
+# band ("radio0 = 2.4 GHz, radio1 = 5 GHz"): verify.py checks it against the
+# phys, on every board rather than one.
+echo "### profile"
+for d in /opt/openuf /usr/lib/openuf; do
+	[ -f "$d/hook/probe.lua" ] || continue
+	(cd "$d" && lua hook/probe.lua status 2>/dev/null | lua -e '
+		local ok, cjson = pcall(require, "cjson")
+		if not ok then return end
+		local okd, s = pcall(cjson.decode, io.read("*a"))
+		if not okd or type(s) ~= "table" then return end
+		print("json=" .. cjson.encode({board = s.board, config_error = s.config_error,
+			uci_managed = s.uci_managed, modelmap = s.modelmap, identity = s.identity}))
+		local name = type(s.modelmap) == "table" and s.modelmap.name
+		local f = type(name) == "string" and name:match("^[%w_.-]+$")
+			and io.open("modelmap/" .. name .. ".lua")
+		if f then
+			for line in f:lines() do
+				if line:match("hwassign%s*=%s*{") then print("hwassign_line=" .. line) break end
+			end
+			f:close()
+		end
+	' 2>/dev/null)
+	break
+done
 
 echo "### state"
 for k in $STATE_KEYS; do

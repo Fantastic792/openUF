@@ -12,6 +12,11 @@ Usage (from the repository root, on the dev machine):
   python3 tools/verify.py --router 192.168.1.20 \\
       --controller https://192.168.1.50:8443 [--site default]
   python3 tools/verify.py --router 192.168.1.20          # router side only
+  python3 tools/verify.py --router 192.168.1.20 --profile xiaomi-ax3000t
+
+Any supported board: the profile (board names, radio order, LED, sockets)
+is read from the device as the daemon resolves it; --profile only adds a
+check that it is the one you meant to install.
 
 Controller login, in order of preference:
   UNIFI_API_KEY=...            an API key (Settings > Control Plane >
@@ -51,8 +56,13 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PROFILE = "jiorouter-ax6000-jidu6j01"
-BOARD = "jiorouter,ax6000-jidu6j01"
+
+# The board, the profile and what the profile says about the radios, LED and
+# sockets all come from the device (verify-collect.sh's "profile" section,
+# the daemon's own resolver), so one tool judges every supported board. It
+# was written for the JIDU6J01 alone, with that profile's board name, radio
+# order, LED and five sockets as constants: on any other board it FAILed
+# checks that were fine. --profile still names the one you meant to install.
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Report
@@ -253,14 +263,48 @@ def show_log(r, lines, level, what, keep=3):
         r.info("    " + l[-200:])
 
 
+def profile_of(sec):
+    """The profile section: the resolved modelmap/identity (JSON) and the map's
+    own hwassign line. {} when the collector could not run probe.lua."""
+    p = {}
+    for l in sec.get("profile", []):
+        if l.startswith("json="):
+            try:
+                p.update(json.loads(l[5:]))
+            except ValueError:
+                pass
+        elif l.startswith("hwassign_line="):
+            p["hwassign_line"] = l[len("hwassign_line="):]
+    return p
+
+
+def band_of_mhz(mhz):
+    if 2400 <= mhz < 2500:
+        return "2g"
+    if 4900 <= mhz < 5900:
+        return "5g"
+    if 5925 <= mhz < 7200:
+        return "6g"
+    return None
+
+
+GHZ = {"2g": "2.4 GHz", "5g": "5 GHz", "6g": "6 GHz"}
+
+
+def stated_bands(line):
+    """{"radio0": "2g", ...} from a profile's hwassign comment, e.g.
+    '-- radio0 = 5 GHz, radio1 = 2.4 GHz (unverified)'. {} when it says none."""
+    out = {}
+    comment = line.split("--", 1)[1] if "--" in (line or "") else ""
+    for radio, ghz in re.findall(r"(radio\d+)\s*=\s*(2\.4|5|6)\s*GHz", comment):
+        out[radio] = {"2.4": "2g", "5": "5g", "6": "6g"}[ghz]
+    return out
+
+
 def check_install(r, sec):
     r.group("install (headless, from this tree)")
     b, ins, st = kv(sec.get("board", [])), sec.get("install", []), kv(sec.get("status", []))
-    if b.get("board_name") == BOARD:
-        r.ok("board %s (%s)" % (BOARD, b.get("model", "?")))
-    else:
-        r.fail("board is %r, not %s -- wrong device, or not the JIDU6J01 family"
-               % (b.get("board_name"), BOARD))
+    r.info("board %s (%s)" % (b.get("board_name") or "?", b.get("model", "?")))
     r.info("OpenWrt: " + b.get("release", "?"))
     prefixes = [l.split("=", 1)[1] for l in ins if l.startswith("prefix=")]
     if prefixes == ["/opt/openuf"]:
@@ -275,11 +319,6 @@ def check_install(r, sec):
     i = kv(ins)
     if i.get("build"):
         r.info("build stamp: " + i["build"])
-    mm = i.get("uci_modelmap") or i.get("conf_modelmap")
-    if mm == PROFILE:
-        r.ok("modelmap " + PROFILE)
-    else:
-        r.fail("modelmap is %r, expected %s" % (mm, PROFILE))
     if i.get("daemon") == "running":
         r.ok("daemon running")
     else:
@@ -309,27 +348,109 @@ def check_install(r, sec):
         r.fail("basic wpad -- the first WLAN push takes the radio down; install a full wpad")
 
 
-def check_profile(r, sec):
-    r.group("JIDU6401 profile (never verified on this family)")
+def check_profile(r, sec, expect=None):
+    p = profile_of(sec)
+    mm = p.get("modelmap") or {}
+    name = mm.get("name")
+    r.group("%s profile (%s)" % (mm.get("title") or name or "hardware",
+                                 name or "not resolved"))
+    if p.get("config_error"):
+        r.fail("the configuration does not load: " + str(p["config_error"]))
+    if not name:
+        i = kv(sec.get("install", []))
+        name = i.get("uci_modelmap") or i.get("conf_modelmap")
+        r.warn("probe.lua gave no profile (older build?); conf/UCI names %r -- "
+               "profile checks below are limited" % name)
+    if expect:
+        if name == expect:
+            r.ok("modelmap %s, as asked (--profile)" % name)
+        else:
+            r.fail("modelmap is %r, --profile asked for %s" % (name, expect))
+    elif name:
+        r.ok("modelmap %s%s" % (name, " (from UCI)" if p.get("uci_managed") else ""))
+
+    # The board: one of the names the profile claims. A generic profile
+    # claims none and fits any board with its radio count.
+    board = kv(sec.get("board", [])).get("board_name") or p.get("board")
+    claims = mm.get("boards") or []
+    if claims:
+        if board in claims:
+            r.ok("board %s is one the profile claims" % board)
+        else:
+            r.fail("board is %r, the profile claims %s -- wrong profile for this device"
+                   % (board, ", ".join(claims)))
+    elif mm:
+        r.info("generic profile: claims no board name (board %s)" % (board or "?"))
+    ident = p.get("identity") or {}
+    if ident.get("name"):
+        r.info("presents as %s (%s, firmware %s)" % (ident.get("model") or "?", ident["name"],
+                                                    ident.get("fw_ver") or "?"))
+
+    # The radios: each hwassign radio's UCI band against the frequencies its
+    # phy really runs, and against what the profile says the order is.
     radios = sec.get("radios", [])
-    phys = {l.split(" ", 1)[0]: l for l in radios if l.startswith("phy")}
-    p0 = phys.get("phy0", "")
-    m = re.search(r"(\d{4})(?:\.\d+)? MHz", p0)
-    if m and 2400 <= int(m.group(1)) < 2500:
-        r.ok("phy0 is 2.4 GHz, as the map says (radio0 = 2.4, radio1 = 5)")
-    elif p0:
-        r.fail("phy0 is not 2.4 GHz (%s) -- the map's radio order comment is wrong; "
-               "check uci band of radio0/radio1" % p0.strip())
-    else:
-        r.fail("no phy0 -- the Wi-Fi driver did not load")
+    phy_band = {}
+    for l in radios:
+        if l.startswith("phy"):
+            m = re.search(r"\* (\d{4})(?:\.\d+)? MHz", l)
+            phy_band[l.split(" ", 1)[0]] = band_of_mhz(int(m.group(1))) if m else None
+    uci_band = {}
+    for l in radios:
+        m = re.match(r"wireless\.([^.]+)\.(band|hwmode)='?([^']*)'?", l)
+        if m:
+            v = m.group(3)
+            if m.group(2) == "hwmode":
+                v = "5g" if "a" in v else "2g"
+            uci_band.setdefault(m.group(1), v)
+    # "radio phy [operating MHz]": the operating frequency is the band the
+    # radio really runs; a phy's first listed frequency only stands in when
+    # the interface reported none (a phy may support several bands).
+    radio_phy, radio_live = {}, {}
+    for l in sec.get("radiophy", []):
+        f = l.split()
+        if len(f) >= 2:
+            radio_phy[f[0]] = f[1]
+            if len(f) >= 3 and f[2].isdigit():
+                radio_live[f[0]] = band_of_mhz(int(f[2]))
+    stated = stated_bands(p.get("hwassign_line"))
+    hw = mm.get("hwassign") or sorted(uci_band)
+    if not phy_band:
+        r.fail("no phy at all -- the Wi-Fi driver did not load")
+    for radio in hw:
+        ub, phy = uci_band.get(radio), radio_phy.get(radio)
+        live = radio_live.get(radio) or (phy_band.get(phy) if phy else None)
+        if ub is None:
+            r.fail("%s is in hwassign but has no band in UCI (no such radio section?)" % radio)
+            continue
+        if phy and live and live != ub:
+            r.fail("%s: UCI says %s but %s runs %s" % (radio, GHZ.get(ub, ub), phy, GHZ.get(live, live)))
+        elif phy and live:
+            r.ok("%s = %s (%s)" % (radio, GHZ.get(ub, ub), phy))
+        else:
+            r.info("%s = %s in UCI; no interface up to tie it to a phy yet" % (radio, GHZ.get(ub, ub)))
+        want = stated.get(radio)
+        if want and want != ub:
+            r.fail("%s is %s here, the profile says %s -- fix its hwassign comment (radio order)"
+                   % (radio, GHZ.get(ub, ub), GHZ.get(want, want)))
+        elif want:
+            r.ok("%s matches the profile's radio order (%s)" % (radio, GHZ.get(want, want)))
+    bands = sorted({uci_band.get(x) for x in hw if uci_band.get(x)})
+    if len(hw) >= 2 and not ("2g" in bands and "5g" in bands):
+        r.fail("a dual-radio profile with bands %s -- expected 2.4 GHz and 5 GHz" % bands)
     for l in radios:
         if l.startswith("wireless."):
             r.info(l)
+
+    # The LED the profile drives for Locate and the LED toggle: a sysfs name,
+    # or a full path; none at all is a profile choice (Locate is a no-op).
+    led = mm.get("led")
     leds = sec.get("leds", [])
-    if "green:status" in leds:
-        r.ok("LED green:status exists (Locate, LED toggle)")
+    if not led:
+        r.skip("the profile declares no LED: Locate and the LED toggle do nothing")
+    elif os.path.basename(str(led).rstrip("/")) in leds:
+        r.ok("LED %s exists (Locate, LED toggle)" % led)
     else:
-        r.fail("no green:status LED; available: %s -- fix dev.conf.led" % " ".join(leds))
+        r.fail("no LED %s; available: %s -- fix dev.conf.led" % (led, " ".join(leds) or "none"))
     # AP-DISABLED alone is not a DFS failure: hostapd logs it for every BSS on
     # every ordinary `wifi reload` (each config push), so matching it failed
     # every AP that had been provisioned (QEMU test VM, 2026-10-27). A failed
@@ -341,7 +462,7 @@ def check_profile(r, sec):
         r.ok("no DFS CAC failure in the log")
 
 
-def check_controller_device(r, dev, mac):
+def check_controller_device(r, dev, mac, sockets=None):
     r.group("controller: device record")
     if dev is None:
         r.fail("controller has no device %s -- not adopted, or adopted under another MAC "
@@ -370,10 +491,13 @@ def check_controller_device(r, dev, mac):
     r.info("%d SSID(s) reported, %d up: %s" % (len(vaps), len(up),
            ", ".join(sorted({"%s/%s" % (v.get("essid"), v.get("radio")) for v in vaps}))))
     ports = dev.get("port_table") or []
-    if len(ports) == 5:
-        r.ok("5 ports reported")
+    if sockets is None:
+        r.info("%d ports reported (the profile's socket count is unknown)" % len(ports))
+    elif len(ports) == sockets:
+        r.ok("%d ports reported, as the profile's sockets" % len(ports))
     else:
-        r.warn("%d ports reported (the map has 5 sockets; a variant with fewer holes?)" % len(ports))
+        r.warn("%d ports reported, the profile has %d sockets (a variant with fewer holes?)"
+               % (len(ports), sockets))
 
 
 def check_mesh(r, sec, dev, devices):
@@ -507,6 +631,8 @@ def main():
     ap.add_argument("--controller", help="controller URL, e.g. https://192.168.1.50:8443")
     ap.add_argument("--site", default="default", help="site id (default: default)")
     ap.add_argument("--mac", help="the AP's identity MAC, if the status file has none")
+    ap.add_argument("--profile", help="the modelmap you meant to install, e.g. "
+                    "jiorouter-ax6000-jidu6j01 (default: judge against whatever the device runs)")
     ap.add_argument("--verify-tls", action="store_true", help="check the controller's certificate")
     ap.add_argument("--timeout", type=int, default=90, help="ssh timeout in seconds")
     ap.add_argument("--out", help="report directory (default: verify-<router>-<time>)")
@@ -564,9 +690,10 @@ def main():
 
     r = Report()
     check_install(r, sec)
-    check_profile(r, sec)
+    check_profile(r, sec, a.profile)
     if a.controller:
-        check_controller_device(r, dev, mac)
+        mm = profile_of(sec).get("modelmap") or {}
+        check_controller_device(r, dev, mac, len(mm["ports"]) if mm.get("ports") else None)
     check_mesh(r, sec, dev, devices)
     check_loadbalance(r, sec)
     check_uplinkmon(r, sec, setting)
