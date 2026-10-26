@@ -611,6 +611,34 @@ return {
 		end
 	},
 	{
+		name = "backhaul: tick() with a downlink and no uplink station still beacons the rooted element",
+		fn = function()
+			-- A wired root whose Wireless Meshing is off: the push carries the
+			-- downlink only. tick() returned before multihop_tick, so the
+			-- downlink beaconed version 1 alone (QEMU test VM, 2026-10-26).
+			local sysinfo = dofile("openuf/sysinfo.lua")
+			local si = {peer_ie_hex = sysinfo.peer_ie_hex, peer_path_ie_hex = sysinfo.peer_path_ie_hex}
+			local set, saved = {}, 0
+			local uf = fake_ufuci({}, nil, {{name = "openuf_bh_dl_radio1"}})
+			uf.backhaul_set_downlink_ie = function(h) set[#set + 1] = h; return true end
+			local st = {mac = "aa:00:00:00:00:0a"}
+			backhaul._dirty = false
+			local mode = backhaul.tick(st, {}, uf, si, {save = function() saved = saved + 1 end})
+			assert_eq(mode, nil, "still no uplink mode to report")
+			assert_eq(st.backhaul_ie, sysinfo.peer_path_ie_hex("aa:00:00:00:00:0a", true, nil, {}),
+				"rooted, no ancestors")
+			assert_eq(set[1], sysinfo.peer_ie_hex("aa:00:00:00:00:0a") .. st.backhaul_ie, "handed to the downlink")
+			assert_eq(saved, 1, "and persisted")
+			assert_eq(#uf.calls, 0, "no station switched")
+
+			local none = fake_ufuci({}, nil, {})
+			none.backhaul_set_downlink_ie = function() error("no downlink: nothing to write") end
+			local st2 = {mac = "aa:00:00:00:00:0a"}
+			backhaul.tick(st2, {}, none, si, nil)
+			assert_eq(st2.backhaul_ie, nil, "no mesh at all: untouched")
+		end
+	},
+	{
 		name = "backhaul: child_serialno() names a child by the station in its own element, grandchildren or not",
 		fn = function()
 			local st = {backhaul_seen = {

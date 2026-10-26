@@ -399,7 +399,22 @@ end
 function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 	if not (st and ufuci and ufuci.backhaul_uplink_sections) then return nil end
 	local secs = ufuci.backhaul_uplink_sections()
-	if #secs == 0 then return nil end
+	if #secs == 0 then
+		-- No uplink station (the device's Wireless Meshing is off): nothing to
+		-- switch, but a pushed downlink still beacons this device's version 2
+		-- element, rooted and with no ancestors. Returning before multihop_tick
+		-- left a wired root's downlink with the version 1 element alone (found
+		-- on a QEMU test VM, 2026-10-26), so a child below it never learnt the
+		-- first link of the chain.
+		if ufuci.backhaul_downlink_sections and #ufuci.backhaul_downlink_sections() > 0 then
+			pcall(M.multihop_tick, st, ufuci, sysinfo, "wired", nil)
+			if M._dirty and state_mod and state_mod.save then
+				pcall(state_mod.save, st)
+				M._dirty = false
+			end
+		end
+		return nil
+	end
 	local sta_if = ufuci.ifname_for_section and ufuci.ifname_for_section(secs[1].name) or nil
 	local swconfig = (cfg and cfg.vlan and cfg.vlan.ports) and true or false
 	local sockets, cpu = switch_sockets(cfg)
