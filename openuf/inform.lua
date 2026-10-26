@@ -2639,8 +2639,14 @@ function M._parse_wifi_system_cfg(sys_raw)
 		-- beaconed as a plain hidden SSID and the station as an AP carrying
 		-- the backhaul credentials. Both are skipped out loud until the mesh
 		-- work can provision them for what they are.
+		-- usage=guest is an ordinary AP too: a portal WLAN arrives as
+		-- `mode=master usage=guest` (PROTOCOL-VALIDATION.md, "Guest portal").
+		-- Before that was excluded here, a Hotspot SSID on a device with Mesh
+		-- Parent on became a "downlink" entry, was never provisioned as a
+		-- guest AP, and replaced the real vwire downlink in backhaul.plan
+		-- (QEMU test VM against 10.6.106, 2026-10-26).
 		local is_station = (w.mode ~= nil and w.mode ~= "master")
-			or (w.usage ~= nil and w.usage ~= "user")
+			or (w.usage ~= nil and w.usage ~= "user" and w.usage ~= "guest")
 		if is_station and w.ssid then
 			local role = (w.usage == "downlink" or (w.mode == "master" and w.usage ~= "uplink"))
 				and "downlink" or "uplink"

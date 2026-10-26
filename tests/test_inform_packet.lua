@@ -2446,6 +2446,28 @@ return {
 			assert_eq(count("wireless.1.usage=uplink\n"), 0, "usage alone")
 			assert_eq(count(""), 1, "no markers: an ordinary WLAN")
 			assert_eq(count("wireless.1.mode=master\nwireless.1.usage=user\n"), 1, "the wired shape")
+			assert_eq(count("wireless.1.mode=master\nwireless.1.usage=guest\n"), 1, "a guest (portal) WLAN")
+		end
+	},
+	{
+		name = "inform packet: a guest WLAN beside the mesh downlink is a guest AP, not a second downlink",
+		fn = function()
+			-- 10.6.106 with Mesh Parent on and a Hotspot SSID (QEMU test VM,
+			-- 2026-10-26): the guest WLAN came back as a backhaul "downlink"
+			-- and took the vwire downlink's place in backhaul.plan.
+			local sys_cfg = "aaa.1.ssid=vwire-5f3369181f7fbab5\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "aaa.1.wpa.psk=backhaulsecret\naaa.1.hide_ssid=true\n"
+				.. "wireless.1.ssid=vwire-5f3369181f7fbab5\nwireless.1.parent=radio1\n"
+				.. "wireless.1.mode=master\nwireless.1.usage=downlink\nwireless.1.wds=enabled\n"
+				.. "aaa.2.ssid=guest-wlan\naaa.2.is_guest=true\n"
+				.. "wireless.2.ssid=guest-wlan\nwireless.2.parent=radio1\n"
+				.. "wireless.2.mode=master\nwireless.2.usage=guest\nwireless.2.is_guest=true\n"
+			local _, vt, bh = inform._parse_wifi_system_cfg(sys_cfg)
+			assert_eq(#vt, 1, "the guest WLAN is provisioned")
+			assert_eq(vt[1].ssid, "guest-wlan", "as itself")
+			assert_true(vt[1].is_guest, "and as a guest VAP")
+			assert_eq(#bh, 1, "one backhaul entry")
+			assert_eq(bh[1].ssid, "vwire-5f3369181f7fbab5", "the real downlink")
 		end
 	},
 	{
