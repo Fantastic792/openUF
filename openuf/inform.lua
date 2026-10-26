@@ -5248,6 +5248,21 @@ function M._l2guard_resync(st)
 	return true
 end
 
+-- Once a minute: the Multicast/Broadcast Blocker's ruleset against the live
+-- VAPs (ucihelper.resync_runtime_rules), so a push whose `wifi reload` had not
+-- finished when the rules were built does not leave the blocker filtering
+-- nothing until the next restart. Returns true when it rebuilt.
+M.BCFILT_RESYNC_INTERVAL = 60
+M._bcfilt_next = 0
+function M._bcfilt_resync()
+	local u = M._ucihelper
+	if not (u and u.resync_runtime_rules) then return false end
+	local now = M._time()
+	if now < M._bcfilt_next then return false end
+	M._bcfilt_next = now + M.BCFILT_RESYNC_INTERVAL
+	return u.resync_runtime_rules()
+end
+
 -- Once a minute, independent of the ebtables block: a force-isolated BSS
 -- whose bridge port lost its hairpin flag (l2guard.reconcile_hairpin) cuts
 -- its clients off from each other, and the reconfigure that causes it can
@@ -6253,6 +6268,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	-- rides out on THIS inform rather than waiting for the next.
 	pcall(M._rrm_tick, cfg, st)
 	pcall(M._l2guard_resync, st)
+	pcall(M._bcfilt_resync)
 	pcall(M._backhaul_tick, st, cfg)
 	pcall(M._uplinkmon_resync, st, cfg)
 	pcall(M._meshvlan_resync, st, cfg)

@@ -4102,6 +4102,42 @@ return {
 		end
 	},
 	{
+		-- QEMU test VM, 2026-10-26: apply_config reconciled before netifd had
+		-- the VAPs up, the ruleset came out empty, and nothing rebuilt it.
+		name = "ucihelper: resync_runtime_rules rebuilds the blocker once the VAPs come up, and only then",
+		fn = function()
+			with_ucihelper(function()
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "openuf_radio0_corp", "wifi-iface")
+				c:set("wireless", "openuf_radio0_corp", "device", "radio0")
+				c:set("wireless", "openuf_radio0_corp", "ssid", "corp")
+				c:set("wireless", "openuf_radio0_corp", "openuf_bcfilt", "1")
+				c:set("wireless", "openuf_radio0_corp", "openuf_bcfilt_macs", "aa:bb:cc:dd:ee:ff")
+				local calls = {}
+				ucihelper._bcfilter = {reconcile = function(r) calls[#calls + 1] = r end}
+				local live = {}
+				ucihelper.get_ifnames_for_vap = function() return live end
+
+				-- What apply_config leaves behind when the reload was not done.
+				ucihelper.reapply_runtime_rules()
+				assert_eq(#calls[1], 0, "built empty: no netdev yet")
+				assert_false(ucihelper.resync_runtime_rules(), "still not answering: left alone")
+				assert_eq(#calls, 1, "no rebuild while nothing resolves")
+
+				live = {"wlan0", "wlan0-owe"}
+				assert_true(ucihelper.resync_runtime_rules(), "the VAPs are up: rebuilt")
+				assert_eq(#calls[2], 2, "on both netdevs")
+				assert_eq(calls[2][1].macs[1], "aa:bb:cc:dd:ee:ff", "with the allow-list")
+				assert_false(ucihelper.resync_runtime_rules(), "unchanged: no rebuild")
+				assert_eq(#calls, 2, "still two")
+
+				c:set("wireless", "openuf_radio0_corp", "openuf_bcfilt", "0")
+				assert_true(ucihelper.resync_runtime_rules(), "turned off: torn down")
+				assert_eq(#calls[3], 0, "an empty ruleset")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: apply_config issues wifi reload BEFORE the bcfilter reconcile",
 		fn = function()
 			-- The ordering is load-bearing: the blocker resolves live netdev

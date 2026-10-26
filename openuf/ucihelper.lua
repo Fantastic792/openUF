@@ -1455,16 +1455,35 @@ end
 -- contract firewall.lua keeps. (WiFi Speed Limit is per client, so it needs
 -- the stations: inform's _shaper_resync applies it every heartbeat from the
 -- openuf_ratelimit_* stamps, see shaper.lua.)
+local function bcfilt_rules(entries)
+	local rules = {}
+	for _, e in ipairs(entries) do
+		if e.bcfilt_enabled then
+			rules[#rules + 1] = {ifname = e.ifname, macs = e.bcfilt_macs or {}}
+		end
+	end
+	return rules
+end
+
+-- What a ruleset covers, order-free: the resync compares this with the one
+-- last built to decide whether there is anything to rebuild.
+local function bcfilt_sig(rules)
+	local parts = {}
+	for _, r in ipairs(rules) do
+		parts[#parts + 1] = tostring(r.ifname) .. "=" .. table.concat(r.macs or {}, ",")
+	end
+	table.sort(parts)
+	return table.concat(parts, " ")
+end
+
+M._bcfilt_sig = nil   -- the ruleset last handed to bcfilter, as bcfilt_sig()
+
 local function reconcile_runtime(entries)
 	local bcfilter = get_bcfilter()
 	if bcfilter then
-		local rules = {}
-		for _, e in ipairs(entries) do
-			if e.bcfilt_enabled then
-				rules[#rules + 1] = {ifname = e.ifname, macs = e.bcfilt_macs or {}}
-			end
-		end
+		local rules = bcfilt_rules(entries)
 		bcfilter.reconcile(rules)
+		M._bcfilt_sig = bcfilt_sig(rules)
 	end
 end
 
@@ -2046,10 +2065,13 @@ end
 -- Called at startup by inform.M.run, alongside the blocked-client and LED
 -- reconciliation, and for the same reason. Returns the number of managed VAPs
 -- it found, for the caller's log line.
-function M.reapply_runtime_rules()
+-- The blocker entries the managed sections' stamps describe, on each VAP's
+-- live netdevs, plus how many enabled sections ask for the blocker at all
+-- (resolvable or not).
+local function runtime_entries()
 	local uci = get_uci()
 	local cursor = uci.cursor()
-	local entries = {}
+	local entries, wanted = {}, 0
 	cursor:foreach("wireless", "wifi-iface", function(s)
 		local name = s[".name"]
 		if not name or name:sub(1, #OPENUF_PREFIX) ~= OPENUF_PREFIX then return end
@@ -2057,6 +2079,7 @@ function M.reapply_runtime_rules()
 		-- teardown: the reload that disabled it took its interface, and with it
 		-- every qdisc and every nft rule that named it.
 		if s.disabled == "1" then return end
+		if s.openuf_bcfilt == "1" then wanted = wanted + 1 end
 		local ok_if, ifnames = pcall(M.get_ifnames_for_vap, s.device, s.ssid)
 		if not ok_if then return end
 		local macs = {}
@@ -2071,8 +2094,33 @@ function M.reapply_runtime_rules()
 			}
 		end
 	end)
+	return entries, wanted
+end
+
+function M.reapply_runtime_rules()
+	local entries = runtime_entries()
 	reconcile_runtime(entries)
 	return #entries
+end
+
+-- Rebuild the blocker when the live VAPs no longer match the ruleset last
+-- built. apply_config reconciles right after `wifi reload`, but netifd brings
+-- the VAPs up asynchronously: when they were not up yet the ruleset came out
+-- EMPTY, and nothing rebuilt it until the daemon restarted -- the SSID was
+-- stamped openuf_bcfilt=1 while the chain filtered nothing (QEMU test VM,
+-- 2026-10-26). Sections asking for the blocker with none of their netdevs
+-- resolvable is "wireless not answering yet", never "nothing to filter": the
+-- table is left alone. Returns true when it rebuilt.
+function M.resync_runtime_rules()
+	local entries, wanted = runtime_entries()
+	local rules = bcfilt_rules(entries)
+	if wanted > 0 and #rules == 0 then return false end
+	local sig = bcfilt_sig(rules)
+	if sig == M._bcfilt_sig then return false end
+	io.stderr:write("bcfilter: VAPs changed (" .. (sig ~= "" and sig or "none")
+		.. ") -- rebuilding\n")
+	reconcile_runtime(entries)
+	return true
 end
 
 -- ─── Read helpers (for inform payload builder) ───────────────────────────────
