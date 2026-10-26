@@ -574,6 +574,16 @@ factory reset.
   reboot bug.
   The IP branch of `handle_response` saves state the moment the interface changes, not at
   the tail: anything after it can raise, and the startup reapply reads what was saved.
+- **Anything keyed to a VAP's live netdev needs a resync, not just a build after `wifi
+  reload`.** netifd brings the VAPs up asynchronously, so a lookup right after the reload can
+  find none: the Blocker's ruleset came out empty that way and stayed empty until a restart
+  (QEMU test VM, 2026-10-26). l2guard, the guest portal, usteer's filter and now the Blocker
+  (`ucihelper.resync_runtime_rules`) each re-check once a minute; a new per-VAP kernel rule
+  needs the same, and "nothing resolves" must mean "not answering yet", never "tear down".
+- **`usage=guest` is an ordinary AP.** A portal WLAN arrives `mode=master usage=guest`; the
+  mesh guard in `_parse_wifi_system_cfg` once read every `usage` but `user` as a backhaul VAP,
+  and with Mesh Parent on the guest SSID replaced the vwire downlink. Only `downlink`/`uplink`
+  (and a non-master `mode`) are backhaul.
 - **Every openUF nft table is rebuilt in ONE `nft -f` transaction** (`util.nft_apply`):
   `add table` + `delete table` + the new statements in one commit, so a blocked client
   never slips through between the delete and the rebuild. When the batch is rejected the

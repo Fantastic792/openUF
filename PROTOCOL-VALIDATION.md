@@ -2431,6 +2431,55 @@ matches a basic build's event names) and `lan_bridge` where they use `bridge_of`
 | OpenWrt's Lua carries the LNUM patch: `string.format("%d", x)` raises for \|x\| > 2^31 on the APs but not on CI or a dev machine | Their boards; **reproduced on AP2's Lua 5.1.5 on 2026-10-18** | Format epochs in ms with `%.0f` (CLAUDE.md) |
 | The resource audit: forks per steady heartbeat 16 → 10 (C5) / 17 → 12 (AX3000T), CPU to build one 242 → 95 ms / 38 → 22 ms, RSS 3068 → 2378 kB / 3882 → 3030 kB after a full collection per tick | Measured on their two boards over 30 min each | Adopted where ours had the same shape: `util.lua` (sysfs reads for master/driver instead of `readlink` forks), one `iw dev` per pass, one ucihelper pass per tick, AKMs cached per association (not the sibling tags -- see below), the LLDP neighbour cache removed altogether instead, and the sibling-tag cache (a stranger kept ten minutes, a sibling an hour) not taken either -- both by decision the same day: what the controller shows follows reality on the next heartbeat, one fork per read is the price, probe requests dropped in the collector, zlib looked up once, `collectgarbage("collect")` per cycle. Not measured on a JioRouter yet |
 
+## QEMU test VM against a live 10.6.106 controller — 2026-10-26
+
+Not hardware: OpenWrt 25.12.6 x86-64 under QEMU (TCG), the JIDU6J01 modelmap with
+`/tmp/sysinfo/board_name` overridden, three `mac80211_hwsim` radios (radio0 2.4 GHz, radio1
+5 GHz, the third a test client in its own network namespace, or a hand-run hostapd playing
+another AP), installed with `setup.sh --headless` and adopted by a self-hosted UniFi Network
+10.6.106 (a container; inform on a non-default port through `unifi.http.port`). What it
+proves is the protocol, UCI, hostapd and nft side end to end; radio order, DSA sockets, the
+LED and real RF are untouched. `hwsim` claims EHT, so the logs read `EHT20` where an MT7986
+runs HE.
+
+**Passed with a real station on the VAPs:** adoption (404s until Adopt, then GCM, setparam,
+noop); WPA2/WPA3 (`key_mgmt=SAE`, PMF); OWE transition (steered to the hidden OWE BSS); PPSK
+(key 1 on `br-lan` with DHCP, key 2 on `<vap>-20` in `br-openuf20`, its frames tagged VLAN 20 on
+the uplink); WiFi Speed Limit 5/2 Mbps (iperf3 4.7 down / 1.7 up, against 39 / 49 on an
+unlimited SSID); the Blocker (no DHCP reply on the blocked SSID while the same server answers
+every other one: the documented allow-list behaviour); the AP-name WSC element in the beacon
+and probe response (`iw`'s scan print stops after HE Operation, so read the IEs through
+`wpa_cli bss`); the guest portal (HTTP → `302` to `http://<ctl>:8880/guest/s/default/?id=…&ap=
+…&t=…&url=…&ssid=…`, the portal page `200`, HTTPS dropped before login; the login click needs a
+browser and was not run); Minimum RSSI (`rssi_reject_assoc_rssi` = threshold + 3 on 5 GHz
+only); `system.timezone` (`GMT0 -> IST-5:30`, the old value stamped); a Blackout Schedule
+(both BSSes of the OWE pair down inside the window, up when the schedule was removed, the
+client's scan following); the wireless uplink with a hand-run parent (cable pulled → station
+up in ~30 s, informs over the hop, own path element naming the parent, the downlink following
+the parent from ch 44 to ch 36; a fake descendant learnt as `desc` and refused for 90 s with the
+parent gone; cable back → wired in 2 s).
+
+**Found and fixed there:**
+- A guest WLAN arrives as `mode=master usage=guest` (the table above). The mesh guard read
+  any `usage` but `user` as a backhaul VAP, so with Mesh Parent on the Hotspot SSID was never
+  provisioned as a guest AP and replaced the vwire downlink in `backhaul.plan` (`phy1-ap4`
+  beaconed the guest SSID as a WDS AP). `usage=guest` is now an ordinary AP.
+- A root AP (Mesh Parent on, Mesh Connect off: a downlink and no uplink station) beaconed the
+  version 1 sibling element alone: `backhaul.tick` returned before `multihop_tick`.
+- The Blocker's ruleset is built right after `wifi reload`; when netifd had not brought the
+  VAPs up yet it came out empty (chain present, no rule) and stayed so until a restart.
+  `ucihelper.resync_runtime_rules` now rebuilds it once a minute when the live VAPs differ.
+  The live run after the fix did not reproduce the race (a push that left the radios'
+  config unchanged); the repair path is pinned by `test_ucihelper.lua`.
+- A reinstall with `install.sh install` over a running daemon left the old code in memory
+  (procd ignores a `start` whose command line is unchanged; same PID before and after).
+
+**Not openUF, met on the way:** a controller whose site timezone is unset sends none, so a
+schedule is evaluated in UTC; a controller in a container must publish 8880/8843 for the portal
+page, not only the inform port; an inform port other than 8080 needs `unifi.http.port` in the
+controller's `system.properties` (and its Inform Host override), a published port alone sends
+devices to the wrong one.
+
 
 ## Feature matrix
 

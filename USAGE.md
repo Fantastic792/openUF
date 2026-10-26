@@ -1163,7 +1163,7 @@ Settings carried through from the controller:
 | Auto/Custom DTIM Period | `dtim_period` |
 | Multicast Enhancement | `multicast_to_unicast` |
 | Minimum Data Rate | per-**radio** `basic_rate` / `supported_rates` / `legacy_rates` / `beacon_rate` |
-| Multicast and Broadcast Blocker | nftables rules, not a hostapd option. `openuf_bcfilt`/`openuf_bcfilt_macs` on the section are the persisted record: the ruleset dies with a reboot, so openUF rebuilds it from those two options on every start |
+| Multicast and Broadcast Blocker | nftables rules, not a hostapd option. `openuf_bcfilt`/`openuf_bcfilt_macs` on the section are the persisted record: the ruleset dies with a reboot, so openUF rebuilds it from those two options on every start, and once a minute whenever the live VAPs no longer match it (a push's `wifi reload` can still be bringing them up when the rules are first built) |
 | Proxy ARP | `proxy_arp` — **needs a full `wpad` build** |
 | Client Isolation | `isolate` (hostapd `ap_isolate`) |
 | Network / VLAN assignment | a per-VLAN bridge (`br-openuf<id>`) holding the tagged uplink sub-device (`eth1.<id>`), which the VAP joins — plus a `switch_vlan` trunk on swconfig boards. See below |
@@ -1696,6 +1696,16 @@ authorization".
 **Needs** `kmod-nft-bridge` (for `iifname`/`oifname`), and `kmod-nft-nat` for the
 redirect. firewall4 already pulls in `kmod-nft-nat`.
 
+**The controller's portal ports must be reachable from the guest network.** The redirect
+sends guests to `http://<controller>:8880/…` (and the page may use 8843). A controller in a
+container publishes only what its port list names: with just the inform and web ports, guests
+get the redirect and then a page that never loads. Publish 8880 and 8843 under the same
+numbers.
+
+**With Mesh Parent on** a guest WLAN sits beside the mesh downlink. Builds before 2026-10-26
+took the guest WLAN for a second downlink (it arrives as `usage=guest`) and lost both; check
+that `iw dev` lists the guest SSID and a `vwire-…` BSS separately.
+
 **Check it:**
 
     nft list table bridge openuf_guest      # selfrun is empty unless guests are let through
@@ -1860,6 +1870,8 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | Log says `device Band Steering mode "equal" is not supported` | The AP's own Band Steering is set to Balance. usteer can only balance by rejecting associations, so openUF does not map it. Use Prefer 5G or the per-WLAN toggle |
 | Roaming Assistant never moves a weak client | Expected when no other AP hears it clearly better. Check `ubus call usteer get_client_info '{"address":"<mac>"}'`: another AP (`<ip>#hostapd.*`) on the same SSID and band needs a signal at or above the threshold and at least `roam_assist_diff_db` stronger. No remote entries at all means the usteer instances are not peering — both APs need usteer running on the same L2 network. `logread \| grep roamassist` shows every action |
 | Airtime Fairness switch does nothing | `ls /sys/kernel/debug/ieee80211/phy*/airtime_flags` must list a file per radio. Without it openUF does not claim `wifi_caps` bit `0x20` and the controller sends no `atf.*` at all (debugfs not mounted, or a kernel without `CONFIG_MAC80211_DEBUGFS`). `cat` it after a push: two flag names for on, none for off. A driver that does not schedule through mac80211 TXQs ignores the flags |
+| A WLAN Schedule switches at the wrong hours | The controller site has no timezone (Settings → System → Timezone shows *Select*), so none is pushed and the schedule's wall-clock times are read in UTC. Set the site timezone: `logread \| grep sysconf` then shows `timezone GMT0 -> <zone> (controller)` and `date` on the AP reads local time |
+| Multicast/Broadcast Blocker on, but `nft list table bridge openuf_bcfilt` has no `drop` rule | The rules were built while a push's `wifi reload` was still bringing the VAPs up. openUF rebuilds them within a minute (`bcfilter: VAPs changed … -- rebuilding`); builds before 2026-10-26 waited for a daemon restart |
 | An Enhanced Open WLAN is missing from the AP, or a transition one is plain open | The radio does not claim `radio_caps2` bit `0x8`. Check `hostapd -vowe; echo $?` (must print 0; `wpad-basic-*` or `-mini` builds may lack OWE) and that `/usr/share/ucode/wifi/hostapd.uc` exists (OpenWrt 24.10+). Force Provision after fixing it |
 | A WLAN with Private Pre-Shared Keys is missing, or a key does not work | Missing: openUF does not claim `wifi_caps` bit `0x100000` (the controller logs "PPSK is not supported … will be skipped"). `grep -c vlanid= /usr/share/ucode/wifi/ap.uc` and `grep -c "from wpa_psk_file" /usr/sbin/hostapd` must both be non-zero. A VLAN key does not work: `uci show wireless \| grep psk` should list it, `cat /var/run/hostapd-<ifname>.psk` should have its `vlanid=` line, and `logread \| grep "from wpa_psk_file"` shows the VLAN hostapd assigned. openUF logs a key it left out because the VLAN had no network |
 | A WLAN Schedule has no effect: the SSID stays up outside its schedule | The schedule waits for a trusted clock: `ls /var/run/openuf.clock-ok` must exist (openUF writes it once a controller answer's `server_time_in_utc` is within a minute of the local clock; after a reboot that is the first answered inform). Then `uci get wireless.<section>.openuf_schedule` lists the on-time lines (`1=07:00-22:00` is Monday) and `logread \| grep wlansched` shows each down/up. Windows are in the device's local time (`system.@system[0].timezone`) |
