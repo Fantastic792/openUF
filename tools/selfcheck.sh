@@ -39,6 +39,7 @@ STATE=$(uci -q get openuf.main.state_file 2>/dev/null)
 
 # One state.json field, printed plainly: a list as space-separated values, a
 # table of tables as its keys, a boolean as true/false, nothing when absent.
+# A dotted key ("l2guard.bpdu") walks into a table.
 # Lua + cjson because openUF needs both anyway; jsonfilter is not always there.
 # The path and key go in through the environment: `lua -e CODE ARG...` hands
 # no ARG to CODE (it takes the first as a script file to run instead).
@@ -49,7 +50,12 @@ st_get() {
 		local f = io.open(os.getenv("OUF_FILE") or "") if not f then return end
 		local okd, st = pcall(cjson.decode, f:read("*a")) f:close()
 		if not okd or type(st) ~= "table" then return end
-		local v = st[os.getenv("OUF_KEY") or ""]
+		local v = st
+		for part in (os.getenv("OUF_KEY") or ""):gmatch("[^.]+") do
+			if type(v) ~= "table" then v = nil; break end
+			v = v[part]
+		end
+		if v == st then v = nil end
 		if type(v) == "table" then
 			local out = {}
 			for k, x in pairs(v) do
@@ -119,7 +125,9 @@ if want deps; then
 		info "kmod-ifb not loaded -- upload speed limits fall back to policing"
 	fi
 	if have hostapd_cli; then ok "hostapd_cli present"; else fail "hostapd_cli missing (install hostapd-utils)"; fi
-	if have usteer || [ -x /usr/sbin/usteer ]; then ok "usteer present (band steering, roaming assistant)"; else info "usteer not installed -- band steering and roaming assistant are off"; fi
+	# The daemon is usteerd, in /sbin on OpenWrt 25.12: looking for "usteer"
+	# in /usr/sbin called an installed usteer missing.
+	if have usteerd || have usteer || [ -x /sbin/usteerd ] || [ -x /usr/sbin/usteerd ]; then ok "usteer present (band steering, roaming assistant)"; else info "usteer not installed -- band steering and roaming assistant are off"; fi
 	if hostapd -vsae >/dev/null 2>&1; then ok "hostapd has SAE (WPA3)"; else info "hostapd without SAE -- WPA3 WLANs are pushed as WPA2"; fi
 fi
 
@@ -268,10 +276,19 @@ fi
 if want l2guard; then
 	echo ""
 	echo "[ l2guard ]"
+	# l2guard.reconcile deletes the table when the spec asks for neither drop,
+	# or while there is no AP netdev to put the rules on. Any l2guard state at
+	# all used to read as "rules sent", so a site with both off FAILed.
+	bpdu=$(st_get l2guard.bpdu)
+	tagdrop=$(st_get l2guard.tagdrop)
 	if [ -z "$(st_get l2guard)" ]; then
 		skip "no ebtables block received yet"
+	elif [ "$bpdu" != "true" ] && [ "$tagdrop" != "true" ]; then
+		skip "the controller's ebtables block asks for no BPDU or VLAN-tag drop"
 	elif nft list table bridge openuf_l2guard >/dev/null 2>&1; then
-		ok "bridge openuf_l2guard installed"
+		ok "bridge openuf_l2guard installed (bpdu=$bpdu tagdrop=$tagdrop)"
+	elif [ -z "$(st_get l2guard.ifnames)" ]; then
+		info "rules wanted (bpdu=$bpdu tagdrop=$tagdrop) but no AP SSID is up yet -- deferred"
 	else
 		fail "the controller sent hardening rules but bridge openuf_l2guard is missing"
 	fi
