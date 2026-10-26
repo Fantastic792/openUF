@@ -33,6 +33,15 @@
 		}
 	},
 
+	"admin/services/openuf/setup": {
+		"title": "Setup",
+		"order": 15,
+		"action": {
+			"type": "view",
+			"path": "openuf/setup"
+		}
+	},
+
 	"admin/services/openuf/settings": {
 		"title": "Settings",
 		"order": 20,

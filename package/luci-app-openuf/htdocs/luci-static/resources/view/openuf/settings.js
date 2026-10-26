@@ -5,6 +5,7 @@
 'require ui';
 'require rpc';
 'require dom';
+'require openuf.common as common';
 
 const callPresets = rpc.declare({
 	object: 'luci.openuf',
@@ -31,39 +32,13 @@ const callConvertState = rpc.declare({
 	method: 'getConvertState'
 });
 
-const callConvert = rpc.declare({
-	object: 'luci.openuf',
-	method: 'convert',
-	params: [ 'address', 'gateway', 'dns', 'keep_wan_socket' ]
-});
-
 // lua-cjson encodes an empty Lua table as {}, so an empty list from the
 // probe arrives as an object.
-function arr(v) {
-	return Array.isArray(v) ? v : [];
-}
+const arr = common.arr;
 
-// A tarball install (setup.sh / install.sh) has no /etc/config/openuf. The
-// first save here creates it, and from then on it is the configuration -- so
-// the form starts from what the daemon currently runs with, read off the
-// probe, and the first save changes nothing but the source.
-function seedFromStatus(status) {
-	const mm = status.modelmap || {}, id = status.identity || {}, c = status.config || {};
-	uci.add('openuf', 'openuf', 'main');
-	uci.set('openuf', 'main', 'modelmap', mm.name || 'auto');
-	uci.set('openuf', 'main', 'ufmodel', id.name || 'auto');
-	const opts = [ 'inform_url', 'neighbour_scan_interval', 'rrm_request_interval', 'roam_assist_diff_db',
-		'country_override', 'bootstrap_adopt_user', 'debug_dump_file', 'debug_dump_max_bytes' ];
-	for (const k of opts)
-		if (c[k] != null && c[k] !== '')
-			uci.set('openuf', 'main', k, String(c[k]));
-	const flags = [ 'use_only_unifi_wlan', 'l2_announce', 'rrm_enrichment', 'debug_dump_requests' ];
-	for (const k of flags)
-		if (c[k] != null)
-			uci.set('openuf', 'main', k, c[k] ? '1' : '0');
-	if (arr(c.keep_wlan_sections).length)
-		uci.set('openuf', 'main', 'keep_wlan_section', c.keep_wlan_sections);
-}
+// A tarball install has no `main` section yet: openuf/common.js seeds it from
+// what the daemon runs with (shared with the Setup page).
+const seedFromStatus = common.seedFromStatus;
 
 // The custom profile starts from what the board says about itself (the
 // probe's discovery draft): its sockets, its switch geometry, its radios, a
@@ -172,54 +147,11 @@ function downloadLink(text, filename) {
 
 function convertBlock(state) {
 	const reasons = arr(state.reasons);
-	const modal = function() {
-		const mode = E('select', { 'class': 'cbi-input-select' }, [
-			E('option', { 'value': 'dhcp' }, _('Take an address from the network\'s DHCP server (recommended)')),
-			E('option', { 'value': 'static' }, _('Use a fixed address'))
-		]);
-		const ip = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'placeholder': '192.168.1.20/24', 'style': 'width:100%' });
-		const gw = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'placeholder': '192.168.1.1', 'style': 'width:100%' });
-		const dns = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'placeholder': '192.168.1.1', 'style': 'width:100%' });
-		const keep = E('input', { 'type': 'checkbox' });
-		const staticBox = E('div', { 'style': 'display:none; margin:.5em 0' }, [
-			E('label', {}, _('Address and prefix length')), ip,
-			E('label', {}, _('Gateway')), gw,
-			E('label', {}, _('DNS servers, space separated')), dns
-		]);
-		mode.addEventListener('change', function() { staticBox.style.display = (mode.value == 'static') ? '' : 'none'; });
-		ui.showModal(_('Convert this device into an access point?'), [
-			E('p', {}, _('This removes the WAN interfaces, joins the WAN socket to the LAN, switches off the DHCP server, the firewall and dnsmasq, enables every radio, and reboots. The device stops routing: everything on it will reach the network through the LAN sockets. A backup of the configuration is kept so this can be undone from the Overview page.')),
-			E('p', {}, _('After the reboot the device will most likely have a different address. Find it in your router\'s DHCP client list or through the controller once it is adopted; this page will not reconnect on its own.')),
-			E('div', { 'style': 'margin:.5em 0' }, [ E('label', {}, _('Management address')), mode ]),
-			staticBox,
-			E('div', { 'style': 'margin:.5em 0' }, [ E('label', {}, [ keep, ' ', _('Leave the WAN socket out of the LAN (keep it unused)') ]) ]),
-			E('div', { 'class': 'right' }, [
-				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
-				E('button', { 'class': 'btn cbi-button-negative', 'click': ui.createHandlerFn(this, function() {
-					const address = (mode.value == 'static') ? ip.value.trim() : 'dhcp';
-					if (mode.value == 'static' && !/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(address)) {
-						ui.addNotification(null, E('p', _('The fixed address must be written as address/prefix, for example 192.168.1.20/24.')), 'danger');
-						return;
-					}
-					return callConvert(address, gw.value.trim(), dns.value.trim(), keep.checked).then(function(r) {
-						if (r.code != 0) {
-							ui.hideModal();
-							ui.addNotification(null, E('pre', {}, _('The conversion was refused, nothing was changed:') + '\n' + (r.output || r.code)), 'danger');
-							return;
-						}
-						ui.showModal(_('Rebooting'), [
-							E('pre', {}, r.output || ''),
-							E('p', { 'class': 'spinning' }, _('The device reboots now and comes back as an access point.'))
-						]);
-					});
-				}) }, _('Convert and reboot'))
-			])
-		]);
-	};
 	return E('div', { 'class': 'cbi-section' }, [
 		E('h3', {}, _('Turn this device into an access point')),
 		E('p', {}, _('This device is still set up as a router: %s. An access point should not route, serve DHCP or run a firewall, and its WAN socket should be an ordinary LAN socket. openUF works either way, but the network will see two routers until this is done.').format(reasons.join('; '))),
-		E('button', { 'class': 'btn cbi-button cbi-button-negative', 'click': modal }, _('Convert to an access point and reboot'))
+		E('button', { 'class': 'btn cbi-button cbi-button-negative', 'click': function() { common.showConvertModal(); } },
+			_('Convert to an access point and reboot'))
 	]);
 }
 
@@ -349,6 +281,25 @@ return view.extend({
 			if (value == '' || /^[A-Za-z]{2}$/.test(value))
 				return true;
 			return _('Two letters, for example SE');
+		};
+
+		// The Uplink Connectivity Monitor (uplinkmon.lua): the controller's site
+		// setting switches it, these override. Unset must stay unset -- the
+		// loader reads '' as "not a boolean" -- hence rmempty.
+		o = s.taboption('features', form.ListValue, 'uplink_monitor', _('Uplink Connectivity Monitor'),
+			_('Takes this device\'s WiFi networks off the air after five failed checks of the uplink, and back on with the first answer, so clients move to an access point that still has a way out. The controller\'s site setting switches it; choose here only to override that.'));
+		o.value('', _('Follow the controller'));
+		o.value('1', _('Always on'));
+		o.value('0', _('Always off'));
+		o.rmempty = true;
+
+		o = s.taboption('features', form.Value, 'uplink_monitor_host', _('Uplink check: address to ping'),
+			_('What the monitor pings. Empty: the address the controller names, else the default gateway.'));
+		o.placeholder = _('the default gateway');
+		o.validate = function(section_id, value) {
+			if (value == '' || /^[A-Za-z0-9.:-]+$/.test(value) && value.charAt(0) != '-')
+				return true;
+			return _('An IP address or host name');
 		};
 
 		// ── troubleshooting ──

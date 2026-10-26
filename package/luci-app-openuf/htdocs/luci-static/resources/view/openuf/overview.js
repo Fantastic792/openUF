@@ -5,6 +5,7 @@
 'require ui';
 'require poll';
 'require dom';
+'require openuf.common as common';
 
 const callStatus = rpc.declare({
 	object: 'luci.openuf',
@@ -38,9 +39,7 @@ function yesno(v) {
 
 // lua-cjson encodes an empty Lua table as {} -- so an empty list from the
 // probe is an object, never an array. Every list goes through this.
-function arr(v) {
-	return Array.isArray(v) ? v : [];
-}
+const arr = common.arr;
 
 function table(rows) {
 	const t = E('table', { 'class': 'table' });
@@ -107,45 +106,10 @@ function deviceBlock(s) {
 	return table(rows);
 }
 
-// What openUF needs installed. The package brings every dependency in
-// except the hostapd build: every wpad variant provides the same names, so
-// no dependency can say "a full one", and a wpad-basic-* build rejects the
-// 802.11v option every controller WLAN carries and takes the radio down.
-// openUF refuses to start until a full build is there; the button below
-// runs `openuf deps --install`, which does the swap and installs whatever
-// else is missing. Rendered once, outside the polled block (see render()).
-function installButton(w, missing) {
-	const swap = (w.full === false);
-	const choices = arr(w.choices);
-	const select = E('select', { 'class': 'cbi-input-select' },
-		choices.map(c => E('option', { 'value': c, 'selected': (c == w.suggested) ? '' : null }, c)));
-	const label = swap
-		? (missing.length ? _('Replace hostapd with the full build and install the missing packages') : _('Replace hostapd with the full build'))
-		: (missing.length ? _('Install the missing packages') : _('Install the Halo theme'));
-	const btn = E('button', { 'class': 'btn cbi-button cbi-button-positive', 'click': function() {
-		const chosen = swap ? select.value : null;
-		ui.showModal(label, [
-			swap ? E('p', {}, _('%s is removed and %s installed. The radios are down for about ten seconds in between, then brought back up on the new build, and openUF is restarted. Do this over a cable, not over WiFi.').format(w.installed || _('the basic build'), chosen))
-			     : E('p', {}, _('The packages are downloaded from the OpenWrt repository and installed, then openUF is restarted. The device needs internet access for this.')),
-			E('div', { 'class': 'right' }, [
-				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
-				E('button', { 'class': 'btn cbi-button-positive', 'click': ui.createHandlerFn(this, function() {
-					const args = [ 'deps', '--install' ];
-					if (chosen)
-						args.push('--wpad', chosen.replace(/^(wpad|hostapd)-/, ''));
-					ui.showModal(_('Installing'), [ E('p', { 'class': 'spinning' }, _('Downloading and installing. This takes a minute or two; the page reloads when it is done.')) ]);
-					const close = E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': function() { window.location.reload(); } }, _('Close')));
-					return fs.exec_direct('/usr/bin/openuf', args, 'text', false, true).then(function(out) {
-						ui.showModal(label, [ E('pre', {}, out || _('(no output)')), close ]);
-					}).catch(function(e) {
-						ui.showModal(label, [ E('pre', {}, String(e.message || e)), close ]);
-					});
-				}) }, _('Go ahead'))
-			])
-		]);
-	} }, label);
-	return E('div', {}, swap ? [ E('label', {}, _('Full build to install: ')), ' ', select, ' ', btn ] : [ btn ]);
-}
+// The install button (openuf deps --install) lives in openuf/common.js,
+// shared with the Setup page. Rendered once, outside the polled block (see
+// render()).
+const installButton = function(w, missing) { return common.installButton(w, missing); };
 
 function softwareBlock(s) {
 	const d = s.deps || {};
@@ -315,6 +279,14 @@ function body(s) {
 		parts.push(E('div', { 'class': 'alert-message error' }, [
 			E('strong', {}, _('openUF is not running: hostapd is a basic build (%s). ').format(s.deps.wpad.installed || 'wpad-basic')),
 			_('It has no 802.11v support, which every network from the controller needs. Replace it with the full build under "Software openUF needs" below.')
+		]));
+	// A device the controller has not adopted yet is usually one still being
+	// set up: point at the page that walks through it.
+	if (!s.config_error && !(s.state && s.state.adopted))
+		parts.push(E('div', { 'class': 'alert-message notice' }, [
+			_('Not adopted yet. '),
+			E('a', { 'href': L.url('admin/services/openuf/setup') }, _('Setup')),
+			_(' walks through what this router needs before the controller can adopt it.')
 		]));
 	if (s.config && s.config.debug_overrides)
 		parts.push(E('div', { 'class': 'alert-message warning' },

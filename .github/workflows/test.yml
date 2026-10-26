@@ -113,10 +113,12 @@ jobs:
           for f in package/luci-app-openuf/htdocs/openuf/portal.js \
               package/luci-app-openuf/htdocs/luci-static/resources/preload/*.js \
               package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/*.js \
+              package/luci-app-openuf/htdocs/luci-static/resources/openuf/*.js \
               package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/*.js \
               package/luci-theme-halo/htdocs/luci-static/resources/*.js; do
             node --check "$f" && echo "ok $f"
           done
-          for f in package/luci-app-openuf/root/usr/share/rpcd/acl.d/*.json; do
+          for f in package/luci-app-openuf/root/usr/share/rpcd/acl.d/*.json \
+              package/luci-app-openuf/root/usr/share/luci/menu.d/*.json; do
             python3 -m json.tool "$f" > /dev/null && echo "ok $f"
           done
