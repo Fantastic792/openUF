@@ -358,9 +358,12 @@ case "$ACTION" in
 			echo "WARNING: no full wpad build is installed -- openUF will not start until there is one (openuf deps --install)."
 		fi
 
-		# Enable and start services
+		# Enable and start services. restart, not start: procd ignores a start
+		# whose instance command line is unchanged, so a reinstall over a running
+		# daemon left the OLD code in memory (seen on a QEMU test VM, 2026-10-26:
+		# same PID before and after). On a first install restart is a start.
 		"$INIT_SCRIPT" enable 2>/dev/null
-		"$INIT_SCRIPT" start
+		"$INIT_SCRIPT" restart
 
 		# Enable lldpd
 		if [ -f /etc/init.d/lldpd ]; then
@@ -393,8 +396,13 @@ case "$ACTION" in
 		echo "Done.  Check status with: logread -e openuf"
 		echo ""
 		echo "Next steps:"
-		echo "  1. If controller is on a different subnet:"
-		echo "       syswrapper.sh set-inform http://<controller>:8080/inform"
+		# The URL already configured, not a hardcoded :8080: a controller moved
+		# to another port (a container host with 8080 taken) read the old hint
+		# as the URL to use. state.json escapes its slashes; undo that for show.
+		_shown_url=$(printf '%s' "$INFORM_URL" | sed 's#\\/#/#g')
+		echo "  1. openUF informs ${_shown_url:-the inform_url in $INSTALL_DIR/conf.lua}."
+		echo "     For a controller elsewhere (another subnet, another port):"
+		echo "       syswrapper.sh set-inform http://<controller>:<port>/inform   (UniFi's default port: 8080)"
 		echo "  2. Open the UniFi controller → Devices → click Adopt"
 		;;
 
