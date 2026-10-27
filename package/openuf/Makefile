@@ -68,6 +68,15 @@ endef
 
 # Sourced by default_postinst on the device (never at image build time):
 # the one dependency the package cannot pull in is named, with the fix.
+#
+# An upgrade restarts what is already running. default_postinst only runs
+# `enable` and `start`, and procd ignores a start whose command line has not
+# changed, so the old daemon kept running from memory until a reboot: the
+# JIDU6401's 0.1.0 -> 0.1.1 upgrade (2026-10-28) left inform.lua on the
+# previous build, its status file still naming it. Same as install.sh's
+# `restart` (2026-10-26). On a first install nothing is running yet, so
+# nothing restarts here and default_postinst starts the services; a service
+# the user stopped stays stopped.
 define Package/openuf/postinst-pkg
 if [ -z "$${IPKG_INSTROOT}" ] && ! grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/dev/null; then
 	echo "openuf: hostapd is a basic build (no 802.11v): openUF will not start until a full wpad is installed." >&2
@@ -78,6 +87,14 @@ if [ -z "$${IPKG_INSTROOT}" ] && [ -f /opt/openuf/inform.lua ]; then
 	echo "openuf: runs this package's copy and reads /etc/config/openuf, not /opt/openuf/conf.lua:" >&2
 	echo "openuf: carry that configuration over (LuCI: Services > openUF > Settings), then" >&2
 	echo "openuf: 'rm -rf /opt/openuf'. Two copies have shown up in a controller as two devices." >&2
+fi
+if [ -z "$${IPKG_INSTROOT}" ]; then
+	for _openuf_svc in openuf openuf-rrb; do
+		if [ -x "/etc/init.d/$$_openuf_svc" ] && "/etc/init.d/$$_openuf_svc" running >/dev/null 2>&1; then
+			"/etc/init.d/$$_openuf_svc" restart >/dev/null 2>&1 \
+				&& echo "openuf: restarted $$_openuf_svc on the new version" >&2
+		fi
+	done
 fi
 endef
 
