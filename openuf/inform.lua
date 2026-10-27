@@ -856,6 +856,92 @@ function M.build_json(st, cfg, ufhw)
 		-- Live secondary-channel side per radio, for each vap's extchannel.
 		local extchan_by_radio = {}
 		for _, radio in ipairs(radio_table) do
+			-- WPA3/OWE capability comes from the hostapd build, not from a live
+			-- interface, so it is reported for every radio, every inform. It sat
+			-- inside the `ifname` gate below until 2026-10-28: a radio with no
+			-- netdev -- every radio of a fresh install (OpenWrt's default SSIDs are
+			-- disabled) and of a device just Forgotten (the setdefault removes every
+			-- WLAN) -- went out without radio_caps2, and the controller builds the
+			-- first config at exactly that moment. Captured on the second JIDU6401
+			-- (debug_dump_file, a Forget and re-adopt): the informs around the
+			-- adoption carried radio_caps2=nil and the first push gave oUF-main
+			-- wpa.key.1.mgmt=WPA-PSK and oUF-owe no OWE at all; the controller does
+			-- not regenerate when the bits appear a heartbeat later. Both routers
+			-- came up WPA2-only and open until their cfgversion was blanked.
+			-- wpa3_supported: reported only when hostapd can really
+			-- do SAE, so we never claim what the radio cannot run.
+			-- Truthful -- but the controller does NOT read it, and it
+			-- does NOT unlock WPA3.
+			--
+			-- Confirmed live on 10.4.57 by reading back the persisted
+			-- device: radio_caps survives the round trip verbatim
+			-- (nss=3 -> 0x20 comes back as radio_caps=32), while
+			-- wpa3_supported and owe_supported come back UNDEFINED --
+			-- the controller drops them on ingestion entirely.
+			--
+			-- Decompiling the only class that mentions wpa3_supported
+			-- (com.ubnt.net.k.aI.jRsSex, a record of wpa3Supported/
+			-- band6GHzSupported/oweSupported) shows it is CONSTRUCTED,
+			-- never parsed: its single caller builds it from an
+			-- injected com.ubnt.service.wifi.AcrQJeJCScLn service and
+			-- takes the device object as a parameter it then ignores.
+			-- It is an outbound/API description of what the site
+			-- supports, not an inform ingestion path.
+			--
+			-- An earlier commit here claimed setting this field flipped
+			-- a push from WPA-PSK to SAE. That was a coincidental
+			-- config regeneration: it has never reproduced, including
+			-- across a clean re-adoption with the field present from
+			-- the first inform.
+			--
+			-- Kept because it is accurate (these radios really do have
+			-- SAE) and harmless, and another controller version may yet
+			-- read it -- but nothing here unlocks WPA3 on 10.4.57. See
+			-- PROTOCOL-VALIDATION.md's WPA3 section.
+			if M._sysinfo.sae_supported and M._sysinfo.sae_supported() then
+				radio.wpa3_supported = true
+			else
+				radio.wpa3_supported = false
+			end
+			radio.owe_supported       = false
+			-- radio_caps2 bit 0x1: THE WPA3 GATE. Traced end to
+			-- end through the 10.4.57 bytecode:
+			--
+			--   config gen (QSAkfnbfInKJ) calls radio.CVir()
+			--   CVir()  = (1 & ZPjpXpgFhJSgqk().orElse(0)) == 1
+			--   ZPjpXpgFhJSgqk() -> impl field iBjnA
+			--   iBjnA <- builder field SuUD
+			--   SuUD  <- setter rMxwXnPhhdotvjERKoA(int)
+			--   which the radio parser feeds from "radio_caps2"
+			--
+			-- radio_caps goes to a DIFFERENT field (builder kJeOrfqt
+			-- -> impl DbisCuTqoItCGd -> accessor FJaWnIAautY), which
+			-- is the MIMO column and nothing else. So the capability
+			-- that decides WPA3 lives in the one radio field openUF
+			-- never sent -- it arrived as 0 on every inform, and 0
+			-- fails the bit test, so every WPA3 WLAN was downgraded.
+			-- Gated on real SAE support for the same reason as
+			-- wpa3_supported: never claim what hostapd cannot run.
+			--
+			-- Bit 0x2 is FT with WPA3 (10.6.101: radio DTO
+			-- ytajcagDggPuTaL(), tested in the per-radio security
+			-- filter plVcFpIybmrpXclX). Without it the controller
+			-- forces wpa3_fast_roaming off on every SAE WLAN, and on
+			-- a WPA3-only one fast_roaming_enabled too, so no 802.11r
+			-- goes out. hostapd runs FT-SAE wherever it runs SAE.
+			--
+			-- Bit 0x8 is Enhanced Open (radio DTO NoFWvUa(), same
+			-- filter). Without it an OWE WLAN is not provisioned at
+			-- all and an OWE transition WLAN goes out as plain open.
+			-- Probed separately: hostapd can have SAE without OWE.
+			if M._sysinfo.sae_supported and M._sysinfo.sae_supported() then
+				radio.radio_caps2 = 0x3
+			else
+				radio.radio_caps2 = 0
+			end
+			if M._sysinfo.owe_supported and M._sysinfo.owe_supported() then
+				radio.radio_caps2 = radio.radio_caps2 + 0x8
+			end
 			local ok_if, ifname = pcall(ufuci.get_ifname_for_radio, radio.name)
 			if ok_if and ifname then
 				-- Hardware capability fields the controller's radio_table
@@ -916,80 +1002,6 @@ function M.build_json(st, cfg, ufhw)
 						[4] = 0x4000000,
 					}
 					radio.radio_caps = RADIO_CAPS_MIMO_BIT[caps.nss or 1] or RADIO_CAPS_MIMO_BIT[1]
-					-- wpa3_supported: reported only when hostapd can really
-					-- do SAE, so we never claim what the radio cannot run.
-					-- Truthful -- but the controller does NOT read it, and it
-					-- does NOT unlock WPA3.
-					--
-					-- Confirmed live on 10.4.57 by reading back the persisted
-					-- device: radio_caps survives the round trip verbatim
-					-- (nss=3 -> 0x20 comes back as radio_caps=32), while
-					-- wpa3_supported and owe_supported come back UNDEFINED --
-					-- the controller drops them on ingestion entirely.
-					--
-					-- Decompiling the only class that mentions wpa3_supported
-					-- (com.ubnt.net.k.aI.jRsSex, a record of wpa3Supported/
-					-- band6GHzSupported/oweSupported) shows it is CONSTRUCTED,
-					-- never parsed: its single caller builds it from an
-					-- injected com.ubnt.service.wifi.AcrQJeJCScLn service and
-					-- takes the device object as a parameter it then ignores.
-					-- It is an outbound/API description of what the site
-					-- supports, not an inform ingestion path.
-					--
-					-- An earlier commit here claimed setting this field flipped
-					-- a push from WPA-PSK to SAE. That was a coincidental
-					-- config regeneration: it has never reproduced, including
-					-- across a clean re-adoption with the field present from
-					-- the first inform.
-					--
-					-- Kept because it is accurate (these radios really do have
-					-- SAE) and harmless, and another controller version may yet
-					-- read it -- but nothing here unlocks WPA3 on 10.4.57. See
-					-- PROTOCOL-VALIDATION.md's WPA3 section.
-					if M._sysinfo.sae_supported and M._sysinfo.sae_supported() then
-						radio.wpa3_supported = true
-					else
-						radio.wpa3_supported = false
-					end
-					radio.owe_supported       = false
-					-- radio_caps2 bit 0x1: THE WPA3 GATE. Traced end to
-					-- end through the 10.4.57 bytecode:
-					--
-					--   config gen (QSAkfnbfInKJ) calls radio.CVir()
-					--   CVir()  = (1 & ZPjpXpgFhJSgqk().orElse(0)) == 1
-					--   ZPjpXpgFhJSgqk() -> impl field iBjnA
-					--   iBjnA <- builder field SuUD
-					--   SuUD  <- setter rMxwXnPhhdotvjERKoA(int)
-					--   which the radio parser feeds from "radio_caps2"
-					--
-					-- radio_caps goes to a DIFFERENT field (builder kJeOrfqt
-					-- -> impl DbisCuTqoItCGd -> accessor FJaWnIAautY), which
-					-- is the MIMO column and nothing else. So the capability
-					-- that decides WPA3 lives in the one radio field openUF
-					-- never sent -- it arrived as 0 on every inform, and 0
-					-- fails the bit test, so every WPA3 WLAN was downgraded.
-					-- Gated on real SAE support for the same reason as
-					-- wpa3_supported: never claim what hostapd cannot run.
-					--
-					-- Bit 0x2 is FT with WPA3 (10.6.101: radio DTO
-					-- ytajcagDggPuTaL(), tested in the per-radio security
-					-- filter plVcFpIybmrpXclX). Without it the controller
-					-- forces wpa3_fast_roaming off on every SAE WLAN, and on
-					-- a WPA3-only one fast_roaming_enabled too, so no 802.11r
-					-- goes out. hostapd runs FT-SAE wherever it runs SAE.
-					--
-					-- Bit 0x8 is Enhanced Open (radio DTO NoFWvUa(), same
-					-- filter). Without it an OWE WLAN is not provisioned at
-					-- all and an OWE transition WLAN goes out as plain open.
-					-- Probed separately: hostapd can have SAE without OWE.
-					if M._sysinfo.sae_supported and M._sysinfo.sae_supported() then
-						radio.radio_caps2 = 0x3
-					else
-						radio.radio_caps2 = 0
-					end
-					if M._sysinfo.owe_supported and M._sysinfo.owe_supported() then
-						radio.radio_caps2 = radio.radio_caps2 + 0x8
-					end
 				end
 				local ok_rs, stats = pcall(M._sysinfo.radio_stats, ifname)
 				local in_use = ok_rs and _in_use_survey(stats) or nil

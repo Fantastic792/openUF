@@ -163,6 +163,11 @@ local function build(opts)
 	inject_sysinfo(opts and opts.with_clients, opts and opts.with_wired, opts and opts.with_scan,
 		opts and opts.with_radio_caps)
 	if opts and opts.with_uci then inject_ucihelper() end
+	-- no_radio_ifname: no radio has a netdev -- a fresh install (default SSIDs
+	-- disabled) or a device just Forgotten (every WLAN removed).
+	if opts and opts.no_radio_ifname then
+		inform._ucihelper.get_ifname_for_radio = function() return nil end
+	end
 	-- vap_id: the wlanconf id the fixture vap echoes (get_vap_table's `id`).
 	if opts and opts.vap_id then
 		local get = inform._ucihelper.get_vap_table
@@ -1943,6 +1948,34 @@ return {
 			local d4 = build({with_uci = true, with_radio_caps = true})
 			for _, r in ipairs(d4.radio_table) do
 				assert_eq(r.radio_caps2, 0x8, "OWE does not depend on SAE")
+			end
+			inform._sysinfo._sae_supported_cache = prev
+			inform._sysinfo._owe_supported_cache = prev_owe
+		end
+	},
+	{
+		-- The second JIDU6401, 2026-10-28 (a Forget and re-adopt under
+		-- debug_dump_file): the informs around the adoption carried no
+		-- radio_caps2, because it was only set for a radio with a live netdev,
+		-- and the controller built the first config from that -- WPA2 for a
+		-- WPA2/WPA3 WLAN, open for an Enhanced Open one.
+		name = "inform json: radio_caps2 is claimed for a radio with no netdev (fresh or Forgotten)",
+		fn = function()
+			local prev = inform._sysinfo._sae_supported_cache
+			local prev_owe = inform._sysinfo._owe_supported_cache
+			inform._sysinfo._sae_supported_cache = true
+			inform._sysinfo._owe_supported_cache = true
+			local d = build({with_uci = true, no_radio_ifname = true})
+			assert_eq(#d.radio_table > 0, true, "fixture produced radios")
+			for _, r in ipairs(d.radio_table) do
+				assert_eq(r.radio_caps2, 0xB, "SAE + FT + OWE claimed with no netdev on the radio")
+				assert_eq(r.wpa3_supported, true, "wpa3_supported too")
+			end
+			inform._sysinfo._sae_supported_cache = false
+			inform._sysinfo._owe_supported_cache = false
+			local d2 = build({with_uci = true, no_radio_ifname = true})
+			for _, r in ipairs(d2.radio_table) do
+				assert_eq(r.radio_caps2, 0, "still never claimed without SAE/OWE in hostapd")
 			end
 			inform._sysinfo._sae_supported_cache = prev
 			inform._sysinfo._owe_supported_cache = prev_owe

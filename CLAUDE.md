@@ -499,7 +499,10 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   firing it at the next boot would land in hostapd's ACS sweep.
 - **A capability bit is claimed only where a device-side probe passes**, and the probe is
   cached: `sae_supported` (`radio_caps2` 0x1/0x2), `owe_supported` (0x8), `airtime.supported`
-  (`wifi_caps` 0x20), `ppsk_supported` (0x100000). `wifi_caps` 0xC and `wifi_caps2` 0x60 are
+  (`wifi_caps` 0x20), `ppsk_supported` (0x100000). These come from the hostapd build and are reported for
+  every radio on every inform, live netdev or not: gated on one, they went missing exactly
+  when a fresh or Forgotten device is adopted, and the controller's first push came down
+  WPA2-only and OWE-less (two JIDU6401s, 2026-10-28; `test_inform_json.lua`). `wifi_caps` 0xC and `wifi_caps2` 0x60 are
   unconditional because they only make the controller *send* blocks openUF parses. The
   controller keeps a setting it could not push (upstream found `atf_enabled: false` stored
   from before the bit existed), so a newly claimed bit can change device state on the first
