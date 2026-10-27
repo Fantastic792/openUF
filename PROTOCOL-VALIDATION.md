@@ -2487,6 +2487,46 @@ page, not only the inform port; an inform port other than 8080 needs `unifi.http
 controller's `system.properties` (and its Inform Host override), a published port alone sends
 devices to the wrong one.
 
+### The combined build, 2026-10-27
+
+The same VM and controller, reinstalled from the merge of this tree with yesrab's
+802.11r translator, IP refresh and relicence (`setup.sh --headless`, which now pulls
+`ucode-mod-socket` and `kmod-veth` as well), adopted afresh, four test SSIDs re-created
+(WPA2/WPA3 with a 5/2 Mbps limit, the Blocker and the AP name; PPSK with a VLAN 20 key;
+Enhanced Open; Hotspot), Mesh Parent and Mesh Connect on, 5 GHz Minimum RSSI on.
+`selfcheck.sh` 32 OK, 0 FAIL; `tools/verify.py` 46 OK, its one FAIL the VM's missing LED.
+
+- **Every station test above passed again:** SAE and WPA2 on the mixed SSID, OWE, both PPSK
+  keys (the second as `vlan_id=20`, its MAC in `br-openuf20`'s FDB), a wrong key refused,
+  iperf3 4.72 down / 1.83 up against 5/2, the AP-name element in both radios' beacons with no
+  Config Methods attribute, the portal redirect (`302`, page `200`, HTTPS dropped).
+- **The Blocker, measured from the LAN side:** broadcast ARP from a host on a veth in
+  `br-lan` reached a client on the blocked SSID 0 times of 3 and one on an unblocked SSID 3 of
+  3. The AP's own frames are not filtered: the chain hooks bridge `forward` (LAN → WLAN), so
+  a test that pings from the AP itself proves nothing.
+- **802.11r through the translator (yesrab's merge):** turning Fast Roaming on wrote
+  `ieee80211r`, mobility domain `0afe` (UniFi's formula), `ft_psk_generate_local 0`, the
+  wildcard key holders and `ft_iface=vft0`; that push created the veth pair, and `rrb-unifi`
+  went from "waiting for the veth pair" to `running: hostapd side vft1 (ft_iface vft0), lan
+  side br-lan` with `UBNT_ROAM on`, then listed both local BSSIDs. A station on the 5 GHz BSS
+  roamed to the 2.4 GHz one with `AP-STA-CONNECTED … auth_alg=ft`, AKM `00-0f-ac-4` (FT-PSK)
+  and `00-0f-ac-9` (FT-SAE). That is openUF ↔ openUF over the translator's veth; the roam
+  against a genuine UniFi AP is still not run here.
+- **The device IP refresh (yesrab's merge):** `state.ip` follows `br-lan`'s address.
+- **The LuCI app in a real LuCI** (25.12.6, `luci-app-openuf` files laid out as `luci.mk`
+  installs them): Overview, Setup, Settings, Log and the device page render with the device's
+  data. Setup's Save & Apply wrote `openuf.main` (profile, identity, inform URL) and restarted
+  the daemon; the identity MAC stayed and the next inform succeeded. A LuCI page in a hidden
+  browser tab sits at "Loading view…": LuCI flushes batched RPC calls on
+  `requestAnimationFrame`, which a background tab never runs. Not openUF.
+- **The wireless uplink, with the loop guard:** the cable pulled with only a fake descendant
+  on air, the station came up with that BSSID in `bssid_blacklist` and stayed unjoined; with
+  the parent added (the two BSSIDs swapped roles on the restart) it first joined the
+  now-descendant, logged `a downlink of this AP's own descendant -- a loop; leaving it` on the
+  next heartbeat and moved to the parent; informs resumed over the hop (about a minute after
+  the join while `br-lan`'s DHCP client came back) and the controller answered a ping over it in
+  2.5 ms; cable back → the station disabled and informs carried on.
+
 
 ## Adopted from d-malinowski/openUF (`pr/unifi-ft-interop`), 2026-10-25
 
@@ -2687,7 +2727,7 @@ through the real UI with the resulting wire payload captured or the effect verif
 | 69 | `cmd: scan` | `{type, mode, freq?, radio_name?}` from the controller's scan request | ⚠️ Adopted 2026-10-18 (upstream's cmd audit), mapped onto this tree's chunked sweep: the named radio, the band of the frequency, or every radio |
 | 70 | Real UniFi AP as a sibling | vendor element `00:15:6d` type 1, TLV `0x81` = serialno → `is_unifi`/`serialno` | ⚠️ Adopted 2026-10-18; upstream saw a neighbour's current-firmware AP. No UniFi AP on this site |
 | 71 | Hygiene from upstream's audit | `bridge openuf_usteer` (usteerd's sync kept off the VAPs), `l2guard.reconcile_hairpin`, one `nft -f` transaction per table, mt76 counter underflow read as 0, two random 11k-scan times (the firmware's own spread, kept), `util.lua` sysfs reads, per-cycle garbage collection. Not taken, by decision: the LLDP and sibling-tag caches and the hourly beacon requests -- reports here follow reality on the next heartbeat | ⚠️ Adopted 2026-10-18; all of it upstream's evidence (both their boards). Not measured on a JioRouter |
-| 72 | 802.11r with genuine UniFi APs (`unifi_ft_interop`) | UniFi's mobility domain (first two bytes of SHA1("salt" .. SSID padded to 32)), `ft_psk_generate_local 0`, `nasid` = BSSID, per-peer `r0kh`/`r1kh` from `/etc/config/rrb-unifi` plus the wildcards, `hostapd_bss_options 'ft_iface=vft0'` when the veth exists; the external rrb-unifi translator reframes the RRB frames | ⚠️ Adopted 2026-10-25 from d-malinowski/openUF; their hardware evidence only (BT Home Hub 5A ↔ U7 Lite, FT-PSK, both directions). On by default for new installations (the user's decision; d-malinowski ships it off); set to `0` the section is byte-identical to before. ✅ The install path (`openuf deps --install --only-rrb-unifi` from the fork, veth, service) and the hostapd side (BSS up with the option set, the `0x88b7` socket on `vft0`, `rrb-unifi check OK`) proven in the 25.12.6 QEMU VM on 2026-10-25. **The roam against a UniFi AP is not run here: the lab has none** (REVERSE-ENGINEERING.md backlog row 25) |
+| 72 | 802.11r with genuine UniFi APs (`unifi_ft_interop`) | UniFi's mobility domain (first two bytes of SHA1("salt" .. SSID padded to 32)), `ft_psk_generate_local 0`, `nasid` = BSSID, per-peer `r0kh`/`r1kh` from `/etc/config/rrb-unifi` plus the wildcards, `hostapd_bss_options 'ft_iface=vft0'` when the veth exists; the external rrb-unifi translator reframes the RRB frames | ⚠️ Adopted 2026-10-25 from d-malinowski/openUF; their hardware evidence only (BT Home Hub 5A ↔ U7 Lite, FT-PSK, both directions). On by default for new installations (the user's decision; d-malinowski ships it off); set to `0` the section is byte-identical to before. ✅ The install path (`openuf deps --install --only-rrb-unifi` from the fork, veth, service) and the hostapd side (BSS up with the option set, the `0x88b7` socket on `vft0`, `rrb-unifi check OK`) proven in the 25.12.6 QEMU VM on 2026-10-25. ✅ Pushed by a 10.6.106 controller in the same VM on 2026-10-27: the veth created by that push, the translator running on it, and openUF ↔ openUF roams `auth_alg=ft` for FT-PSK and FT-SAE ("The combined build"). **The roam against a UniFi AP is not run here: the lab has none** (REVERSE-ENGINEERING.md backlog row 25) |
 
 ---
 

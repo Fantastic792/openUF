@@ -59,24 +59,35 @@ The few settings that stay on the device, behind the root password:
   URL instead, with no SSH at all.
 - **WiFi from the controller.** Networks with WPA2, WPA3 and Enhanced Open, per-network
   VLANs, private pre-shared keys, hidden SSIDs, channel, width and power per radio,
-  802.11r/k/v, band steering, minimum RSSI, per-client speed limits, WiFi schedules, client
-  blocking and Locate.
+  802.11r/k/v, band steering, minimum RSSI, per-client speed limits, WiFi schedules, the
+  multicast and broadcast blocker, the access point's name in the beacon, client blocking and
+  Locate.
+- **Hotspot and uplink checks.** The controller's guest portal: guests are sent to its
+  hotspot page and held until they log in. The Uplink Connectivity Monitor takes the WiFi
+  networks off the air when the uplink stops answering, so clients move to an AP that still
+  has a way out.
 - **Fast roaming with genuine UniFi APs.** The built-in translator speaks UniFi's 802.11r
   key exchange, so phones move between openUF and real UniFi access points without a
   reconnect.
 - **Live statistics.** Clients with WiFi Experience scores, radios and channel utilisation,
   wired hosts per port, the uplink, neighbouring access points and RF scans.
 - **Switch ports and mesh.** Per-port VLANs from the controller's Port settings, and a
-  wireless uplink to another openUF AP when the cable is out.
+  wireless uplink to another openUF AP when the cable is out, across several hops, with the
+  loop guard keeping an AP from hanging off its own descendant.
 - **A device page instead of LuCI's login.** Like a Ubiquiti device, the AP's address shows
   its status and sends you to the controller; LuCI stays one hidden step away, with a
-  dashboard and the matching Halo theme.
+  dashboard, the matching Halo theme, and a Setup page that walks a new router through its
+  profile, the packages it needs, the controller, region and access-point mode.
 - **Pure Lua, no toolchain.** One command installs it on OpenWrt 24.10 or 25.12, as packages
   or as files, with upgrades in place.
 
-Everything above was validated against a real controller, a UniFi Cloud Gateway Ultra on
-UniFi Network 10.x. [REFERENCE.md](REFERENCE.md) has the feature-by-feature status and
-[PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) the evidence. openUF emulates an access
+The core was validated on real hardware against a UniFi Cloud Gateway Ultra on UniFi
+Network 10.x. The guest portal, the uplink monitor, multi-hop mesh, the AP name in the beacon
+and the Setup page have so far run only in a virtual machine against a live controller: the
+latest full run, every feature above together, was on OpenWrt 25.12.6 with UniFi Network
+10.6.106 on 2026-10-27, fast roaming included (openUF to openUF through the translator; the
+roam to a genuine UniFi AP is the original authors' evidence). [REFERENCE.md](REFERENCE.md) has the
+feature-by-feature status and [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) the evidence. openUF emulates an access
 point only: no gateway or switch emulation, by design.
 
 ## Hardware
