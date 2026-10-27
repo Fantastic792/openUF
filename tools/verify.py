@@ -301,8 +301,42 @@ def stated_bands(line):
     return out
 
 
+def git_here(*args):
+    """Output of a git command run in this checkout, or None (no git, not a checkout)."""
+    try:
+        p = subprocess.run(["git", "-C", HERE, "-c", "safe.directory=*"] + list(args),
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout.decode(errors="replace").strip() if p.returncode == 0 else None
+
+
+def check_build(r, stamp):
+    """Judge the device's BUILD stamp ("<commit> <time>", from dist.sh) against this
+    checkout. The package used to be "the released package, none of these changes"
+    (yesrab's releases); since the fork's Release workflow builds from this tree, a
+    package is exactly as current as the commit its stamp names."""
+    commit = stamp.split()[0] if stamp else ""
+    head = git_here("rev-parse", "HEAD")
+    full = git_here("rev-parse", "--verify", "-q", commit + "^{commit}") if commit else None
+    if not commit:
+        r.warn("no build stamp: cannot tell which code the device runs")
+    elif head is None:
+        r.info("build %s (not run from a git checkout, not compared)" % commit)
+    elif full is None:
+        r.warn("build %s is not in this checkout's history (git fetch, or another tree)" % commit)
+    elif full == head:
+        r.ok("built from this checkout's HEAD (%s)" % commit)
+    elif git_here("merge-base", "--is-ancestor", full, head) is not None:
+        behind = git_here("rev-list", "--count", full + ".." + head) or "?"
+        r.warn("built from %s, %s commit(s) behind this checkout: deploy or install the newer build"
+               % (commit, behind))
+    else:
+        r.warn("built from %s, which this checkout's HEAD does not contain" % commit)
+
+
 def check_install(r, sec):
-    r.group("install (headless, from this tree)")
+    r.group("install")
     b, ins, st = kv(sec.get("board", [])), sec.get("install", []), kv(sec.get("status", []))
     r.info("board %s (%s)" % (b.get("board_name") or "?", b.get("model", "?")))
     r.info("OpenWrt: " + b.get("release", "?"))
@@ -312,13 +346,12 @@ def check_install(r, sec):
     elif "/usr/lib/openuf" in prefixes and "/opt/openuf" in prefixes:
         r.fail("both /opt/openuf and the package's /usr/lib/openuf are installed -- never both")
     elif prefixes == ["/usr/lib/openuf"]:
-        r.fail("only the released package (/usr/lib/openuf) is installed -- it has none of these changes; "
-               "reinstall headless from this tree")
+        r.ok("package install in /usr/lib/openuf")
     else:
         r.fail("openUF is not installed")
     i = kv(ins)
-    if i.get("build"):
-        r.info("build stamp: " + i["build"])
+    if prefixes:
+        check_build(r, i.get("build"))
     if i.get("daemon") == "running":
         r.ok("daemon running")
     else:
