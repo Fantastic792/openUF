@@ -243,4 +243,45 @@ return {
 			ws._popen = function() return "OK\n" end
 		end
 	},
+	{
+		-- The JIDU6401, 2026-10-28: after an uplink monitor down/up the PPSK
+		-- VLAN netdevs stayed down and a VLAN key was refused.
+		name = "wlansched: bringing a BSS back also raises its PPSK VLAN netdevs",
+		fn = function()
+			local links = {["phy0-ap1"] = false, ["phy0-ap1-20"] = false, ["phy0-ap1-30"] = true,
+				["phy0-ap10"] = false, ["phy0-ap1-x"] = false}
+			local cmds = {}
+			local saved = ws._netdevs
+			ws._netdevs = function() return "br-lan\nphy0-ap1\nphy0-ap1-20\nphy0-ap1-30\nphy0-ap10\nphy0-ap1-x\n" end
+			ws._read_file = function(p)
+				local n = p:match("^/sys/class/net/(.-)/flags$")
+				if links[n] == nil then return nil end
+				return links[n] and "0x1003\n" or "0x1002\n"
+			end
+			ws._exec = function(c)
+				cmds[#cmds + 1] = c
+				local n, how = c:match("^ip link set dev (%S+) (%a+)")
+				links[n] = (how == "up")
+				return 0
+			end
+			local beacon = "OK\n"
+			ws._popen = function(c) return c:find("update_beacon", 1, true) and beacon or "OK\n" end
+			assert_true(ws.set_bss("phy0-ap1", true), "up")
+			assert_eq(table.concat(cmds, " | "), "ip link set dev phy0-ap1 up 2>/dev/null | "
+				.. "ip link set dev phy0-ap1-20 up 2>/dev/null",
+				"the BSS, then only its down VLAN netdev (-30 is up; ap10 and -x are not its VLANs)")
+			assert_true(links["phy0-ap1-20"], "VLAN 20 up")
+			-- No beacon: the BSS goes down again and its VLANs are not touched.
+			links["phy0-ap1"], links["phy0-ap1-20"], cmds, beacon = false, false, {}, "FAIL\n"
+			assert_false(ws.set_bss("phy0-ap1", true), "no beacon")
+			assert_false(links["phy0-ap1-20"], "VLAN left down with its BSS")
+			assert_eq(cmds[#cmds], "ip link set dev phy0-ap1 down 2>/dev/null", "the BSS down again")
+			-- Going down is the BSS alone: the kernel takes its VLANs with it.
+			links["phy0-ap1"], cmds = true, {}
+			assert_true(ws.set_bss("phy0-ap1", false), "down")
+			assert_eq(table.concat(cmds, " | "), "ip link set dev phy0-ap1 down 2>/dev/null", "one command")
+			ws._netdevs = saved
+			ws._popen = function() return "OK\n" end
+		end
+	},
 }

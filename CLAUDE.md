@@ -543,7 +543,10 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   `get_ifnames_for_vap` returns all of them, and stations, the blocker and the shaper must
   cover all of them; `get_ifname_for_vap` (singular) is only for something that addresses the
   hostapd BSS itself. A station seen on a VLAN netdev is kicked or BTM-requested through its
-  BSS (`bss_ifname`), which is the only place hostapd listens.
+  BSS (`bss_ifname`), which is the only place hostapd listens. Taking a BSS down (schedule,
+  uplink monitor, guest selfrun) takes its `<vap>-<vid>` netdevs with it and nothing brings
+  them back, so a VLAN key is refused: `wlansched.set_bss` raises them after the beacon
+  restarts, and netifd re-bridges them (JIDU6401, 2026-10-28).
 - **Roaming Assistant and Band Steering share usteer but not its decision.** `usteer.lua`
   writes `band_steering_interval` (0 = off; the daemon default steers) and never the inert
   `band_steering_threshold`; `roamassist.lua` reads usteer's cross-AP table and sends its own

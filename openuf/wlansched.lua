@@ -50,6 +50,9 @@ M.MAX_INDEX = 98
 M._exec = os.execute
 M._popen = util.popen
 M._read_file = util.read_file
+-- Every netdev name, one per line (vlan_children). Its own seam so a test of
+-- the hostapd calls is not also a test of this listing.
+M._netdevs = function() return util.popen("ls /sys/class/net 2>/dev/null") or "" end
 
 -- ubntbox's sscanf("%2d%2d-%2d%2d"): "0700-2200" -> "07:00-22:00". nil when
 -- it does not parse.
@@ -153,16 +156,42 @@ local function restart_beacon(ifname)
 	return tostring(M._popen(cli .. "update_beacon 2>/dev/null") or ""):match("^OK") ~= nil
 end
 
+-- The BSS's private pre-shared key VLANs: hostapd's AP/VLAN netdevs, named
+-- <bss>-<vid>. Taking the BSS down takes them down with it, and nothing puts
+-- them back: hostapd's own bring-up of a VLAN fails while its BSS is down
+-- ("ifconfig_helper: ioctl(SIOCSIFFLAGS) failed ... Link has been severed"),
+-- and the BSS coming up does not retry it. A station whose key maps to that
+-- VLAN is then refused ("NL80211_ATTR_STA_VLAN ... failed: -100 (Network is
+-- down)"): the JIDU6401 after an uplink monitor down/up, 2026-10-28. Raising
+-- the link is all it takes; netifd puts it back into br-openuf<vid> itself.
+local function vlan_children(ifname)
+	local out, prefix = {}, ifname .. "-"
+	for n in tostring(M._netdevs() or ""):gmatch("%S+") do
+		if n:sub(1, #prefix) == prefix and n:sub(#prefix + 1):match("^%d+$") then
+			out[#out + 1] = n
+		end
+	end
+	table.sort(out)
+	return out
+end
+
 -- Take one BSS off the air (its netdev down) or put it back on (netdev up,
--- then restart_beacon). Also used by guest selfrun (inform._guest_selfrun).
--- A BSS whose beacon does not restart goes down again, so a caller that
--- keeps it in its ledger retries the whole bring-up rather than leaving an
--- up netdev with no beacon. Returns true if the BSS is now as asked.
+-- then restart_beacon, then its VLAN netdevs up). Also used by guest selfrun
+-- (inform._guest_selfrun). A BSS whose beacon does not restart goes down
+-- again, so a caller that keeps it in its ledger retries the whole bring-up
+-- rather than leaving an up netdev with no beacon. Returns true if the BSS is
+-- now as asked; a VLAN netdev that will not come up is not a reason to take
+-- the BSS down again, as its other stations are served.
 function M.set_bss(ifname, up)
 	if not valid_ifname(ifname) then return false end
 	if not up then return set_link(ifname, false) end
 	if not set_link(ifname, true) then return false end
-	if restart_beacon(ifname) then return true end
+	if restart_beacon(ifname) then
+		for _, v in ipairs(vlan_children(ifname)) do
+			if M.is_up(v) == false then set_link(v, true) end
+		end
+		return true
+	end
 	set_link(ifname, false)
 	return false
 end
