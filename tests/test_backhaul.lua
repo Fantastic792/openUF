@@ -114,7 +114,115 @@ local function with_seams(carrier_by_port, popen_out, fn)
 	if not ok then error(err, 0) end
 end
 
+-- Seams for heal_wds_moves(): `bridge fdb show` answers from fdb.out, the
+-- clock from fdb.now, every command and log line recorded.
+local function with_fdb_seams(fdb, fn)
+	local o = {backhaul._popen, backhaul._exec, backhaul._log, backhaul._time, backhaul._read_file}
+	local rec = {cmds = {}, logs = {}}
+	backhaul._popen = function(cmd)
+		if cmd == "bridge fdb show" then return fdb.out or "" end
+		return ""
+	end
+	backhaul._exec = function(cmd) rec.cmds[#rec.cmds + 1] = cmd; return 0 end
+	backhaul._log = function(msg) rec.logs[#rec.logs + 1] = msg end
+	backhaul._time = function() return fdb.now or 1000 end
+	backhaul._read_file = function() return nil end
+	backhaul._wds_hosts = {}
+	local ok, err = pcall(fn, rec)
+	backhaul._popen, backhaul._exec, backhaul._log, backhaul._time, backhaul._read_file =
+		o[1], o[2], o[3], o[4], o[5]
+	backhaul._wds_hosts = {}
+	if not ok then error(err, 0) end
+end
+
 return {
+	{
+		name = "backhaul: heal_wds_moves() rewrites the switch entry of a host the mesh link carried, once it is wired",
+		fn = function()
+			local fdb = {}
+			with_fdb_seams(fdb, function(rec)
+				local si = fake_sysinfo("wan")
+				-- On the parent, mid-mesh: the PC behind the child's WDS station,
+				-- a VLAN host behind it too, a phone on the parent's own AP.
+				fdb.out = table.concat({
+					"c8:7f:54:06:03:0a dev phy1-ap1.sta1 master br-lan ",
+					"02:00:00:00:00:20 dev phy1-ap1.sta1 vlan 20 master br-openuf20 ",
+					"02:00:00:00:00:99 dev phy1-ap0 master br-lan ",
+					"08:bf:b8:71:c0:31 dev wan master br-lan ",
+					"08:bf:b8:71:c0:31 dev wan self ",
+					"33:33:00:00:00:01 dev phy1-ap1.sta1 master br-lan permanent",
+				}, "\n")
+				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "nothing moved yet")
+				assert_eq(#rec.cmds, 0, "no commands mid-mesh")
+
+				-- The child's cable is back: the WDS port is gone, the PC turns up
+				-- behind the parent's wan, the phone roams onto a cable too.
+				fdb.out = table.concat({
+					"c8:7f:54:06:03:0a dev wan master br-lan ",
+					"02:00:00:00:00:20 dev lan2 vlan 20 master br-openuf20 ",
+					"02:00:00:00:00:99 dev lan1 master br-lan ",
+				}, "\n")
+				assert_eq(backhaul.heal_wds_moves({}, si, nil), 2, "the two hosts the mesh link carried")
+				assert_eq(rec.cmds[1], "bridge fdb replace c8:7f:54:06:03:0a dev wan master static >/dev/null 2>&1", "pin")
+				assert_eq(rec.cmds[2], "bridge fdb del c8:7f:54:06:03:0a dev wan master >/dev/null 2>&1", "unpin")
+				assert_eq(rec.cmds[3], "bridge fdb replace 02:00:00:00:00:20 dev lan2 vlan 20 master static >/dev/null 2>&1",
+					"the VLAN bridge's host keeps its VLAN")
+				assert_eq(#rec.cmds, 4, "the phone was never behind a WDS port: untouched")
+				assert_true(rec.logs[1]:find("c8:7f:54:06:03:0a on wan", 1, true) ~= nil, "logged")
+
+				-- Once only: the next heartbeat leaves the relearnt entries alone.
+				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "healed once")
+				assert_eq(#rec.cmds, 4, "no further commands")
+			end)
+		end
+	},
+	{
+		name = "backhaul: heal_wds_moves() covers the child's station port, skips static entries, forgets after the TTL",
+		fn = function()
+			local fdb = {now = 1000}
+			with_fdb_seams(fdb, function(rec)
+				local si = fake_sysinfo("wan")
+				fdb.out = table.concat({
+					"a8:88:1f:43:85:3f dev phy1-sta0 master br-lan ",
+					"02:00:00:00:00:51 dev phy1-sta0 master br-lan ",
+					"02:00:00:00:00:52 dev phy1-sta0 master br-lan ",
+				}, "\n")
+				backhaul.heal_wds_moves({}, si, "phy1-sta0")
+				fdb.now = 1000 + backhaul.WDS_HEAL_TTL + 1
+				fdb.out = table.concat({
+					"a8:88:1f:43:85:3f dev phy1-sta0 master br-lan ",   -- still on the air: refreshed
+					"02:00:00:00:00:51 dev lan3 master br-lan static", -- someone's static entry
+				}, "\n")
+				assert_eq(backhaul.heal_wds_moves({}, si, "phy1-sta0"), 0, "static entries are left alone")
+				fdb.out = table.concat({
+					"a8:88:1f:43:85:3f dev wan master br-lan ",
+					"02:00:00:00:00:52 dev lan3 master br-lan ",       -- moved after the TTL ran out
+				}, "\n")
+				assert_eq(backhaul.heal_wds_moves({}, si, "phy1-sta0"), 1, "only the gateway, still remembered")
+				assert_eq(rec.cmds[1], "bridge fdb replace a8:88:1f:43:85:3f dev wan master static >/dev/null 2>&1", "gateway")
+			end)
+		end
+	},
+	{
+		name = "backhaul: tick() runs the WDS heal on a wired root with only a downlink, and not on swconfig",
+		fn = function()
+			local fdb = {}
+			with_fdb_seams(fdb, function(rec)
+				local ufuci = fake_ufuci({}, nil, {{name = "openuf_bh_dl_radio1"}})
+				fdb.out = "c8:7f:54:06:03:0a dev phy1-ap1.sta1 master br-lan "
+				backhaul.tick({}, {}, ufuci, fake_sysinfo("wan"), nil)
+				fdb.out = "c8:7f:54:06:03:0a dev lan3 master br-lan "
+				backhaul.tick({}, {}, ufuci, fake_sysinfo("wan"), nil)
+				assert_eq(count(rec.cmds, "^bridge fdb replace c8:7f:54:06:03:0a dev lan3 master static"), 1, "healed through tick()")
+				backhaul._wds_hosts = {}
+				fdb.out = "c8:7f:54:06:03:0a dev phy1-ap1.sta1 master br-lan "
+				backhaul.tick({}, SWCFG, ufuci, fake_sysinfo("wan"), nil)
+				fdb.out = "c8:7f:54:06:03:0a dev eth0.1 master br-lan "
+				backhaul.tick({}, SWCFG, ufuci, fake_sysinfo("wan"), nil)
+				assert_eq(count(rec.cmds, "^bridge fdb"), 2, "swconfig: no FDB rewrite (its ARL heal covers it)")
+			end)
+		end
+	},
 	{
 		name = "backhaul: plan() turns the captured entries into a downlink AP and a disabled uplink station",
 		fn = function()

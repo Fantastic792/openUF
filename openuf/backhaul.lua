@@ -381,6 +381,66 @@ function M.forget_wired(cfg, sysinfo)
 	return n
 end
 
+-- DSA: a host the bridge learns behind a WDS port -- a mesh child's station
+-- on the parent (phy1-ap1.sta1), the station itself on the child -- is also
+-- written into the switch chip, against its CPU port, so the switch hands the
+-- host's frames to the CPU for the wireless side. When the mesh link ends and
+-- the host turns up behind a socket, the bridge's own entry moves to the
+-- socket but the switch's stays on the CPU port: a frame for the host that
+-- enters another socket goes to the CPU, which takes it as already forwarded
+-- by the switch and drops it. Neither a link flap nor a bridge flush clears
+-- it; a reboot did (two JIDU6401s, 2026-10-28: after failback the PC behind
+-- the child reached both APs but not the gateway, and a capture on the parent
+-- showed the gateway's frames for it arriving on wan and never leaving on the
+-- PC's socket). Rewriting the bridge entry does -- a static entry on the
+-- socket, then deleting it -- and the switch relearns from the next frame.
+-- So every heartbeat remembers the hosts behind a WDS port, and once one of
+-- them turns up behind a wired port its entry is rewritten, once. A host not
+-- seen behind a WDS port for WDS_HEAL_TTL is forgotten. Returns the number
+-- rewritten.
+M.WDS_HEAL_TTL = 600
+M._wds_hosts = {}
+
+local function is_wds_port(port, sta_if)
+	return port == sta_if or port:match("%.sta%d+$") ~= nil
+end
+
+function M.heal_wds_moves(cfg, sysinfo, sta_if)
+	local br = M.lan_bridge(cfg, sysinfo)
+	local now = M._time()
+	local healed = {}
+	for line in (M._popen("bridge fdb show") or ""):gmatch("[^\n]+") do
+		local mac, port = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s+dev%s+(%S+)")
+		local master = line:match("%smaster%s+(%S+)")
+		local vlan = line:match("%svlan%s+(%d+)")
+		-- Unicast hosts the bridge learnt itself: a permanent or static entry
+		-- is someone's configuration, and a `self` line the switch's own.
+		if mac and tonumber(mac:sub(1, 2), 16) % 2 == 0 and valid_ifname(port)
+				and master and (master == br or master:match("^br%-openuf%d+$"))
+				and not line:find("permanent") and not line:find("static") then
+			mac = mac:lower()
+			local key = master .. " " .. mac .. " " .. (vlan or "")
+			if is_wds_port(port, sta_if) then
+				M._wds_hosts[key] = now
+			elseif M._wds_hosts[key] and not is_wireless_port(port) then
+				M._wds_hosts[key] = nil
+				local spec = mac .. " dev " .. port .. (vlan and (" vlan " .. vlan) or "") .. " master"
+				M._exec("bridge fdb replace " .. spec .. " static >/dev/null 2>&1")
+				M._exec("bridge fdb del " .. spec .. " >/dev/null 2>&1")
+				healed[#healed + 1] = mac .. " on " .. port
+			end
+		end
+	end
+	for key, t in pairs(M._wds_hosts) do
+		if now - t > M.WDS_HEAL_TTL then M._wds_hosts[key] = nil end
+	end
+	if #healed > 0 then
+		M._log("hosts the mesh link carried are wired now -- rewrote their switch entries: "
+			.. table.concat(healed, ", "))
+	end
+	return #healed
+end
+
 -- One heartbeat of the policy. Needs ucihelper for the station sections and
 -- sysinfo for "which socket is the gateway behind". Persists the mode and the
 -- remembered wired socket in state so a restart does not flap the radio.
@@ -408,6 +468,9 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		-- first link of the chain.
 		if ufuci.backhaul_downlink_sections and #ufuci.backhaul_downlink_sections() > 0 then
 			pcall(M.multihop_tick, st, ufuci, sysinfo, "wired", nil)
+			if not (cfg and cfg.vlan and cfg.vlan.ports) then
+				pcall(M.heal_wds_moves, cfg, sysinfo, nil)
+			end
 			if M._dirty and state_mod and state_mod.save then
 				pcall(state_mod.save, st)
 				M._dirty = false
@@ -520,6 +583,7 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 	end
 
 	pcall(M.multihop_tick, st, ufuci, sysinfo, new_mode, sta_if)
+	if not swconfig then pcall(M.heal_wds_moves, cfg, sysinfo, sta_if) end
 
 	if M._dirty and state_mod and state_mod.save then
 		pcall(state_mod.save, st)

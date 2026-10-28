@@ -889,6 +889,15 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   before the port, port out before the guard, one atomic `nft -f` (not `util.nft_apply`,
   whose fallback deletes the table first). Never move that port into UCI: netifd would
   bring it up at boot, before any guard exists.
+- **On DSA, a host the mesh link carried stays stuck on the switch's CPU port** (found on
+  two JIDU6401s, 2026-10-28). A MAC the bridge learns behind a WDS port is also written
+  into the switch chip against the CPU; when the link ends and the host turns up behind a
+  socket, the bridge's entry moves but the chip's does not, and frames for the host from
+  any other socket die at the CPU (taken as already switched). A link flap and a bridge
+  flush both leave it; a reboot cleared it. `backhaul.heal_wds_moves` remembers the hosts
+  behind WDS ports each heartbeat and rewrites a moved one's entry (static on the socket,
+  then deleted). Symptom if it regresses: after failback, a wired host reaches the APs but
+  nothing beyond the uplink.
 
 ---
 
