@@ -900,6 +900,15 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   failback) is caught by the switch's own dump instead: for a few heartbeats after a WDS
   port goes, a switch-port entry with no `self` twin is rewritten too. Symptom if it
   regresses: after failback, a wired host reaches the APs but nothing beyond the uplink.
+- **The mesh uplink policy must not run at the inform's pace.** It once counted heartbeats
+  (two without carrier), but a heartbeat whose inform cannot reach the controller waits a
+  10 s connect timeout and then a doubling backoff, and a pulled cable is exactly when that
+  happens: the station came up 39 s to 98 s after the pull on a JIDU6401 (2026-10-28), and
+  the controller heard of it up to 60 s later still. So the loss is timed in seconds
+  (`backhaul.DOWN_SECS`), `inform._idle` reads a DSA socket's link every
+  `CARRIER_POLL_S` and wakes the loop when it changes, and `inform._cycle` caps the wait
+  (`backhaul.wait_cap`) while a switch is due or has just been made, starting the backoff
+  over. swconfig boards still read the switch port once per heartbeat.
 
 ---
 

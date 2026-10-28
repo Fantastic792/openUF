@@ -149,6 +149,9 @@ M.NOTIFS_PER_CYCLE   = 8
 -- is a list of chunks, joined once by the harvest: _idle drains ~60 times a
 -- heartbeat, and appending to one string recopied it each time.
 M.ROAM_POLL_S        = 0.25
+-- How often _idle reads the mesh child's wired socket between heartbeats
+-- (backhaul.carrier_changed), so a pulled cable is acted on within a second.
+M.CARRIER_POLL_S     = 1
 M._roam_fast         = false
 M._roam_keep         = false
 M._roam_st           = nil
@@ -5970,19 +5973,24 @@ end
 -- too and each guest is answered as it arrives; a readable socket with
 -- nothing to accept is left alone for the rest of this wait, so it cannot
 -- spin.
+-- While a mesh child's wired socket is watched (backhaul.watching), it wakes
+-- every CARRIER_POLL_S and ends the wait when that link has changed.
 function M._idle(socket, wait)
 	local deadline = socket.gettime() + wait
 	local fast = M._roam_fast
+	local bh = M._backhaul
+	local watch = bh and bh.watching and bh.watching() or false
 	local guests = true
 	while true do
 		local left = deadline - socket.gettime()
 		if left <= 0 then return end
 		local step = fast and math.min(left, M.ROAM_POLL_S) or left
+		if watch then step = math.min(step, M.CARRIER_POLL_S) end
 		local stun_sock = M._stun_c and M._stun_c.sock
 		local server = guests and M._guest_server or nil
 		if not stun_sock and not server then
 			socket.select(nil, nil, step)
-			if not fast then return end
+			if not fast and not watch then return end
 		else
 			local want = {}
 			if stun_sock then want[#want + 1] = stun_sock end
@@ -5997,6 +6005,10 @@ function M._idle(socket, wait)
 			if guest_ready and not M._guest_serve(server) then guests = false end
 		end
 		if fast then pcall(M._roam_poll) end
+		if watch then
+			local ok, changed = pcall(bh.carrier_changed)
+			if ok and changed then return end
+		end
 	end
 end
 
@@ -6629,6 +6641,18 @@ M._collectgarbage = collectgarbage
 -- (setpause 100) kept less than half that saving.
 function M._cycle(st, cfg, ufhw, ctx, socket)
 	local wait = M._tick(st, cfg, ufhw, ctx)
+	-- A mesh switch pending or just made: the next heartbeat comes sooner
+	-- than the backoff a failed inform asked for (backhaul.wait_cap), and
+	-- the backoff starts over, so the controller hears from the device over
+	-- its new uplink seconds after it is up.
+	local bh = M._backhaul
+	if bh and bh.wait_cap then
+		local ok, cap = pcall(bh.wait_cap, st)
+		if ok and type(cap) == "number" and wait > cap then
+			wait = cap
+			ctx.backoff = ctx.interval
+		end
+	end
 	M._collectgarbage("collect")
 	if wait > 0 then M._idle(socket, wait) end
 end

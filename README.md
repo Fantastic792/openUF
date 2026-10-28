@@ -138,10 +138,13 @@ The clients were an iPhone, a Samsung Galaxy S22 and a wired Windows PC.
 
 - **Two units, one hop.** Multi-hop mesh (three APs or more) has run only in a virtual
   machine.
-- **The mesh switchover is slow.** On these units, between 40 s and 90 s passed from the
-  cable being pulled to the station being enabled, and about another minute before traffic
-  flowed: the controller shows the child as unreachable for 2 to 3 minutes. Failback takes
-  about 10 s.
+- **The mesh switchover was slow up to 0.1.2.** On these units, between 39 s and 98 s
+  passed from the cable being pulled to the station being enabled, and up to another minute
+  before the controller heard from the child, because the cable was checked only when an
+  inform was due and failed informs back off. Since then the cable is read every second and
+  the station is enabled 10 s after it goes, with informs every few seconds around the
+  switch; the expected 20 s to 25 s has not yet been measured on these units. Failback takes
+  1 s to 10 s.
 - **Not yet run on this hardware:**
   - fast roaming between two openUF APs, or to a genuine UniFi AP;
   - WiFi schedules;

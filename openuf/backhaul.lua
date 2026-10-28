@@ -71,13 +71,26 @@ M._write_file = function(path, value)
 	return ok ~= nil
 end
 
--- Consecutive heartbeats without wired carrier before the station is enabled.
--- Two ticks (~20 s) rides out a switch reboot or a cable being re-seated
--- without taking the user SSIDs on that radio down for nothing; carrier
--- coming back disables the station on the very next tick.
-M.DOWN_TICKS = 2
+-- Seconds without wired carrier before the station is enabled. Rides out a
+-- cable being re-seated without taking the user SSIDs on that radio down for
+-- nothing; carrier coming back disables the station on the very next tick.
+-- Counted in seconds, not heartbeats: it was two heartbeats once, meant as
+-- ~20 s, but a heartbeat whose inform cannot reach the controller waits out
+-- a 10 s connect timeout and then a doubling backoff, so on a JIDU6401 the
+-- station came up 39 s to 98 s after the cable was pulled (2026-10-28).
+M.DOWN_SECS = 10
+-- While a switch is pending or has just happened, the inform loop waits at
+-- most this long between heartbeats (wait_cap()), for SWITCH_FAST_S after
+-- the switch: the station needs a few seconds to join, and the inform that
+-- tells the controller has to follow at once, not after a 60 s backoff.
+M.FAST_RETRY_S = 3
+M.SWITCH_FAST_S = 30
 
-M._down_ticks = 0
+M._down_since = nil
+M._switched_at = nil
+-- The wired socket the idle loop watches between heartbeats (carrier_changed):
+-- {port = netdev, carrier = last seen}. nil when there is nothing to watch.
+M._watch = nil
 M._dirty = false
 -- swconfig: heartbeats left in which a stale switch address table is flushed
 -- after the uplink came back to the wire (see the end of tick()).
@@ -256,18 +269,47 @@ function M.plan(mesh, entries, cfg, st)
 	return plan
 end
 
--- Pure policy step. carrier: true/false, or nil when it cannot be read.
--- Returns the new mode and the updated down-tick counter.
-function M.decide(carrier, mode, ticks)
-	mode  = (mode == "wireless") and "wireless" or "wired"
-	ticks = tonumber(ticks) or 0
-	if carrier == true then return "wired", 0 end
+-- Pure policy step. carrier: true/false, or nil when it cannot be read;
+-- since: when the carrier was first seen gone (nil while it is there).
+-- Returns the new mode and the updated since.
+function M.decide(carrier, mode, since, now)
+	mode = (mode == "wireless") and "wireless" or "wired"
+	if carrier == true then return "wired", nil end
 	if carrier == false then
-		ticks = ticks + 1
-		if ticks >= M.DOWN_TICKS then return "wireless", ticks end
-		return mode, ticks
+		since = tonumber(since) or now
+		if now - since >= M.DOWN_SECS then return "wireless", since end
+		return mode, since
 	end
-	return mode, 0  -- unknown: hold what we have, and do not accumulate
+	return mode, nil  -- unknown: hold what we have, and start counting afresh
+end
+
+-- For the inform loop. The longest it should wait before the next heartbeat,
+-- or nil for no limit: until the pending switch is due while the wired
+-- carrier is gone and the station not yet up, and FAST_RETRY_S for
+-- SWITCH_FAST_S after a switch.
+function M.wait_cap(st)
+	local now = M._time()
+	local mode = st and st.backhaul_mode
+	if M._down_since and mode ~= "wireless" then
+		return math.max(1, M.DOWN_SECS - (now - M._down_since))
+	end
+	if M._switched_at and now - M._switched_at < M.SWITCH_FAST_S then
+		return M.FAST_RETRY_S
+	end
+	return nil
+end
+
+function M.watching()
+	return M._watch ~= nil
+end
+
+-- True when the watched socket's link is no longer what the last heartbeat
+-- saw: time for a heartbeat now. A read that fails says nothing.
+function M.carrier_changed()
+	local w = M._watch
+	if not w then return false end
+	local c = M._carrier_of(w.port)
+	return c ~= nil and c ~= w.carrier
 end
 
 -- Link state of a wired socket. operstate first: a pulled cable reads
@@ -288,6 +330,7 @@ local function carrier_of(ifname)
 	if v == "1" then return true elseif v == "0" then return false end
 	return nil
 end
+M._carrier_of = carrier_of
 
 local function looks_wireless(ifname)
 	return type(ifname) == "string"
@@ -572,9 +615,18 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		carrier = carrier_of(wired_port)
 	end
 	local mode = (st.backhaul_mode == "wireless") and "wireless" or "wired"
-	local new_mode, ticks = M.decide(carrier, mode, M._down_ticks)
-	M._down_ticks = ticks
+	local now = M._time()
+	local new_mode, since = M.decide(carrier, mode, M._down_since, now)
+	M._down_since = since
+	-- The idle loop reads a DSA socket's link between heartbeats; a swconfig
+	-- port's needs `swconfig dev <sw> show`, too heavy for once a second.
+	if not swconfig and wired_port and carrier ~= nil then
+		M._watch = {port = wired_port, carrier = carrier}
+	else
+		M._watch = nil
+	end
 	if new_mode ~= mode then
+		M._switched_at = now
 		M._log(("wired uplink %s on %s -- %s the WDS station"):format(
 			new_mode == "wireless" and "lost" or "back", tostring(wired_desc or "?"),
 			new_mode == "wireless" and "enabling" or "disabling"))

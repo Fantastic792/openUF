@@ -1623,8 +1623,12 @@ on, and that port's link in `swconfig dev switch0 show` is what counts. When the
 between wire and air, a swconfig board also makes its bridges forget what they learnt on
 wired ports, and for a few heartbeats after the wire comes back it flushes the switch's
 address table if that still has the gateway on the CPU port; the CPU link never goes down, so
-the kernel would not clear either. When that socket's link goes away for two heartbeats the station is
-enabled and the radio reloads; while the station is enabled the AP SSIDs on that radio start
+the kernel would not clear either. When that socket's link has been gone for 10 s the station is
+enabled and the radio reloads. On a DSA board the link is read every second between heartbeats,
+so the 10 s count from the moment the cable is pulled; until the switch is made, and for 30 s
+after it, the device informs every few seconds instead of backing off, so the controller hears
+from it over the new uplink as soon as that is up. A swconfig board reads its switch port once
+per heartbeat; while the station is enabled the AP SSIDs on that radio start
 only once it has joined a parent, on the parent's channel — the behaviour of a real mesh
 child. The moment the socket's link is back the station is disabled again. The two uplinks
 are never up together: with STP off in every UniFi push, that would be a bridge loop. The

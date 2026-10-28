@@ -6111,6 +6111,60 @@ return {
 		end
 	},
 	{
+		name = "inform: _idle reads the mesh child's wired socket every CARRIER_POLL_S and wakes when it changed",
+		fn = function()
+			local t = 0
+			local selects = {}
+			local sock = {
+				gettime = function() return t end,
+				select = function(r, _, timeout)
+					selects[#selects + 1] = timeout
+					t = t + timeout
+					return {}
+				end,
+			}
+			local bh = inform._backhaul
+			local o = {w = bh.watching, c = bh.carrier_changed}
+			local looks = 0
+			bh.watching = function() return true end
+			bh.carrier_changed = function() looks = looks + 1; return looks == 3 end
+			inform._guest_server, inform._stun_c, inform._roam_fast = nil, nil, false
+			local ok, err = pcall(inform._idle, sock, 10)
+			bh.watching, bh.carrier_changed = o.w, o.c
+			if not ok then error(err, 0) end
+			assert_eq(table.concat(selects, ","), "1,1,1", "1 s steps, ended at the change")
+			assert_eq(t, 3, "woke 3 s in, not at 10")
+		end
+	},
+	{
+		name = "inform: a pending or fresh mesh switch caps the cycle's wait and starts the backoff over",
+		fn = function()
+			local orig = {tick = inform._tick, idle = inform._idle, gc = inform._collectgarbage,
+				cap = inform._backhaul.wait_cap}
+			local waits = {}
+			local cap
+			inform._tick = function() return 40 end
+			inform._collectgarbage = function() end
+			inform._idle = function(_, w) waits[#waits + 1] = w end
+			inform._backhaul.wait_cap = function() return cap end
+			local ctx = {interval = 10, backoff = 40}
+			local ok, err = pcall(function()
+				cap = nil
+				inform._cycle({}, nil, nil, ctx, {})
+				assert_eq(ctx.backoff, 40, "no switch: the backoff stands")
+				cap = 3
+				inform._cycle({}, nil, nil, ctx, {})
+				assert_eq(ctx.backoff, 10, "capped: the backoff starts over")
+				cap = 60
+				inform._cycle({}, nil, nil, ctx, {})
+			end)
+			inform._tick, inform._idle, inform._collectgarbage, inform._backhaul.wait_cap =
+				orig.tick, orig.idle, orig.gc, orig.cap
+			if not ok then error(err, 0) end
+			assert_eq(table.concat(waits, ","), "40,3,40", "only ever shortened")
+		end
+	},
+	{
 		name = "inform: each cycle collects the heartbeat's garbage before it waits",
 		fn = function()
 			local orig = {tick = inform._tick, idle = inform._idle, gc = inform._collectgarbage}

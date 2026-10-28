@@ -27,6 +27,14 @@ local function fake_ufuci(sections, ifname, dl_sections)
 	return f
 end
 
+-- The clock the seams give backhaul._time; a test moves it on.
+local now = 1000
+
+local function reset_policy()
+	backhaul._down_since, backhaul._switched_at, backhaul._watch = nil, nil, nil
+	backhaul._dirty = false
+end
+
 local function fake_sysinfo(port)
 	return {
 		lan_bridge = function() return "br-lan" end,
@@ -66,8 +74,10 @@ end
 -- Seams for the swconfig tests: sysfs reads from `files`, `ls` from `dirs`,
 -- every write and command recorded.
 local function with_sw_seams(files, dirs, fn)
-	local o = {backhaul._read_file, backhaul._popen, backhaul._log, backhaul._write_file, backhaul._exec}
+	local o = {backhaul._read_file, backhaul._popen, backhaul._log, backhaul._write_file, backhaul._exec, backhaul._time}
 	local rec = {writes = {}, cmds = {}, logs = {}}
+	now = 1000
+	backhaul._time = function() return now end
 	backhaul._read_file = function(path) return files[path] end
 	backhaul._popen = function(cmd)
 		local dir = cmd:match("^ls (%S+)$")
@@ -76,12 +86,12 @@ local function with_sw_seams(files, dirs, fn)
 	backhaul._log = function(msg) rec.logs[#rec.logs + 1] = msg end
 	backhaul._write_file = function(path, v) rec.writes[#rec.writes + 1] = path .. "=" .. v; return true end
 	backhaul._exec = function(cmd) rec.cmds[#rec.cmds + 1] = cmd; return 0 end
-	backhaul._down_ticks = 0
-	backhaul._dirty = false
+	reset_policy()
 	backhaul._arl_heal = 0
 	local ok, err = pcall(fn, rec)
-	backhaul._read_file, backhaul._popen, backhaul._log, backhaul._write_file, backhaul._exec =
-		o[1], o[2], o[3], o[4], o[5]
+	backhaul._read_file, backhaul._popen, backhaul._log, backhaul._write_file, backhaul._exec, backhaul._time =
+		o[1], o[2], o[3], o[4], o[5], o[6]
+	reset_policy()
 	if not ok then error(err, 0) end
 end
 
@@ -92,7 +102,9 @@ local function count(list, pattern)
 end
 
 local function with_seams(carrier_by_port, popen_out, fn)
-	local orig_read, orig_popen, orig_log = backhaul._read_file, backhaul._popen, backhaul._log
+	local orig_read, orig_popen, orig_log, orig_time = backhaul._read_file, backhaul._popen, backhaul._log, backhaul._time
+	now = 1000
+	backhaul._time = function() return now end
 	backhaul._read_file = function(path)
 		local port, what = path:match("^/sys/class/net/([^/]+)/(%w+)$")
 		if port and (what == "carrier" or what == "operstate") then
@@ -107,10 +119,10 @@ local function with_seams(carrier_by_port, popen_out, fn)
 	end
 	backhaul._popen = function() return popen_out or "" end
 	backhaul._log = function() end
-	backhaul._down_ticks = 0
-	backhaul._dirty = false
+	reset_policy()
 	local ok, err = pcall(fn)
-	backhaul._read_file, backhaul._popen, backhaul._log = orig_read, orig_popen, orig_log
+	backhaul._read_file, backhaul._popen, backhaul._log, backhaul._time = orig_read, orig_popen, orig_log, orig_time
+	reset_policy()
 	if not ok then error(err, 0) end
 end
 
@@ -304,27 +316,32 @@ return {
 		end
 	},
 	{
-		name = "backhaul: decide() is wired-first with hysteresis on loss and none on return",
+		name = "backhaul: decide() is wired-first, waits DOWN_SECS on loss and nothing on return",
 		fn = function()
-			local mode, ticks = backhaul.decide(true, "wired", 0)
+			assert_eq(backhaul.DOWN_SECS, 10, "10 s")
+			local mode, since = backhaul.decide(true, "wired", nil, 100)
 			assert_eq(mode, "wired", "carrier: wired")
-			mode, ticks = backhaul.decide(false, "wired", 0)
-			assert_eq(mode, "wired", "one tick without carrier: still wired")
-			assert_eq(ticks, 1, "counted")
-			mode, ticks = backhaul.decide(false, "wired", 1)
-			assert_eq(mode, "wireless", "second tick: wireless")
-			mode, ticks = backhaul.decide(true, "wireless", 5)
+			assert_nil(since, "nothing counted")
+			mode, since = backhaul.decide(false, "wired", nil, 100)
+			assert_eq(mode, "wired", "carrier just gone: still wired")
+			assert_eq(since, 100, "the loss is timed from now")
+			mode, since = backhaul.decide(false, "wired", since, 109)
+			assert_eq(mode, "wired", "9 s: still wired")
+			assert_eq(since, 100, "and still timed from the loss")
+			mode, since = backhaul.decide(false, "wired", since, 110)
+			assert_eq(mode, "wireless", "10 s: wireless, however many heartbeats that was")
+			mode, since = backhaul.decide(true, "wireless", since, 111)
 			assert_eq(mode, "wired", "carrier back: wired at once")
-			assert_eq(ticks, 0, "counter reset")
-			mode, ticks = backhaul.decide(nil, "wireless", 3)
+			assert_nil(since, "timer reset")
+			mode, since = backhaul.decide(nil, "wireless", 100, 200)
 			assert_eq(mode, "wireless", "unknown carrier: hold")
-			assert_eq(ticks, 0, "and do not accumulate")
-			mode = backhaul.decide(nil, nil, nil)
+			assert_nil(since, "and do not keep counting")
+			mode = backhaul.decide(nil, nil, nil, 0)
 			assert_eq(mode, "wired", "nothing known: wired")
 		end
 	},
 	{
-		name = "backhaul: tick() learns the wired socket, enables the station after two carrier-less ticks and disables it when the wire is back",
+		name = "backhaul: tick() learns the wired socket, enables the station DOWN_SECS after the carrier went and disables it when the wire is back",
 		fn = function()
 			local carrier = {wan = true}
 			with_seams(carrier, "", function()
@@ -340,8 +357,11 @@ return {
 				carrier.wan = false
 				local si = fake_sysinfo(nil)
 				assert_eq(backhaul.tick(st, {}, uf, si, state_mod), "wired", "first tick: patience")
+				now = now + backhaul.DOWN_SECS - 1
+				assert_eq(backhaul.tick(st, {}, uf, si, state_mod), "wired", "9 s on: still patience")
 				assert_eq(#uf.calls, 0, "station untouched")
-				assert_eq(backhaul.tick(st, {}, uf, si, state_mod), "wireless", "second tick: wireless")
+				now = now + 1
+				assert_eq(backhaul.tick(st, {}, uf, si, state_mod), "wireless", "10 s on: wireless")
 				assert_eq(uf.calls[1], true, "station enabled")
 				assert_eq(st.backhaul_mode, "wireless", "mode persisted")
 				-- the gateway is now behind the station netdev: that must not be taken as a wired socket
@@ -351,6 +371,75 @@ return {
 				carrier.wan = true
 				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wired", "wired again at once")
 				assert_eq(uf.calls[#uf.calls], false, "station disabled")
+			end)
+		end
+	},
+	{
+		-- JIDU6401, 2026-10-28: the station came up 39 s to 98 s after the
+		-- cable was pulled, because the policy only ran when an inform was
+		-- due and failed informs back off. The idle loop now watches the
+		-- socket, and the loop's wait is capped while a switch is under way.
+		name = "backhaul: a DSA socket is watched between heartbeats and the loop's wait is capped around a switch",
+		fn = function()
+			local carrier = {wan = true}
+			with_seams(carrier, "", function()
+				local st = {backhaul_mode = "", backhaul_wired_port = ""}
+				local secs = {{name = "openuf_bh_ul_radio1", radio = "radio1", ssid = MESH.essid, disabled = true}}
+				local uf = fake_ufuci(secs, "phy1-sta0")
+				assert_false(backhaul.watching(), "nothing to watch before a heartbeat")
+				assert_false(backhaul.carrier_changed(), "and nothing changed")
+				backhaul.tick(st, {}, uf, fake_sysinfo("wan"), nil)
+				assert_true(backhaul.watching(), "the wired socket is watched")
+				assert_nil(backhaul.wait_cap(st), "wired and steady: no cap")
+				assert_false(backhaul.carrier_changed(), "link as the heartbeat saw it")
+				carrier.wan = false
+				assert_true(backhaul.carrier_changed(), "the cable went: wake the loop")
+				local si = fake_sysinfo(nil)
+				backhaul.tick(st, {}, uf, si, nil)
+				assert_false(backhaul.carrier_changed(), "the heartbeat has seen it")
+				assert_eq(backhaul.wait_cap(st), backhaul.DOWN_SECS, "wait no longer than the switch is due")
+				now = now + 7
+				assert_eq(backhaul.wait_cap(st), 3, "3 s left")
+				now = now + 3
+				assert_eq(backhaul.wait_cap(st), 1, "due: at least a second")
+				assert_eq(backhaul.tick(st, {}, uf, si, nil), "wireless", "switched")
+				assert_eq(backhaul.wait_cap(st), backhaul.FAST_RETRY_S, "just switched: retry fast")
+				now = now + backhaul.SWITCH_FAST_S - 1
+				assert_eq(backhaul.wait_cap(st), backhaul.FAST_RETRY_S, "still within the fast window")
+				now = now + 1
+				backhaul.tick(st, {}, uf, si, nil)
+				assert_nil(backhaul.wait_cap(st), "the window is over")
+				assert_true(backhaul.watching(), "still watched while wireless")
+				carrier.wan = true
+				assert_true(backhaul.carrier_changed(), "the cable is back: wake the loop")
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), nil), "wired", "back on the wire")
+				assert_eq(backhaul.wait_cap(st), backhaul.FAST_RETRY_S, "fast again after failback")
+				carrier.wan = nil
+				assert_false(backhaul.carrier_changed(), "an unreadable link says nothing")
+			end)
+		end
+	},
+	{
+		name = "backhaul: a carrier that comes back before DOWN_SECS cancels the switch",
+		fn = function()
+			local carrier = {wan = true}
+			with_seams(carrier, "", function()
+				local st = {backhaul_mode = "", backhaul_wired_port = ""}
+				local secs = {{name = "openuf_bh_ul_radio1", radio = "radio1", ssid = MESH.essid, disabled = true}}
+				local uf = fake_ufuci(secs, "phy1-sta0")
+				backhaul.tick(st, {}, uf, fake_sysinfo("wan"), nil)
+				carrier.wan = false
+				backhaul.tick(st, {}, uf, fake_sysinfo(nil), nil)
+				now = now + 5
+				carrier.wan = true
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), nil), "wired", "re-seated in 5 s")
+				assert_nil(backhaul.wait_cap(st), "nothing pending")
+				carrier.wan = false
+				backhaul.tick(st, {}, uf, fake_sysinfo(nil), nil)
+				now = now + backhaul.DOWN_SECS - 1
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo(nil), nil), "wired",
+					"the new loss is timed afresh, not from the first")
+				assert_eq(#uf.calls, 0, "the station was never touched")
 			end)
 		end
 	},
@@ -488,7 +577,9 @@ return {
 				sw.gw, sw.up[3] = nil, false
 				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wired", "first tick: patience")
 				assert_eq(#uf.calls, 0, "station untouched")
-				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wireless", "second tick: wireless")
+				assert_false(backhaul.watching(), "a switch port is not watched between heartbeats")
+				now = now + backhaul.DOWN_SECS
+				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wireless", "10 s on: wireless")
 				assert_eq(uf.calls[1], true, "station enabled")
 				assert_eq(st.backhaul_wired_phys, 3, "the socket is still remembered")
 				-- The switch forgot the gateway by itself; the bridges did not:
@@ -669,6 +760,7 @@ return {
 					return true
 				end
 				backhaul.tick(st, {}, uf, fake_sysinfo(nil), nil)
+				now = now + backhaul.DOWN_SECS
 				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo(nil), nil), "wireless", "wireless")
 				assert_eq(got.enabled, true, "enabled")
 				assert_eq(got.lists.bssid, "02:00:00:00:0a:01", "pinned to the chosen parent")
