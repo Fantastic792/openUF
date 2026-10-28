@@ -444,6 +444,69 @@ return {
 		end
 	},
 	{
+		-- JIDU6401, 2026-10-29: after a config push the mesh child's 5 GHz AP
+		-- (same radio as the station) was UP with carrier 0 and never beaconed.
+		name = "backhaul: a silent AP on the joined station's radio gets its beacon restarted, after SILENT_TICKS",
+		fn = function()
+			local o = {backhaul._read_file, backhaul._popen, backhaul._log}
+			local net = {
+				["phy1-sta0"] = {op = "up", carrier = "1", flags = "0x1003"},
+				["phy1-ap0"] = {op = "down", carrier = "0", flags = "0x1003"},     -- silent
+				["phy1-ap1"] = {op = "down", flags = "0x1002"},                    -- taken down on purpose
+				["phy1-ap2"] = {op = "up", carrier = "1", flags = "0x1003"},       -- fine
+				["phy0-ap0"] = {op = "down", carrier = "0", flags = "0x1003"},     -- other radio
+				["phy1-ap0-20"] = {op = "down", carrier = "0", flags = "0x1003"},  -- a VLAN netdev
+			}
+			local popens, logs = {}, {}
+			backhaul._read_file = function(path)
+				local dev, attr = path:match("^/sys/class/net/([^/]+)/(%w+)$")
+				local d = dev and net[dev]
+				if not d then return nil end
+				if attr == "operstate" then return d.op .. "\n" end
+				if attr == "carrier" then return d.carrier and (d.carrier .. "\n") or nil end
+				if attr == "flags" then return d.flags .. "\n" end
+				return nil
+			end
+			backhaul._popen = function(cmd)
+				if cmd == "ls /sys/class/net" then
+					local names = {}
+					for n in pairs(net) do names[#names + 1] = n end
+					table.sort(names)
+					return table.concat(names, "\n") .. "\n"
+				end
+				popens[#popens + 1] = cmd
+				if cmd:find("update_beacon", 1, true) then return "OK\n" end
+				return "OK\n"
+			end
+			backhaul._log = function(m) logs[#logs + 1] = m end
+			backhaul._silent = {}
+			local ok, err = pcall(function()
+				assert_eq(backhaul.revive_silent_aps("phy1-sta0"), 0, "first silent heartbeat: wait")
+				assert_eq(#popens, 0, "nothing run yet")
+				assert_eq(backhaul.revive_silent_aps("phy1-sta0"), 1, "second: revived")
+				assert_eq(table.concat(popens, " | "),
+					"hostapd_cli -i phy1-ap0 raw STOP_AP | hostapd_cli -i phy1-ap0 update_beacon",
+					"STOP_AP then update_beacon, on the silent AP alone")
+				assert_true(logs[1]:find("phy1-ap0 is up with no carrier", 1, true) ~= nil, "said so: " .. logs[1])
+				popens = {}
+				assert_eq(backhaul.revive_silent_aps("phy1-sta0"), 0, "still silent: counted afresh")
+				net["phy1-ap0"].carrier, net["phy1-ap0"].op = "1", "up"
+				assert_eq(backhaul.revive_silent_aps("phy1-sta0"), 0, "beaconing again")
+				assert_nil(backhaul._silent["phy1-ap0"], "forgotten")
+				-- The station not joined: an AP waiting for it is not silent.
+				net["phy1-ap0"].carrier, net["phy1-ap0"].op = "0", "down"
+				net["phy1-sta0"].carrier, net["phy1-sta0"].op = "0", "lowerlayerdown"
+				for _ = 1, 3 do backhaul.revive_silent_aps("phy1-sta0") end
+				assert_eq(#popens, 0, "never while the station is not joined")
+				assert_eq(backhaul.revive_silent_aps(nil), 0, "no station")
+				assert_eq(backhaul.revive_silent_aps("wlan0"), 0, "not a phyN- name")
+			end)
+			backhaul._read_file, backhaul._popen, backhaul._log = o[1], o[2], o[3]
+			backhaul._silent = {}
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "backhaul: tick() is a no-op on a device with no uplink station section",
 		fn = function()
 			with_seams({wan = false}, "", function()

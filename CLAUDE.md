@@ -908,6 +908,15 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   failback) is caught by the switch's own dump instead: for a few heartbeats after a WDS
   port goes, a switch-port entry with no `self` twin is rewritten too. Symptom if it
   regresses: after failback, a wired host reaches the APs but nothing beyond the uplink.
+- **A mesh child's AP on the station's radio goes silent after a Wi-Fi reload** (JIDU6401,
+  mt76, 2026-10-29). At boot it starts when the station joins; a reload (any config push)
+  while the station stays joined leaves it ENABLED in hostapd, netdev UP, carrier 0,
+  nothing sent, and `handle_probe_req: send failed` in the log: the child's 5 GHz SSID
+  was off the air until the next reboot. `backhaul.revive_silent_aps` (every heartbeat
+  in wireless mode, station joined, `SILENT_TICKS` = 2 in a row) restarts such a BSS with
+  `raw STOP_AP` + `update_beacon`, wlansched's recipe; `disable`/`enable` does not work.
+  A netdev that is DOWN (schedule, uplink monitor, guest selfrun) is not silent and is
+  left alone.
 - **The mesh uplink policy must not run at the inform's pace.** It once counted heartbeats
   (two without carrier), but a heartbeat whose inform cannot reach the controller waits a
   10 s connect timeout and then a doubling backoff, and a pulled cable is exactly when that

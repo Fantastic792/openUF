@@ -522,6 +522,54 @@ function M.heal_wds_moves(cfg, sysinfo, sta_if)
 	return #healed
 end
 
+-- A mesh child's APs on the station's radio, silent after a Wi-Fi reload
+-- (JIDU6401, OpenWrt 25.12, mt76, 2026-10-29). At boot such an AP starts
+-- when the station has joined; a reload while the station stays joined
+-- (a config push) re-reads its config, hostapd reports it ENABLED, and it
+-- never beacons again: netdev UP, carrier 0, nothing sent, and every probe
+-- answer fails ("handle_probe_req: send failed"). The 5 GHz SSID of the
+-- child was off the air for good after each push. `hostapd_cli disable` +
+-- `enable` does not bring it back; STOP_AP + UPDATE_BEACON does, the
+-- restart wlansched uses after it raises a BSS (wlansched.lua
+-- restart_beacon). Only while the station is joined, and only an AP whose
+-- netdev is UP: one taken down on purpose (a schedule, the uplink monitor,
+-- guest selfrun) is down, not silent. SILENT_TICKS heartbeats in a row
+-- first, so an AP still starting up after a reload is left to finish.
+M.SILENT_TICKS = 2
+M._silent = {}
+
+local function sysfs_num(ifname, attr)
+	return tonumber((M._read_file("/sys/class/net/" .. ifname .. "/" .. attr) or ""):match("%S+") or "")
+end
+
+function M.revive_silent_aps(sta_if)
+	local phy = type(sta_if) == "string" and sta_if:match("^(phy%d+)%-") or nil
+	if not phy or carrier_of(sta_if) ~= true then
+		M._silent = {}
+		return 0
+	end
+	local seen, revived = {}, 0
+	for name in tostring(M._popen("ls /sys/class/net") or ""):gmatch("%S+") do
+		if name:match("^" .. phy .. "%-ap%d+$") then
+			local flags, carrier = sysfs_num(name, "flags"), sysfs_num(name, "carrier")
+			if flags and flags % 2 == 1 and carrier == 0 then
+				seen[name] = (M._silent[name] or 0) + 1
+				if seen[name] >= M.SILENT_TICKS then
+					local cli = "hostapd_cli -i " .. name .. " "
+					M._popen(cli .. "raw STOP_AP")
+					local ok = tostring(M._popen(cli .. "update_beacon") or ""):match("^OK") ~= nil
+					M._log(("%s is up with no carrier while the station is joined -- restarted its beacon%s"):format(
+						name, ok and "" or " (update_beacon refused)"))
+					seen[name] = 0
+					revived = revived + 1
+				end
+			end
+		end
+	end
+	M._silent = seen
+	return revived
+end
+
 -- One heartbeat of the policy. Needs ucihelper for the station sections and
 -- sysinfo for "which socket is the gateway behind". Persists the mode and the
 -- remembered wired socket in state so a restart does not flap the radio.
@@ -674,6 +722,11 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 
 	pcall(M.multihop_tick, st, ufuci, sysinfo, new_mode, sta_if)
 	if not swconfig then pcall(M.heal_wds_moves, cfg, sysinfo, sta_if) end
+	if new_mode == "wireless" then
+		pcall(M.revive_silent_aps, sta_if)
+	else
+		M._silent = {}
+	end
 
 	if M._dirty and state_mod and state_mod.save then
 		pcall(state_mod.save, st)
