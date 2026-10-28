@@ -534,7 +534,9 @@ end
 -- restart_beacon). Only while the station is joined, and only an AP whose
 -- netdev is UP: one taken down on purpose (a schedule, the uplink monitor,
 -- guest selfrun) is down, not silent. SILENT_TICKS heartbeats in a row
--- first, so an AP still starting up after a reload is left to finish.
+-- first, so an AP still starting up after a reload is left to finish. A
+-- refused update_beacon (hostapd still mid-reload: seen once on the
+-- hardware, 19 s after the push) is tried again on the next heartbeat.
 M.SILENT_TICKS = 2
 M._silent = {}
 
@@ -560,7 +562,7 @@ function M.revive_silent_aps(sta_if)
 					local ok = tostring(M._popen(cli .. "update_beacon") or ""):match("^OK") ~= nil
 					M._log(("%s is up with no carrier while the station is joined -- restarted its beacon%s"):format(
 						name, ok and "" or " (update_beacon refused)"))
-					seen[name] = 0
+					seen[name] = ok and 0 or M.SILENT_TICKS - 1
 					revived = revived + 1
 				end
 			end

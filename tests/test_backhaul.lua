@@ -458,6 +458,7 @@ return {
 				["phy1-ap0-20"] = {op = "down", carrier = "0", flags = "0x1003"},  -- a VLAN netdev
 			}
 			local popens, logs = {}, {}
+			local refuse = false
 			backhaul._read_file = function(path)
 				local dev, attr = path:match("^/sys/class/net/([^/]+)/(%w+)$")
 				local d = dev and net[dev]
@@ -475,7 +476,7 @@ return {
 					return table.concat(names, "\n") .. "\n"
 				end
 				popens[#popens + 1] = cmd
-				if cmd:find("update_beacon", 1, true) then return "OK\n" end
+				if cmd:find("update_beacon", 1, true) then return refuse and "FAIL\n" or "OK\n" end
 				return "OK\n"
 			end
 			backhaul._log = function(m) logs[#logs + 1] = m end
@@ -490,10 +491,19 @@ return {
 				assert_true(logs[1]:find("phy1-ap0 is up with no carrier", 1, true) ~= nil, "said so: " .. logs[1])
 				popens = {}
 				assert_eq(backhaul.revive_silent_aps("phy1-sta0"), 0, "still silent: counted afresh")
+				-- hostapd still mid-reload refuses update_beacon: try again next heartbeat.
+				refuse = true
+				assert_eq(backhaul.revive_silent_aps("phy1-sta0"), 1, "due again: tried")
+				assert_true(logs[#logs]:find("update_beacon refused", 1, true) ~= nil, "said it was refused")
+				popens = {}
+				refuse = false
+				assert_eq(backhaul.revive_silent_aps("phy1-sta0"), 1, "refused: retried on the very next heartbeat")
+				assert_eq(#popens, 2, "STOP_AP and update_beacon again")
 				net["phy1-ap0"].carrier, net["phy1-ap0"].op = "1", "up"
 				assert_eq(backhaul.revive_silent_aps("phy1-sta0"), 0, "beaconing again")
 				assert_nil(backhaul._silent["phy1-ap0"], "forgotten")
 				-- The station not joined: an AP waiting for it is not silent.
+				popens = {}
 				net["phy1-ap0"].carrier, net["phy1-ap0"].op = "0", "down"
 				net["phy1-sta0"].carrier, net["phy1-sta0"].op = "0", "lowerlayerdown"
 				for _ = 1, 3 do backhaul.revive_silent_aps("phy1-sta0") end
