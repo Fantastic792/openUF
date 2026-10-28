@@ -660,6 +660,14 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   touches `/var/run/openuf.clock-ok` (survives a restart, not a reboot). The firmware
   keeps every VAP up until NTP has set the time; so does this. Down is the netdev; up is
   the netdev plus hostapd `STOP_AP` + `update_beacon`, or the BSS stays silent.
+- **A clock the controller says is off restarts ntpd; openUF never sets the clock.**
+  BusyBox ntpd started at boot before its servers resolve never syncs (two JIDU6401s after
+  a power cut, and a mesh child booting without its cable, every time). Every answer's
+  `server_time_in_utc` is compared, trusted or not: over `CLOCK_MAX_SKEW` (60 s),
+  `_note_server_time` runs `/etc/init.d/sysntpd restart`, at most every
+  `NTP_KICK_INTERVAL` (300 s, timed on /proc/uptime), doubling up to `NTP_KICK_MAX` while
+  it does not help. Symptom if it regresses: rrb-unifi logs `clock differs by N s` and
+  fast roaming between openUF APs fails.
 - **A `setdefault` or `reset-inform` now tears the controller's config DOWN**
   (`_forget_controller(prev, cfg)` → `ucihelper.forget`, `switchvlan.restore`, usteer
   off, LED back). It needs the state from BEFORE the reset (`prev`): the per-port VLAN

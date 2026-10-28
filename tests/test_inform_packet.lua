@@ -6313,12 +6313,16 @@ return {
 	{
 		name = "inform packet: the clock is trusted once the controller's time agrees, via a /var/run mark",
 		fn = function()
-			local orig = {time = inform._time, read = inform._read_file, touch = inform._touch}
+			local orig = {time = inform._time, read = inform._read_file, touch = inform._touch,
+				run = inform._run_cmd, stderr = io.stderr}
 			local files = {}
 			inform._read_file = function(p) return files[p] end
 			inform._touch = function(p) files[p] = "" end
 			inform._time = function() return 1791664111 end
-			inform._clock_ok = false
+			-- 68 minutes apart restarts ntpd (the next test): never for real here.
+			inform._run_cmd = function() return "" end
+			io.stderr = {write = function() end}
+			inform._clock_ok, inform._ntp_kick_at, inform._ntp_kicks = false, nil, 0
 			local ok, err = pcall(function()
 				assert_false(inform._clock_trusted(), "no mark yet")
 				inform._note_server_time({server_time_in_utc = "1791660000000"})
@@ -6335,8 +6339,72 @@ return {
 				inform._clock_ok = false
 				assert_false(inform._clock_trusted(), "after a reboot: unknown again")
 			end)
-			inform._time, inform._read_file, inform._touch = orig.time, orig.read, orig.touch
-			inform._clock_ok = false
+			inform._time, inform._read_file, inform._touch, inform._run_cmd, io.stderr =
+				orig.time, orig.read, orig.touch, orig.run, orig.stderr
+			inform._clock_ok, inform._ntp_kick_at, inform._ntp_kicks = false, nil, 0
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- JIDU6401s, 2026-10-28/29: ntpd started at boot before DNS worked and never
+		-- synced; the clocks stayed 211 s to 28 min off until sysntpd was restarted.
+		name = "inform packet: a clock the controller says is off restarts ntpd, rate-limited and backing off",
+		fn = function()
+			local orig = {time = inform._time, read = inform._read_file, touch = inform._touch,
+				run = inform._run_cmd, stderr = io.stderr}
+			local up, cmds, said = 100, {}, {}
+			local files = {}
+			inform._read_file = function(p)
+				if p == "/proc/uptime" then return up .. ".42 200.00\n" end
+				return files[p]
+			end
+			inform._touch = function(p) files[p] = "" end
+			inform._run_cmd = function(c) cmds[#cmds + 1] = c; return "" end
+			io.stderr = {write = function(_, s) said[#said + 1] = s end}
+			local now = 1791664111
+			inform._time = function() return now end
+			inform._clock_ok, inform._ntp_kick_at, inform._ntp_kicks = false, nil, 0
+			local ctrl = function(off) return {server_time_in_utc = tostring((now - off) * 1000)} end
+			local ok, err = pcall(function()
+				inform._note_server_time(ctrl(-211))
+				assert_eq(#cmds, 1, "211 s behind: ntpd restarted")
+				assert_eq(cmds[1], "/etc/init.d/sysntpd restart >/dev/null 2>&1", "through sysntpd")
+				assert_true(said[1]:find("211 s behind the controller's", 1, true) ~= nil, "said why: " .. said[1])
+				assert_false(inform._clock_trusted(), "and still not trusted")
+				up = up + 60
+				inform._note_server_time(ctrl(-211))
+				assert_eq(#cmds, 1, "not again within NTP_KICK_INTERVAL")
+				up = up + inform.NTP_KICK_INTERVAL
+				inform._note_server_time(ctrl(-211))
+				assert_eq(#cmds, 2, "again after it")
+				up = up + inform.NTP_KICK_INTERVAL
+				inform._note_server_time(ctrl(-211))
+				assert_eq(#cmds, 2, "a second restart did not help: the wait doubles")
+				up = up + inform.NTP_KICK_INTERVAL
+				inform._note_server_time(ctrl(-211))
+				assert_eq(#cmds, 3, "after twice the interval")
+				up = up + 100000
+				for _ = 1, 3 do inform._note_server_time(ctrl(-211)); up = up + inform.NTP_KICK_MAX end
+				assert_eq(#cmds, 6, "never longer than NTP_KICK_MAX")
+				-- ntpd has stepped the clock: the answer agrees.
+				inform._note_server_time(ctrl(3))
+				assert_eq(#cmds, 6, "in step: nothing to do")
+				assert_true(inform._clock_trusted(), "and trusted")
+				assert_eq(inform._ntp_kicks, 0, "the back-off starts over")
+				-- Later the clock is off again (ntpd died): checked even when trusted.
+				up = up + 10
+				inform._note_server_time(ctrl(1800))
+				assert_eq(#cmds, 7, "trusted once is not trusted for ever: restarted")
+				assert_true(said[#said]:find("1800 s ahead of", 1, true) ~= nil, "ahead, too")
+				up = up + 10
+				inform._note_server_time(ctrl(1800))
+				assert_eq(#cmds, 7, "rate-limited from the new start")
+				inform._note_server_time({})
+				assert_eq(#cmds, 7, "no server time: nothing")
+			end)
+			inform._time, inform._read_file, inform._touch, inform._run_cmd, io.stderr =
+				orig.time, orig.read, orig.touch, orig.run, orig.stderr
+			inform._clock_ok, inform._ntp_kick_at, inform._ntp_kicks = false, nil, 0
 			if not ok then error(err, 0) end
 		end
 	},

@@ -102,6 +102,7 @@ contains all of it: 29 commits ahead, none behind (52 files, +6292 / −357 line
 |---|---|---|
 | Mesh | One hop | Several hops, with the loop guard and the controller's parent choice; a downlink beacons its path element even with no uplink station |
 | Mesh failback (DSA) | A device that crossed the wireless link could stay unreachable from other sockets until a reboot | The switch-chip entries left behind are rewritten after a switchover |
+| Clock after a reboot | A clock wrong at boot could stay wrong for hours (ntpd started before DNS worked), and fast roaming between the APs then failed | Time sync is restarted when the controller's clock disagrees by more than a minute |
 | Mesh failover time | Checked once per inform, after two failed ones: 39 s to 98 s on a JIDU6401 | The cable is read every second; the station comes up 10 s after it goes (15 s measured) |
 | Uplink Connectivity Monitor | — | New: SSIDs off the air when the uplink stops answering, back on the first answer |
 | Guest portal | — | New, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF): redirect, authorize, per-guest limits, offline mode, disconnect when authorization ends |

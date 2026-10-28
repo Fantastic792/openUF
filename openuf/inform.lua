@@ -5908,14 +5908,44 @@ function M._clock_trusted()
 	M._clock_ok = M._read_file(M.CLOCK_OK_FILE) ~= nil
 	return M._clock_ok
 end
+-- A clock the controller says is off means ntpd is not doing its job, and
+-- openUF restarts it (sysntpd) rather than set the clock itself. BusyBox ntpd
+-- started at boot before its servers could be resolved never syncs: on two
+-- JIDU6401s after a power cut both clocks stayed 10 and 28 minutes off for
+-- hours (2026-10-28), and a mesh child that boots without its cable does it
+-- every time (2026-10-29). fast-roaming's rrb-unifi then drops every roam
+-- message between the APs ("clock differs by N s"). At most once per
+-- NTP_KICK_INTERVAL, doubling while restarts do not help (a controller whose
+-- own clock is wrong), up to NTP_KICK_MAX; an answer that agrees starts over.
+-- The interval is timed on /proc/uptime, which a clock step does not move.
+M.NTP_KICK_INTERVAL = 300
+M.NTP_KICK_MAX = 3600
+M._ntp_kick_at = nil
+M._ntp_kicks = 0
+function M._uptime()
+	return tonumber(((M._read_file("/proc/uptime") or ""):match("^(%d+)")))
+end
 function M._note_server_time(resp)
-	if M._clock_ok or type(resp) ~= "table" then return end
+	if type(resp) ~= "table" then return end
 	local ms = tonumber(resp.server_time_in_utc)
 	if not ms then return end
-	if math.abs(M._time() - ms / 1000) <= M.CLOCK_MAX_SKEW then
-		M._clock_ok = true
-		M._touch(M.CLOCK_OK_FILE)
+	local skew = M._time() - ms / 1000
+	if math.abs(skew) <= M.CLOCK_MAX_SKEW then
+		M._ntp_kicks = 0
+		if not M._clock_ok then
+			M._clock_ok = true
+			M._touch(M.CLOCK_OK_FILE)
+		end
+		return
 	end
+	local up = M._uptime() or 0
+	local wait = math.min(M.NTP_KICK_INTERVAL * 2 ^ math.max(M._ntp_kicks - 1, 0), M.NTP_KICK_MAX)
+	if M._ntp_kick_at and up - M._ntp_kick_at < wait then return end
+	M._ntp_kick_at = up
+	M._ntp_kicks = M._ntp_kicks + 1
+	io.stderr:write(("openuf: the clock is %d s %s the controller's -- restarting ntpd (try %d)\n"):format(
+		math.floor(math.abs(skew) + 0.5), skew < 0 and "behind" or "ahead of", M._ntp_kicks))
+	M._run_cmd("/etc/init.d/sysntpd restart >/dev/null 2>&1")
 end
 M._touch = function(path)
 	local f = io.open(path, "w")
