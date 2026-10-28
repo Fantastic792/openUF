@@ -127,11 +127,15 @@ local function with_fdb_seams(fdb, fn)
 	backhaul._log = function(msg) rec.logs[#rec.logs + 1] = msg end
 	backhaul._time = function() return fdb.now or 1000 end
 	backhaul._read_file = function() return nil end
-	backhaul._wds_hosts = {}
+	local function reset()
+		backhaul._wds_hosts, backhaul._wds_ports, backhaul._window_healed = {}, {}, {}
+		backhaul._heal_window = 0
+	end
+	reset()
 	local ok, err = pcall(fn, rec)
 	backhaul._popen, backhaul._exec, backhaul._log, backhaul._time, backhaul._read_file =
 		o[1], o[2], o[3], o[4], o[5]
-	backhaul._wds_hosts = {}
+	reset()
 	if not ok then error(err, 0) end
 end
 
@@ -173,6 +177,44 @@ return {
 				-- Once only: the next heartbeat leaves the relearnt entries alone.
 				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "healed once")
 				assert_eq(#rec.cmds, 4, "no further commands")
+			end)
+		end
+	},
+	{
+		name = "backhaul: heal_wds_moves() rewrites a switch port's host with no switch entry, in the window after the WDS port goes",
+		fn = function()
+			local fdb = {}
+			with_fdb_seams(fdb, function(rec)
+				local si = fake_sysinfo("wan")
+				fdb.out = table.concat({
+					"96:28:d6:13:bf:ad dev phy1-ap5.sta1 master br-lan ",
+					"08:bf:b8:71:c0:31 dev wan master br-lan ",
+					"08:bf:b8:71:c0:31 dev wan self ",
+				}, "\n")
+				backhaul.heal_wds_moves({}, si, nil)
+				-- Mid-mesh, a wired host without its switch entry is left alone.
+				fdb.out = table.concat({
+					"96:28:d6:13:bf:ad dev phy1-ap5.sta1 master br-lan ",
+					"08:bf:b8:71:c0:31 dev wan master br-lan ",
+				}, "\n")
+				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "no window while the WDS port is up")
+
+				-- The link ends. The controller crossed it between two heartbeats:
+				-- the bridge has it on wan, the switch does not. The gateway has its
+				-- switch entry; eth1 is no switch port at all.
+				local after = table.concat({
+					"08:bf:b8:71:c0:31 dev wan master br-lan ",
+					"a8:88:1f:43:85:3f dev wan master br-lan ",
+					"a8:88:1f:43:85:3f dev wan self ",
+					"02:00:00:00:00:e1 dev eth1 master br-lan ",
+				}, "\n")
+				fdb.out = after
+				assert_eq(backhaul.heal_wds_moves({}, si, nil), 1, "the stuck controller")
+				assert_eq(rec.cmds[1], "bridge fdb replace 08:bf:b8:71:c0:31 dev wan master static >/dev/null 2>&1", "rewritten")
+				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "once per window, even before the switch relearns")
+				for _ = 1, backhaul.WDS_HEAL_WINDOW do backhaul.heal_wds_moves({}, si, nil) end
+				assert_eq(#rec.cmds, 2, "nothing more, and the window has closed")
+				assert_eq(backhaul._heal_window, 0, "closed")
 			end)
 		end
 	},

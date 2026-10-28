@@ -896,8 +896,10 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   any other socket die at the CPU (taken as already switched). A link flap and a bridge
   flush both leave it; a reboot cleared it. `backhaul.heal_wds_moves` remembers the hosts
   behind WDS ports each heartbeat and rewrites a moved one's entry (static on the socket,
-  then deleted). Symptom if it regresses: after failback, a wired host reaches the APs but
-  nothing beyond the uplink.
+  then deleted). A host that crossed the link between two heartbeats (the controller, at
+  failback) is caught by the switch's own dump instead: for a few heartbeats after a WDS
+  port goes, a switch-port entry with no `self` twin is rewritten too. Symptom if it
+  regresses: after failback, a wired host reaches the APs but nothing beyond the uplink.
 
 ---
 

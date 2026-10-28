@@ -396,10 +396,22 @@ end
 -- socket, then deleting it -- and the switch relearns from the next frame.
 -- So every heartbeat remembers the hosts behind a WDS port, and once one of
 -- them turns up behind a wired port its entry is rewritten, once. A host not
--- seen behind a WDS port for WDS_HEAL_TTL is forgotten. Returns the number
--- rewritten.
+-- seen behind a WDS port for WDS_HEAL_TTL is forgotten.
+--
+-- A heartbeat only sees what sits behind the WDS port at that moment, and the
+-- second run showed hosts that crossed it for an instant -- the controller's
+-- MAC, while the child's cable was back and its station not yet down -- stuck
+-- the same way. Those are found by the switch itself: a switch port's healthy
+-- host has its own `self` line on the port the bridge names, and a stuck one
+-- has none. So for WDS_HEAL_WINDOW heartbeats after a WDS port goes away, a
+-- wired entry on a switch port (one with `self` lines at all) without its
+-- `self` twin is rewritten too, once per window. Returns the number rewritten.
 M.WDS_HEAL_TTL = 600
+M.WDS_HEAL_WINDOW = 6
 M._wds_hosts = {}
+M._wds_ports = {}
+M._heal_window = 0
+M._window_healed = {}
 
 local function is_wds_port(port, sta_if)
 	return port == sta_if or port:match("%.sta%d+$") ~= nil
@@ -409,28 +421,54 @@ function M.heal_wds_moves(cfg, sysinfo, sta_if)
 	local br = M.lan_bridge(cfg, sysinfo)
 	local now = M._time()
 	local healed = {}
+	local hosts, self_on, switch_port, wds_now = {}, {}, {}, {}
 	for line in (M._popen("bridge fdb show") or ""):gmatch("[^\n]+") do
 		local mac, port = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s+dev%s+(%S+)")
 		local master = line:match("%smaster%s+(%S+)")
 		local vlan = line:match("%svlan%s+(%d+)")
-		-- Unicast hosts the bridge learnt itself: a permanent or static entry
-		-- is someone's configuration, and a `self` line the switch's own.
-		if mac and tonumber(mac:sub(1, 2), 16) % 2 == 0 and valid_ifname(port)
-				and master and (master == br or master:match("^br%-openuf%d+$"))
-				and not line:find("permanent") and not line:find("static") then
+		if mac and valid_ifname(port) then
 			mac = mac:lower()
-			local key = master .. " " .. mac .. " " .. (vlan or "")
-			if is_wds_port(port, sta_if) then
-				M._wds_hosts[key] = now
-			elseif M._wds_hosts[key] and not is_wireless_port(port) then
-				M._wds_hosts[key] = nil
-				local spec = mac .. " dev " .. port .. (vlan and (" vlan " .. vlan) or "") .. " master"
-				M._exec("bridge fdb replace " .. spec .. " static >/dev/null 2>&1")
-				M._exec("bridge fdb del " .. spec .. " >/dev/null 2>&1")
-				healed[#healed + 1] = mac .. " on " .. port
+			if not master and line:find("%sself") then
+				-- The switch's own table: this port is a switch port, and
+				-- the switch has this host on it.
+				self_on[mac .. " " .. port] = true
+				switch_port[port] = true
+			-- Unicast hosts the bridge learnt itself: a permanent or static
+			-- entry is someone's configuration.
+			elseif tonumber(mac:sub(1, 2), 16) % 2 == 0
+					and master and (master == br or master:match("^br%-openuf%d+$"))
+					and not line:find("permanent") and not line:find("static") then
+				local key = master .. " " .. mac .. " " .. (vlan or "")
+				if is_wds_port(port, sta_if) then
+					M._wds_hosts[key] = now
+					wds_now[port] = true
+				else
+					hosts[#hosts + 1] = {key = key, mac = mac, port = port, vlan = vlan}
+				end
 			end
 		end
 	end
+	for port in pairs(M._wds_ports) do
+		if not wds_now[port] then
+			M._heal_window = M.WDS_HEAL_WINDOW
+			M._window_healed = {}
+		end
+	end
+	M._wds_ports = wds_now
+	for _, h in ipairs(hosts) do
+		local moved = M._wds_hosts[h.key] ~= nil
+		local stuck = M._heal_window > 0 and switch_port[h.port]
+			and not self_on[h.mac .. " " .. h.port] and not M._window_healed[h.key]
+		if (moved or stuck) and not is_wireless_port(h.port) then
+			M._wds_hosts[h.key] = nil
+			M._window_healed[h.key] = true
+			local spec = h.mac .. " dev " .. h.port .. (h.vlan and (" vlan " .. h.vlan) or "") .. " master"
+			M._exec("bridge fdb replace " .. spec .. " static >/dev/null 2>&1")
+			M._exec("bridge fdb del " .. spec .. " >/dev/null 2>&1")
+			healed[#healed + 1] = h.mac .. " on " .. h.port
+		end
+	end
+	if M._heal_window > 0 then M._heal_window = M._heal_window - 1 end
 	for key, t in pairs(M._wds_hosts) do
 		if now - t > M.WDS_HEAL_TTL then M._wds_hosts[key] = nil end
 	end
