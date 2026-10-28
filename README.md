@@ -102,6 +102,7 @@ contains all of it: 29 commits ahead, none behind (52 files, +6292 / −357 line
 |---|---|---|
 | Mesh | One hop | Several hops, with the loop guard and the controller's parent choice; a downlink beacons its path element even with no uplink station |
 | Mesh failback (DSA) | A device that crossed the wireless link could stay unreachable from other sockets until a reboot | The switch-chip entries left behind are rewritten after a switchover |
+| Mesh failover time | Checked once per inform, after two failed ones: 39 s to 98 s on a JIDU6401 | The cable is read every second; the station comes up 10 s after it goes (15 s measured) |
 | Uplink Connectivity Monitor | — | New: SSIDs off the air when the uplink stops answering, back on the first answer |
 | Guest portal | — | New, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF): redirect, authorize, per-guest limits, offline mode, disconnect when authorization ends |
 | AP name in the beacon | The toggle had no effect | The name is in the beacon |
@@ -131,20 +132,21 @@ The clients were an iPhone, a Samsung Galaxy S22 and a wired Windows PC.
 | Guest portal | ✅ A phone was sent to the hotspot page and let through once authorized |
 | Uplink Connectivity Monitor | ✅ SSIDs off about 50 s after the target stopped answering, back about 5 s after it answered |
 | Locate | ⚠️ The controller's commands arrived; the LED was not watched |
-| Mesh, one hop | ✅ Failover to the wireless link and back, four times, with no loop; after the switch-entry fix, every wired host reachable after failback with no manual step |
+| Mesh, one hop | ✅ Failover to the wireless link and back, six times, with no loop; after the switch-entry fix, every wired host reachable after failback with no manual step; after the failover fix, the station up 15 s and joined 23 s after the cable was pulled |
 | `selfcheck.sh` and `verify.py` | ✅ Run against an adopted unit |
 
 ### What this testing does not cover
 
 - **Two units, one hop.** Multi-hop mesh (three APs or more) has run only in a virtual
   machine.
-- **The mesh switchover was slow up to 0.1.2.** On these units, between 39 s and 98 s
-  passed from the cable being pulled to the station being enabled, and up to another minute
-  before the controller heard from the child, because the cable was checked only when an
-  inform was due and failed informs back off. Since then the cable is read every second and
-  the station is enabled 10 s after it goes, with informs every few seconds around the
-  switch; the expected 20 s to 25 s has not yet been measured on these units. Failback takes
-  1 s to 10 s.
+- **The mesh failover is measured once.** Up to 0.1.2, between 39 s and 98 s passed from
+  the cable being pulled to the station being enabled, and up to another minute before the
+  controller heard from the child, because the cable was checked only when an inform was
+  due and failed informs back off. With the fix, one run on these units (2026-10-28): the
+  station was enabled 15 s after the pull (10 s of waiting plus an inform's 10 s connect
+  timeout that was already running), joined the parent at 23 s, and no inform failed after
+  24 s; when the controller first heard from the child again was not recorded. Failback
+  took under a second.
 - **Not yet run on this hardware:**
   - fast roaming between two openUF APs, or to a genuine UniFi AP;
   - WiFi schedules;
