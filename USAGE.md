@@ -1472,7 +1472,32 @@ line is `inform: DFS radar detected on channel 100 (5500 MHz) on phy1-ap0 -- rep
 controller`. The other `DFS-*` events reach the spool and are dropped (no controller handler);
 `grep DFS- /tmp/openuf-rrm.jsonl` after a hostapd start on a DFS channel shows the CAC pair,
 which proves the path without waiting for radar. Note that the JioRouter profiles keep DFS
-channels out (the MT7986 driver fails CAC), so there this only matters on other boards.
+channels out (the profile blames the MT7986 driver for the failed CAC), and that under the
+country **India** no Linux AP can start a CAC at all: wireless-regdb gives IN no DFS region,
+and the kernel refuses radar detection without one (PROTOCOL-VALIDATION, "The 5 GHz Country IE
+regression, and the radar event").
+
+**`dfs-reset`: back onto a pinned DFS channel** (from jonasevcik/openUF). A radar hit takes a
+5 GHz radio off its channel for at least 30 minutes, and nothing brings it back: the radio
+keeps serving on whatever channel the driver moved to, so a planned DFS cell stays wrong until
+someone re-provisions the AP. The controller therefore pushes a nightly cron job,
+`0 2 * * * syswrapper.sh dfs-reset`, to every AP with a 5 GHz radio pinned to a DFS channel
+the site's country allows; openUF installs it in its marked crontab block. The hook does no
+radio work: it writes a timestamp to `/tmp/openuf-dfs-reset-request` and the daemon acts on
+the next heartbeat (a request older than 30 minutes is dropped). Per enabled 5 GHz radio, in
+the order UniFi firmware's own `dfs_reset` checks: a radio on `auto` is left alone; a live
+channel (`iw dev <if> info`) equal to the configured one (`wireless.<radio>.channel`) means
+nothing to do; a configured DFS channel still `unavailable` in `iw phy phyN channels` (the
+non-occupancy list) is waited for, with the time left logged; otherwise the BSS is moved with
+`hostapd_cli -i <bss> chan_switch 5 <freq> sec_channel_offset=± center_freq1=<c>
+bandwidth=<w> ht|vht`, rebuilt from the live width so an 80 MHz cell comes back at 80 MHz. UCI
+is never written. The radio goes quiet for the CAC on arrival, which is why it runs at 02:00.
+
+```sh
+/usr/bin/syswrapper.sh dfs-reset               # ask for it now
+logread -e openuf | grep dfs-reset
+iw phy phy1 channels | grep -A5 "5500 MHz"     # the kernel's own DFS state
+```
 
 **MAC-based VLANs ("Virtual Network Override")** (from jonasevcik/openUF). A client given a
 Virtual Network Override, on the client's own page, belongs on that network's VLAN whatever
@@ -2076,6 +2101,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | A WLAN with an override vanished from the air | `logread \| grep -i "maclist\|accept_mac"`. hostapd drops the whole WLAN over an accept file it cannot read or a line it cannot parse, so the file went missing after it was written, or something else rewrote it |
 | A 5 GHz radio has no SSID after a config push; `logread` shows `hostapd.add_iface failed` | `logread \| grep -B3 "errors found"`. *"Cannot enable IEEE 802.11h without IEEE 802.11d enabled"* means `ieee80211d=0` on a 5 GHz radio, which openUF builds before 2026-10-29 could write when a WLAN turned the Country IE off; upgrade, or `uci set wireless.<radio>.ieee80211d=1; uci commit; wifi` |
 | A 5 GHz radio left its DFS channel and the controller logged nothing | The radar event comes off hostapd's control socket, so it needs a monitor attached: `pgrep -f '[h]ostapd_cli .*-a /tmp/openuf-bresp.sh'` must list one per BSS, and `hostapd-utils` must be installed. `grep DFS- /tmp/openuf-rrm.jsonl` right after a hostapd start on a DFS channel should show the CAC pair; if that is empty the monitors are not running |
+| A 5 GHz radio is on the wrong channel after a radar hit and stays there | `sed -n '/openuf-cron-begin/,/openuf-cron-end/p' /etc/crontabs/root` must carry `0 2 * * * /usr/bin/syswrapper.sh dfs-reset`; if it does not, the controller is not pushing the job: it only does so for a radio pinned to a DFS channel the site's country allows (`uci get wireless.<radio>.channel` must be a number, not `auto`). Run `/usr/bin/syswrapper.sh dfs-reset` to ask for it now; `logread \| grep dfs-reset` gives the reason it was left alone. The commonest is the non-occupancy list: `iw phy phy<N> channels` shows the channel as `DFS state: unavailable` with the time left |
 | Band Steering has no effect | `usteer` not installed or not running — `/etc/init.d/usteer status` |
 | Clients are steered 2.4 → 5 GHz with Band Steering off | `ubus call usteer get_config` must show `band_steering_interval: 0`. Any other value means usteer's default applies, and it steers. openUF writes the 0 on the next WiFi config push. Force Provision if it is missing |
 | Log says `device Band Steering mode "equal" is not supported` | The AP's own Band Steering is set to Balance. usteer can only balance by rejecting associations, so openUF does not map it. Use Prefer 5G or the per-WLAN toggle |
