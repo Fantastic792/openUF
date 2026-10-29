@@ -95,8 +95,8 @@ point only: no gateway or switch emulation, by design.
 
 [Fantastic792/openUF](https://github.com/Fantastic792/openUF) is built on
 [yesrab/openUF](https://github.com/yesrab/openUF) `main` (`6277bdf`, 2026-10-26) and
-contains all of it: 29 commits ahead, none behind (52 files, +6292 / −357 lines, as of
-`b22b1f0`, 2026-10-28). Releases are built from this fork, and `setup.sh` installs them.
+contains all of it: 36 commits ahead, none behind (52 files, +6924 / −412 lines,
+2026-10-29). Releases are built from this fork, and `setup.sh` installs them.
 
 | Area | yesrab/openUF `main` | This fork |
 |---|---|---|
@@ -104,6 +104,7 @@ contains all of it: 29 commits ahead, none behind (52 files, +6292 / −357 line
 | Mesh failback (DSA) | A device that crossed the wireless link could stay unreachable from other sockets until a reboot | The switch-chip entries left behind are rewritten after a switchover |
 | Clock after a reboot | A clock wrong at boot could stay wrong for hours (ntpd started before DNS worked), and fast roaming between the APs then failed | Time sync is restarted when the controller's clock disagrees by more than a minute |
 | Mesh failover time | Checked once per inform, after two failed ones: 39 s to 98 s on a JIDU6401 | The cable is read every second; the station comes up 10 s after it goes (15 s measured) |
+| Mesh child's SSIDs after a Wi-Fi reload | The AP on the station's radio could stay up but silent (no beacons) until a reboot | Its beacon is restarted after two silent heartbeats, and again if hostapd refuses the first try |
 | Uplink Connectivity Monitor | — | New: SSIDs off the air when the uplink stops answering, back on the first answer |
 | Guest portal | — | New, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF): redirect, authorize, per-guest limits, offline mode, disconnect when authorization ends |
 | AP name in the beacon | The toggle had no effect | The name is in the beacon |
@@ -120,42 +121,66 @@ contains all of it: 29 commits ahead, none behind (52 files, +6292 / −357 line
 ### Tested on the JioRouter AX6000 JIDU6401
 
 Two JIDU6401s on OpenWrt 25.12.6, one adopted from a router already in use and one reset to
-defaults first, managed by a self-hosted UniFi Network 10.6.106, 2026-10-27 to 2026-10-28.
-The clients were an iPhone, a Samsung Galaxy S22 and a wired Windows PC.
+defaults first, managed by a self-hosted UniFi Network 10.6.106, 2026-10-27 to 2026-10-29.
+The clients were an iPhone, a Samsung Galaxy S22 and a wired Windows PC. The 2026-10-29
+results ran on 0.1.3 with the clock and silent-SSID fixes added by hand; both fixes are in
+the next release.
 
 | Feature | Result on the JIDU6401 |
 |---|---|
-| Install | ✅ The 0.1.0 and 0.1.1 packages with `apk`; the upgrade restart checked with the service running, stopped, and in an image build |
+| Install | ✅ The 0.1.0 to 0.1.3 packages with `apk`; the upgrade restart checked with the service running, stopped, and in an image build |
 | Adoption | ✅ Found on the LAN and adopted over the `ubnt` account; Forget and adopt again |
 | WPA3 (SAE) | ✅ A phone joined; kept after adoption once the downgrade was fixed (the controller's first push captured, then fixed) |
 | Enhanced Open (OWE) | ✅ A phone joined with OWE |
 | Private pre-shared keys | ✅ Two phones, each on its key's VLAN with an address from that VLAN, also after the SSID went off and on |
 | Guest portal | ✅ A phone was sent to the hotspot page and let through once authorized |
 | Uplink Connectivity Monitor | ✅ SSIDs off about 50 s after the target stopped answering, back about 5 s after it answered |
-| Locate | ⚠️ The controller's commands arrived; the LED was not watched |
-| Mesh, one hop | ✅ Failover to the wireless link and back, six times, with no loop; after the switch-entry fix, every wired host reachable after failback with no manual step; after the failover fix, the station up 15 s and joined 23 s after the cable was pulled |
-| `selfcheck.sh` and `verify.py` | ✅ Run against an adopted unit |
+| Locate | ✅ The status LED blinked while Locate was on and went back to normal when it was turned off |
+| Mesh, one hop | ✅ Failover to the wireless link and back, six times, and once more on 0.1.3, with no loop; after the switch-entry fix, every wired host reachable after failback with no manual step; after the failover fix, the station up 15 s and joined 22–23 s after the cable was pulled (two runs). A cold boot with no cable came up on the mesh |
+| Clock after a reboot | ✅ Booted 4–6 minutes slow twice; each time openUF saw the controller's clock disagree and restarted time sync, and the clock was right within about 2 minutes |
+| Mesh child's SSIDs after a Wi-Fi reload | ✅ Without the fix the child's 5 GHz SSID went silent at every Wi-Fi reload; with it, back on the air 10–20 s later, every time |
+| Fast roaming (802.11r) between the two units | ✅ An iPhone (FT-SAE) roamed both ways with one lost ping. The S22 never uses FT; it roamed with a full WPA3 reconnect (1.5–1.8 s gap). The old AP dropped the client at once both ways |
+| WiFi Blackout Schedule | ✅ SSIDs off and back on within about 15 s of the scheduled times, in the site's time zone; the mesh link stayed up. A unit that rebooted mid-blackout waited for a trusted clock, then applied it |
+| Speed limit | ✅ A 5 / 2 Mbps limit measured 4.69 / 1.80 Mbps on an iPhone; 92 / 92 Mbps without it, before and after |
+| AP name in the beacon | ✅ The controller's device name (after naming the devices) seen in both units' beacons on both bands, with no WPS prompt fields. See the known issues for unnamed devices and WiFiman |
+| Multicast and broadcast blocker | ✅ Broadcasts from a wired host not on the exception list never reached a phone (its address lookup failed); with the host listed, they did; DHCP kept working with the DHCP server listed; turning it off removed the rules |
+| Band steering | ✅ With it on, a phone held on 2.4 GHz was asked to move to 5 GHz about a minute later and accepted; with it off, no request in 3 minutes |
+| Minimum RSSI | ✅ At -67 dBm, a phone that walked away was disconnected 44 s after its signal fell below the threshold and refused on that radio until it came back; turning it off removed the settings |
+| Load balance | ✅ With a cap of 1 client (set through the controller's API: Network 10.6 has no switch for it), the more idle of two phones was disconnected 11 s after the second joined, and it moved to the other unit |
+| `selfcheck.sh` and `verify.py` | ✅ Run against an adopted unit; `selfcheck.sh` again on 0.1.3, no failures on either unit |
 
 ### What this testing does not cover
 
 - **Two units, one hop.** Multi-hop mesh (three APs or more) has run only in a virtual
   machine.
-- **The mesh failover is measured once.** Up to 0.1.2, between 39 s and 98 s passed from
+- **The mesh failover is measured twice.** Up to 0.1.2, between 39 s and 98 s passed from
   the cable being pulled to the station being enabled, and up to another minute before the
   controller heard from the child, because the cable was checked only when an inform was
-  due and failed informs back off. With the fix, one run on these units (2026-10-28): the
-  station was enabled 15 s after the pull (10 s of waiting plus an inform's 10 s connect
-  timeout that was already running), joined the parent at 23 s, and no inform failed after
-  24 s; when the controller first heard from the child again was not recorded. Failback
-  took under a second.
+  due and failed informs back off. With the fix, two runs on these units (2026-10-28 and
+  2026-10-29): the station was enabled 15 s after the pull (10 s of waiting plus an
+  inform's 10 s connect timeout that was already running) and joined the parent at
+  22–23 s. In the second run the controller heard nothing from the child for 32 s.
+  Failback took under a second, and the first inform on the wire went 3 s after the
+  cable was back.
 - **Not yet run on this hardware:**
-  - fast roaming between two openUF APs, or to a genuine UniFi AP;
-  - WiFi schedules;
-  - speed limits, measured with a throughput test;
-  - the AP name, seen by a WiFi scanner;
-  - the multicast and broadcast blocker on the air;
-  - band steering, minimum RSSI and load balance;
-  - per-port VLANs.
+  - fast roaming to or from a genuine UniFi AP;
+  - per-port VLANs;
+  - Airtime Fairness, measured;
+  - a 48–72 hour run.
+- **Known issues found by this testing**, to be fixed:
+  - The first time an AP sees a new neighbour BSSID, openUF asks the controller for its
+    whole configuration again, and that push reloads the AP's Wi-Fi: its clients drop once.
+    It happened a few times on the first day and stopped once both units had seen each
+    other's radios. openUF also takes the other openUF unit for a UniFi AP.
+  - The AP name: a device not yet named in the controller beacons `openUF`, because the
+    controller sends no name for it ("U6IW" in its UI is only the model's label). WiFiman
+    reads the router's hostname, which openUF does not set from the controller's name.
+  - Minimum RSSI and load balance disconnect clients without logging it.
+  - After a reset, a `set-inform` sent while the reset's own one is still pending is
+    overwritten; and the `ubnt` account is locked only when openUF next restarts, not at
+    adoption.
+  - The mesh failover takes 15 s, not the 10 s the code waits, while an inform is in
+    flight.
 - **One of each:** one OpenWrt release (25.12.6, `apk`; 24.10 with `opkg` untested here),
   one controller version, no UniFi gateway (the controller was self-hosted behind an ISP
   router), and a handful of clients for a few hours, not a long-running or busy network.
