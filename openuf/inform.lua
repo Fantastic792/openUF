@@ -6332,6 +6332,9 @@ end
 -- makes this a *reset*). The radio still goes quiet for the CAC on arrival,
 -- which is the price of a DFS channel and the reason this runs at 02:00.
 M.DFS_RESET_REQUEST_FILE = "/tmp/openuf-dfs-reset-request"
+-- The kernel's non-occupancy period after a radar hit (IEEE80211_DFS_MIN_NOP_TIME_MS,
+-- 30 minutes), for telling the operator how long is left.
+M.DFS_NOP_S = 1800
 -- A request the daemon never saw (it was down, or the whole AP was) is not
 -- carried out hours later, when the clock has moved on and the controller
 -- would schedule a fresh one the next night anyway.
@@ -6369,10 +6372,14 @@ function M._dfs_reset_radio(radio, ifname)
 		local states = rrm.parse_dfs_states(si.phy_channels(ifname))
 		if rrm.channel_in_nol(states, want) then
 			local s = states[want] or {}
+			-- iw's "(for N sec)" is how long the channel has BEEN in this state
+			-- (NL80211_FREQUENCY_ATTR_DFS_TIME), not how long is left.
+			local left = s.secs and math.max(0, M.DFS_NOP_S - s.secs)
 			io.stderr:write(("inform: dfs-reset: %s is on channel %d, wants %d,"
 				.. " but %d is still on the non-occupancy list%s -- waiting for"
 				.. " the next run\n"):format(ifname, live, want, want,
-				s.secs and (" for another " .. s.secs .. " s") or ""))
+				s.secs and (" (unavailable for " .. s.secs .. " s, about "
+					.. left .. " s left)") or ""))
 			return nil, "in the non-occupancy list"
 		end
 	end

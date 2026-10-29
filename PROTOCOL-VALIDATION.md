@@ -2964,7 +2964,24 @@ since the old code committed once per VAP.
 ### The nightly dfs-reset, and the controller's cron verbs (jonasevcik ba3dec5, 2026-10-27)
 
 **In this tree** `refresh-walled-garden` is declined and logged: the walled garden is not
-ported yet. Their evidence follows, as they wrote it.
+ported yet.
+
+**This project's VM lab, 2026-10-29.** The AP's 5 GHz radio pinned to channel 100 at 80 MHz
+through the controller (site country US for the run). The build before this port logged the
+pushed job as `not a command this build provides`; with it, the marked crontab block carries
+`0 2 * * * /usr/bin/syswrapper.sh dfs-reset`. Moved to channel 36 by hand (a CSA through
+hostapd, no radar), `syswrapper.sh dfs-reset` brought it back at the next heartbeat:
+`dfs-reset: phy1-ap0 switching back from channel 36 to the configured 100 (5500
+sec_channel_offset=1 center_freq1=5530 bandwidth=80 vht)`, back on 100 at 80 MHz after the CAC.
+After a simulated radar hit (the radio went to 149), the job waited instead of switching.
+
+**Fixed here: the wait message read iw's elapsed time as the time left.** It said "for another
+10 s" 7 s after the hit. iw's `DFS state: unavailable (for N sec)` is how long the channel has
+been in that state (`NL80211_FREQUENCY_ATTR_DFS_TIME`); the non-occupancy period is 30 minutes
+(`IEEE80211_DFS_MIN_NOP_TIME_MS`). The line now reads `(unavailable for 258 s, about 1542 s
+left)`, confirmed in the same lab. The decision itself was already right.
+
+Their evidence follows, as they wrote it.
 
 
 The jar check is done, and it settles the whole axis. Method, reproducible: extract

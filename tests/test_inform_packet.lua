@@ -7850,7 +7850,9 @@ return {
 				assert_eq(#cmds, 0, "no switch attempted")
 				assert_contains(said, "still on the non-occupancy list",
 					"and the reason is named")
-				assert_contains(said, "another 1766 s", "with the time left")
+				-- iw's 1766 s is time SPENT unavailable: 34 s of the 30 min remain.
+				assert_contains(said, "unavailable for 1766 s, about 34 s left",
+					"with the time spent and the time left")
 
 				-- hostapd refusing is reported, not swallowed.
 				cmds, nol, said = {}, nil, ""
