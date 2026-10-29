@@ -204,7 +204,7 @@ end
 -- fw_caps as openUF claims it: 0x80001110, which is this negative 32-bit
 -- integer. Written out rather than as a hex literal, because on Lua 5.1
 -- (the target) 0x80001110 is a positive double and would not compare.
-local MAC_VLAN_FW_CAPS = -2147479280
+local MAC_VLAN_FW_CAPS = -2146430704
 
 -- A socket-shaped modelmap: one port_idx per physical switch socket, and no
 -- static uplink flag -- which socket the cable is in is detected from the
@@ -2047,7 +2047,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: fw_caps sets the QCA-switch, OWRT-switch, multi-block schedule and MAC-based-VLAN bits (0x80001110)",
+		name = "inform json: fw_caps sets the QCA-switch, OWRT-switch, multi-block schedule, RADIUS-DAS and MAC-based-VLAN bits (0x80101110)",
 		fn = function()
 			-- Confirmed via decompiled controller 10.4.57: Device.hasQCASwitch()
 			-- is hasFirmwareCapability(16) (gates the Ports view's projection
@@ -2064,11 +2064,11 @@ return {
 			-- controller side.
 			local d, _, raw = build()
 			assert_eq(d.fw_caps, MAC_VLAN_FW_CAPS,
-				"fw_caps bits 0x10 | 0x100 | 0x1000 | 0x80000000 set")
+				"fw_caps bits 0x10 | 0x100 | 0x1000 | 0x100000 | 0x80000000 set")
 			-- No trailing comma in the needle: cjson emits object keys in hash
 			-- order, so fw_caps is sometimes the last one and followed by `}`.
-			assert_true(raw:find('"fw_caps":-2147479280', 1, true) ~= nil,
-				"and it is serialized as a negative integer, not 2147488016")
+			assert_true(raw:find('"fw_caps":-2146430704', 1, true) ~= nil,
+				"and it is serialized as a negative integer, not 2148536592")
 		end
 	},
 	{
@@ -2696,14 +2696,14 @@ return {
 				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
 				ip = "192.168.1.100", hostname = "testap"}
 			local d = cjson.decode(inform.build_json(st, {config = {}}, ufhw))
-			assert_eq(d.fw_caps, 0x1110 - 0x80000000,
+			assert_eq(d.fw_caps, 0x101110 - 0x80000000,
 				"shipped fw_caps without an override (0x1000: multi-block WLAN schedule; sign bit: MAC-based VLANs)")
 			assert_eq(d.wifi_caps2, 0x4000F2, "shipped wifi_caps2 without an override")
 			assert_eq(d.wifi_caps, 0x1C + 0x801, "shipped wifi_caps without an override (mesh bits by default)")
 			d = cjson.decode(inform.build_json(st,
 				{config = {debug_caps = {wifi_caps = 0x2, wifi_caps2 = 0x41}}}, ufhw))
 			inform._airtime.supported = o
-			assert_eq(d.fw_caps, 0x1110 - 0x80000000, "an unlisted mask keeps its shipped value")
+			assert_eq(d.fw_caps, 0x101110 - 0x80000000, "an unlisted mask keeps its shipped value")
 			assert_eq(d.wifi_caps, 0x2, "wifi_caps override replaces the shipped bits")
 			assert_eq(d.wifi_caps2, 0x41, "wifi_caps2 override applied")
 		end

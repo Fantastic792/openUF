@@ -2978,6 +2978,130 @@ before this change:
 All SSIDs came up on both builds, with no errors. The saving grows with the number of WLANs,
 since the old code committed once per VAP.
 
+### RADIUS MAC authentication and Dynamic Authorization (jonasevcik bd2e29b, 2026-10-27)
+
+Their evidence, as they wrote it; this project's lab run follows it.
+
+
+The two deliberate deferrals of the WPA-Enterprise commit, closed. Both are settings of a
+WLAN's RADIUS profile, and **neither needs the WLAN to be WPA-Enterprise.**
+
+**Where they come from (10.6.106, `com/ubnt/service/config/VAZShipWTNxlo`).**
+
+| Setting | Gate in the writer | Keys emitted |
+|---|---|---|
+| MAC Authentication | `glUEhxTYZtqmhf.is("radius_mac_auth_enabled")` at `:639` — **no capability bit, no security-type condition**; the `else` branch at `:646` sends `radius.macacl.status=disabled` | `aaa.<n>.radius.macacl.{status,emptypassword,format}`, plus the whole `radius.auth.<k>.*` block (`:640`, and `NvfcKfHPI(...)` for a non-EAP WLAN) |
+| RADIUS DAS | `hasFirmwareCapability(0x100000)` at `:567`, AND (`radius_das_enabled` OR `hotspot2conf_enabled`), AND the profile's `accounting_enabled` at `:948` | `aaa.<n>.radius.das.{status,port,client,secret}` (`:954`, `:973`) and the second shape `aaa.radius.dad.{status,port}` + `aaa.<n>.radius.dad.client.<k>.{cidr,secret}` (`:951`, `:976`) |
+
+`radius_mac_auth_enabled`, `radius_macacl_format` and `radius_macacl_empty_password` are
+WlanConf fields (`api/fields/WlanConf.json:142-145`); `format` is an enum
+`none|hyphen|colon` × `lower|upper`. The DAS client address and secret are taken from the
+**first accounting server**, written once, and the port is `3800 + the WLAN's section index`.
+
+**What the AP does with them (U7LR 6.8.2 `sbin/ubntbox`).** The format strings sit together
+and name their hostapd output directly:
+
+```
+aaa.%d.radius.das.port      -> radius_das_port=%u
+aaa.%d.radius.das.client
+aaa.%d.radius.das.secret    -> radius_das_client=%s %s
+aaa.%d.radius.dad.client.%d.secret -> radius_das_client=127.0.0.1 %s
+aaa.%d.radius.macacl.status -> macaddr_acl=2
+aaa.%d.radius.macacl.format -> macaddr_format=%s
+aaa.%d.radius.macacl.emptypassword -> mac_acl_empty_passwd=%d
+```
+
+Two things fall out of that. The `dad.*` shape points hostapd at **localhost** — the request
+reaches the AP's own `mcad`, which checks the CIDR and relays it — so it is unusable without
+that relay. And `macaddr_format`/`mac_acl_empty_passwd` are options of UniFi's **patched**
+hostapd: neither string occurs in `/usr/sbin/hostapd` on either AP (`strings -a | grep -c`
+gives 0 on ath79 and on filogic), while `radius_das_client`, `radius_das_port` and
+`macaddr_acl` all do.
+
+**The OpenWrt consumers, read off the live 25.12.5 generator** (`/usr/share/ucode/wifi/ap.uc`,
+identical on both boards):
+
+- `macaddr_acl` is **not a wifi-iface option**: it is absent from
+  `/usr/share/schema/wireless.wifi-iface.json`, and the only producers are
+  `iface_macfilter()` (`allow` → 1, `deny` → 0) and `ppsk` → 2. So it goes in through
+  `hostapd_bss_options` (ap.uc:612, raw lines appended last). `ppsk=1` would also set it, but
+  in `case 'psk'` it additionally sets `wpa_psk_radius=2` and leaves the passphrase out —
+  that is UniFi's *Private PSK* feature, not MAC auth, and would make the WLAN unjoinable.
+- `iface_authentication_server()` is called **only** from the EAP branch and from
+  `iface_ppsk()`, so on an open/PSK/SAE BSS the `auth_server_*` options are stored and
+  dropped. `iface_accounting_server()` is called unconditionally, so `acct_server_*` is fine
+  as an option. openUF therefore writes the auth servers raw on a non-EAP WLAN and through
+  UCI on an EAP one.
+- `radius_das_client` and `radius_das_port` are in ap.uc's unconditional `append_vars` list,
+  **but the join** `radius_das_client = client + ' ' + secret` (ap.uc:187-189, with
+  `set_default(radius_das_port, 3799)`) sits inside `case 'eap'`. `radius_das_secret` and its
+  `dae_secret` alias are in the schema with no other consumer — the "stored and silently
+  dropped" shape. openUF joins the two itself, which is both what the firmware writes and
+  what hostapd parses (first token the address, the rest of the line the secret), and always
+  writes the port explicitly because hostapd's own default is 0 = no listener.
+
+**Why MAC authentication fails closed.** A WLAN that asks for it and cannot have it (no
+usable RADIUS server, or a `wpad` with no RADIUS client) is **dropped**, not provisioned
+without it: it is an access control, and on an open WLAN it is the only one. The RADIUS-client
+check is not cosmetic either — on a basic `wpad`, `auth_server_addr` is an unknown option and
+hostapd refuses the whole config, so the BSS would not come up anyway.
+
+**Lab, 10.6.106, 2026-10-27.** MAC auth on an **open** guest WLAN with the lab RADIUS profile
+attached, verbatim:
+
+```
+aaa.3.radius.macacl.status=enabled
+aaa.3.radius.macacl.emptypassword=enabled
+aaa.3.radius.macacl.format=%.2X-%.2X-%.2X-%.2X-%.2X-%.2X
+aaa.3.radius.auth.1.ip=…   .port=1812  .secret=…       (and auth.2)
+aaa.3.radius.acct.1.ip=…   .port=1813  .secret=…
+aaa.3.interim_update.status=enabled   .interval=900
+aaa.3.dynamic_vlan=2
+```
+
+— the `format` really is a printf string. With `fw_caps 0x100000` claimed and "RADIUS DAS" on,
+the same push gained, per WLAN:
+
+```
+aaa.radius.dad.status=enabled        aaa.radius.dad.port=3799
+aaa.1.radius.das.status=enabled      aaa.1.radius.das.port=3801
+aaa.1.radius.das.client=<acct server ip>   aaa.1.radius.das.secret=<secret>
+aaa.1.radius.dad.status=enabled
+aaa.1.radius.dad.client.1.cidr=<acct server ip>/32   .secret=<secret>
+```
+
+with ports 3801–3804 across the four BSSes. `tools/cfg-coverage.lua` puts all four `das.*`
+keys per BSS and `macacl.status` where it is enabled in **consumed**, and leaves `dad.*`,
+`macacl.format` and `macacl.emptypassword` outside it. Replaying the capture through
+`_parse_wifi_system_cfg` + `apply_config` with a recording cursor gives the EAP WLAN
+`radius_das_client=<ip> <secret>` + `radius_das_port=3801` with the servers as UCI options,
+and the open WLAN the raw `auth_server_addr/port/shared_secret` triplets followed by
+`macaddr_acl=2`, with **no** `dynamic_vlan`. 0 `handle_response failed`.
+
+**A real hostapd parses it, and refuses the alternative.** Feeding the generated option set to
+the APs' own hostapd build (`openwrt/rootfs:x86-64-25.12.0` + `wpad-mbedtls`) gives zero
+configuration errors — it proceeds to driver init and fails only for want of nl80211.
+Splitting the DAS client and secret into two options instead, which is what the schema
+invites, gives `Line 10: invalid DAS client` / `1 errors found in configuration file` and
+hostapd refuses the interface: the join is load-bearing, not cosmetic.
+
+**Hardware, 2026-10-27, both APs.** Deployed and restarted on both boards; `fw_caps` now
+`0x101110` and the production controller answered with steady noops and no new push, which is
+correct — no WLAN here has a RADIUS profile, so no `macacl`/`das` key is emitted. `uci show
+wireless` carries no `radius_*`, `macaddr_acl` or `dynamic_vlan` anywhere, the SAE raw lines
+are untouched, and no BSS in `/var/run/hostapd-phy*.conf` gained an option. **Not claimed:**
+there is no RADIUS server at home, so no client has been admitted or denied by MAC, and no
+CoA/Disconnect has been answered on hardware.
+
+**Declines, each with its reason.**
+
+| Key | Verdict |
+|---|---|
+| `radius.macacl.format` | **decline: no consumer.** A printf format string for UniFi's patched `macaddr_format=`; absent from OpenWrt's hostapd on both boards, which always sends lower-case colon-separated. A real limitation (a server expecting another format rejects the client), documented in USAGE.md |
+| `radius.macacl.emptypassword` | **decline: no consumer.** UniFi's `mac_acl_empty_passwd=`; same absence |
+| `aaa.radius.dad.{status,port,loglevel}`, `radius.dad.client.<k>.{cidr,secret}` | **decline: needs a relay openUF does not have.** The firmware turns it into `radius_das_client=127.0.0.1`, accepting the request from its own daemon; hostapd pointed at localhost would answer nobody. The `das.*` shape carries the same information and is implemented |
+| `aaa.<n>.dynamic_vlan` on a non-EAP WLAN | **decline: would break the WLAN.** `2` (required) with no `vlan_file` makes hostapd reject every station, and openUF writes no `wifi-vlan` sections for RADIUS-assigned VLANs. Honouring it needs the dynamic-VLAN plumbing |
+
 ### WPA-Enterprise: `aaa.<n>.radius.*` (jonasevcik 9400e68, 2026-10-26)
 
 Their evidence, as they wrote it; this project's lab run follows below it.
