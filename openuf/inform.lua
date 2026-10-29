@@ -837,32 +837,45 @@ function M.build_json(st, cfg, ufhw)
 		local ok_r, rr = pcall(ufuci.get_radio_table, hwassign)
 		if ok_r then radio_table = rr end
 
-		-- Regulatory domain for the payload's country_code, off the first
-		-- radio that declares one (UCI sets the same country on every
-		-- wifi-device). Was hardcoded 840 (US) for every deployment.
+		-- One walk of radio_table for the two facts derived from it, both of
+		-- them per-device rather than per-radio:
+		--
+		--   country_code -- the regulatory domain, off the first radio that
+		--   declares one (UCI sets the same country on every wifi-device).
+		--   Was hardcoded 840 (US) for every deployment.
+		--
+		--   dfs_radio -- is any radio somewhere a radar hit can happen? Read
+		--   off the configured channel rather than the live one on purpose:
+		--   "auto" has no channel here and ACS can land on a DFS channel
+		--   either way, so an auto radio counts, and the monitors then run
+		--   for a 2.4-only board too. Cheap: they are one hostapd_cli per
+		--   BSS, idle until an event.
+		--
+		-- Neither answer can change again once it is settled, so the walk
+		-- stops as soon as both are -- which on both reference boards is the
+		-- first radio, since UCI gives every wifi-device the country.
+		-- `country_done`, not `derived_country ~= nil`: the first radio that
+		-- declares a country settles the question even when the name is not
+		-- in the table, which is what the separate loop did by breaking.
+		local dfs_radio, country_done = false, false
 		for _, r in ipairs(radio_table) do
-			if r.country then
+			if r.country and not country_done then
 				derived_country = ISO3166_NUMERIC[tostring(r.country):upper()]
-				break
+				country_done = true
 			end
-		end
-
-		-- Is any radio somewhere a radar hit can happen? Read off the
-		-- configured channel rather than the live one on purpose: "auto" has
-		-- no channel here and ACS can land on a DFS channel either way, so an
-		-- auto radio counts, and the monitors then run for a 2.4-only board
-		-- too. Cheap: they are one hostapd_cli per BSS, idle until an event.
-		local dfs_radio = false
-		for _, r in ipairs(radio_table) do
-			local ch = tostring(r.channel or "")
-			if ch == "" or ch == "auto" or ch == "0" then
-				-- r.radio is get_radio_table's band ("ng"/"na"); build_json
-				-- only re-derives `band` further down, after this point.
-				if r.radio ~= "ng" then dfs_radio = true end
-			elseif M._rrmscan and M._rrmscan.is_dfs_channel
-				and M._rrmscan.is_dfs_channel(ch) then
-				dfs_radio = true
+			if not dfs_radio then
+				local ch = tostring(r.channel or "")
+				if ch == "" or ch == "auto" or ch == "0" then
+					-- r.radio is get_radio_table's band ("ng"/"na");
+					-- build_json only re-derives `band` further down, after
+					-- this point.
+					if r.radio ~= "ng" then dfs_radio = true end
+				elseif M._rrmscan and M._rrmscan.is_dfs_channel
+					and M._rrmscan.is_dfs_channel(ch) then
+					dfs_radio = true
+				end
 			end
+			if country_done and dfs_radio then break end
 		end
 		M._dfs_radio = dfs_radio
 
@@ -2061,6 +2074,11 @@ function M.build_json(st, cfg, ufhw)
 	local dbg_caps = cfg and cfg.config and type(cfg.config.debug_caps) == "table"
 		and cfg.config.debug_caps or nil
 
+	-- Read once for the two capability masks below (fw_caps 0x800000 and
+	-- fw2_caps 0x80000 are the same probe, and sysinfo caches it for the
+	-- process, so this is only about not asking the same question twice).
+	local hs20_ok = M._sysinfo.hs20_supported and M._sysinfo.hs20_supported()
+
 	local payload = {
 		_type            = "state",
 		["default"]      = not st.adopted,
@@ -2163,7 +2181,7 @@ function M.build_json(st, cfg, ufhw)
 		-- MAC-based VLANs, and Hotspot 2.0 (0x800000) where the probe says
 		-- hostapd can answer ANQP. A debug_caps override is taken as given.
 		fw_caps          = (dbg_caps and tonumber(dbg_caps.fw_caps)) or (0x101110 - 0x80000000
-			+ ((M._sysinfo.hs20_supported and M._sysinfo.hs20_supported()) and 0x800000 or 0)),
+			+ (hs20_ok and 0x800000 or 0)),
 		-- wifi_caps, the first WiFi bitmask. Bit 0x4 is
 		-- Device.supportBandsteering(): without it the controller never emits
 		-- the device-level bandsteering.* block (the AP's own Band Steering
@@ -2282,8 +2300,7 @@ function M.build_json(st, cfg, ufhw)
 		-- than the behaviour without the bit, where the same server arrives
 		-- as a bare ip/port/secret, indistinguishable from a plaintext one,
 		-- and its shared secret goes out in the clear.
-		fw2_caps         = (M._sysinfo.hs20_supported and M._sysinfo.hs20_supported())
-			and 0x80000 or 0,
+		fw2_caps         = hs20_ok and 0x80000 or 0,
 		-- Device-level (not per-radio -- see radio_table_stats above)
 		-- Device-level Experience: the VAP scores weighted by their client
 		-- counts (calc_ap_satisfaction, see satisfaction.lua). The controller
