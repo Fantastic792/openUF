@@ -3071,6 +3071,16 @@ for. The schema's `auth_server`/`auth_port`/`auth_secret`/`acct_interval`/`nasid
 [Capability bitmasks](#capability-bitmasks). WPA3-Enterprise needs only the SAE bit `0x1`;
 WPA2-Enterprise needs no bit at all.
 
+**This project's VM lab, 2026-10-29: a real 802.1X login.** A RADIUS profile pointing at a
+FreeRADIUS 3.2.10 server on the lab LAN, a WPA2-Enterprise WLAN on 5 GHz, pushed by the
+10.6.106 controller to two openUF APs. On the AP: `encryption='wpa2+ccmp'`,
+`auth_server_addr`/`auth_server_port`/`auth_server_shared_secret` in UCI and in live hostapd
+(`wpa_key_mgmt=WPA-EAP`, `ieee8021x=1`), no `key` on the EAP BSS, the PSK WLAN beside it
+untouched. A client logged in with PEAP/MSCHAPv2 (`CTRL-EVENT-EAP-SUCCESS`), the server logged
+`Sent Access-Accept`, the client took a DHCP lease and passed traffic. Note for a containerised
+server: Docker's published UDP port can arrive from the bridge gateway, not the AP's address,
+so the server's client list must cover that range.
+
 ### The site's auto-channel DFS switch and channel blacklist (jonasevcik 6883b20, 2026-10-27)
 
 **In this tree** `wifi_caps2` gains `0x10` on top of our own bits (`0x4000F2`); a board

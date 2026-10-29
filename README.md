@@ -381,6 +381,7 @@ moves up into [Tested on real hardware](#tested-on-real-hardware) with your name
 | **OpenWrt 24.10** with `opkg` | `openwrt-24.10` |
 | **Multicast Suppression** from jonasevcik/openUF: both modes captured on the wire and the nft rules accepted by a real nft. This project has since run all three modes over simulated WiFi in its VM lab (see [PROTOCOL-VALIDATION](PROTOCOL-VALIDATION.md#multicast-suppression-jonasevcik-f46cf36-2026-10-27)); not yet on a real radio | `blocker` |
 | **TDLS and the Country IE** from jonasevcik/openUF: written into UCI and hostapd on two APs by a real push; the **pairwise cipher** probe read on two boards (one 5 GHz radio reports CCMP only) | `radio-settings` |
+| **WPA-Enterprise** from jonasevcik/openUF: their lab push replayed end to end; this project's VM lab has had a client log in with PEAP against FreeRADIUS. Not yet on a real radio | `wpa-enterprise` |
 | **DFS radar event** from jonasevcik/openUF: the controller's handler accepted it and refused a copy without its channel; no live radar hit captured | `dfs` |
 | **MAC-based VLANs** from jonasevcik/openUF: the push captured on a live controller with a UCG Ultra, and the accept file, VLAN section and live hostapd confirmed on two APs; no real client has been moved to a VLAN by MAC | `mac-vlan` |
 | The feature-by-feature status in [REFERENCE.md](REFERENCE.md) and the evidence in [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md), except where this README's own results cover it | any |
