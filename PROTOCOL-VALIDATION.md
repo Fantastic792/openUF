@@ -3097,10 +3097,22 @@ CoA/Disconnect has been answered on hardware.
 
 | Key | Verdict |
 |---|---|
-| `radius.macacl.format` | **decline: no consumer.** A printf format string for UniFi's patched `macaddr_format=`; absent from OpenWrt's hostapd on both boards, which always sends lower-case colon-separated. A real limitation (a server expecting another format rejects the client), documented in USAGE.md |
+| `radius.macacl.format` | **decline: no consumer.** A printf format string for UniFi's patched `macaddr_format=`; absent from OpenWrt's hostapd on both boards, which sends twelve lower-case hex digits with no separators (`00005e005301`, seen in this project's lab). A real limitation (a server expecting another format rejects the client), documented in USAGE.md |
 | `radius.macacl.emptypassword` | **decline: no consumer.** UniFi's `mac_acl_empty_passwd=`; same absence |
 | `aaa.radius.dad.{status,port,loglevel}`, `radius.dad.client.<k>.{cidr,secret}` | **decline: needs a relay openUF does not have.** The firmware turns it into `radius_das_client=127.0.0.1`, accepting the request from its own daemon; hostapd pointed at localhost would answer nobody. The `das.*` shape carries the same information and is implemented |
 | `aaa.<n>.dynamic_vlan` on a non-EAP WLAN | **decline: would break the WLAN.** `2` (required) with no `vlan_file` makes hostapd reject every station, and openUF writes no `wifi-vlan` sections for RADIUS-assigned VLANs. Honouring it needs the dynamic-VLAN plumbing |
+
+**This project's VM lab, 2026-10-29.** "MAC Authentication" on a WPA2-PSK WLAN with the lab
+RADIUS profile (FreeRADIUS 3.2.10): the AP's live hostapd carried `macaddr_acl=2` and the auth
+servers. **The format correction:** hostapd asked with `User-Name = "024f55030100"`, twelve
+lower-case hex digits and **no separators**, not the colon-separated form written above. With the
+client listed colon-separated the server answered Access-Reject and the client never joined;
+listed as `024f55030100` it answered Access-Accept and the client joined and passed traffic. Then
+**Dynamic Authorization**, with accounting and RADIUS DAS on in the profile: hostapd carried
+`radius_das_client=<first accounting server> <secret>` and `radius_das_port=3803` (3800 + the
+WLAN index); a Disconnect-Request (RFC 5176, Calling-Station-Id + Event-Timestamp) sent from
+that address was answered Disconnect-ACK, hostapd logged `AP-STA-DISCONNECTED` for the client
+and the client saw `CTRL-EVENT-DISCONNECTED reason=2`.
 
 ### WPA-Enterprise: `aaa.<n>.radius.*` (jonasevcik 9400e68, 2026-10-26)
 

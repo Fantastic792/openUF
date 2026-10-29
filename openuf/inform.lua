@@ -2571,7 +2571,7 @@ end
 --     string -- the wire really does carry e.g.
 --     "%.2X-%.2X-%.2X-%.2X-%.2X-%.2X" -- and `mac_acl_empty_passwd=%d`).
 --     Neither string exists in OpenWrt's hostapd binary on either AP, which
---     always sends lower-case colon-separated for both attributes. A RADIUS
+--     sends twelve lower-case hex digits, no separators, for both attributes. A RADIUS
 --     server configured for another format will reject the client, so this is
 --     a real limitation rather than a cosmetic one -- see USAGE.md.
 --   * radius.auth|acct.<k>.{ca_cert,client_cert,private_key,private_key_passwd}
