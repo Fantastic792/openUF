@@ -1,0 +1,176 @@
+# The project's own run: two JioRouter AX6000 JIDU6401 units, 2026-10-27 to 2026-10-29.
+format = 1
+date = 2026-10-29
+reporter = "Fantastic792"
+board = "jiorouter,ax6000-jidu6j01"
+modelmap = "jiorouter-ax6000-jidu6j01"
+openwrt = "25.12.6"
+openuf = "0.1.3 with the clock, silent-SSID and mesh-station fixes (0.1.5)"
+controller = "UniFi Network 10.6.106, self-hosted"
+gateway = "third-party (ISP router)"
+clients = "iPhone, Samsung Galaxy S22, wired Windows PC"
+notes = "Two units: one wired root, one child on a wired or wireless uplink."
+
+[[result]]
+feature = "install"
+outcome = "pass"
+how = "The 0.1.0 to 0.1.3 packages installed and upgraded in place with apk."
+evidence = "The upgrade restarted openUF and the translator with the service running, stopped, and in an image build."
+
+[[result]]
+feature = "adoption"
+outcome = "pass"
+how = "Both units found on the LAN and adopted over the ubnt account, after a controller reset."
+evidence = "Both Online in the controller; Forget and adopt again worked."
+
+[[result]]
+feature = "forget"
+outcome = "partial"
+how = "Forget, then adopt again with set-inform."
+evidence = "Adopted again, but a set-inform sent while the reset's own one was pending was overwritten and had to be repeated; the ubnt account locked only after an openUF restart."
+
+[[result]]
+feature = "wpa3"
+outcome = "pass"
+how = "WPA2/WPA3 network; an S22 and an iPhone joined."
+evidence = "hostapd: S22 with AKM 00-0f-ac-8 (SAE), iPhone with 00-0f-ac-9 (FT-SAE)."
+
+[[result]]
+feature = "owe"
+outcome = "pass"
+how = "An Enhanced Open network; a phone joined."
+evidence = "The phone associated with OWE."
+
+[[result]]
+feature = "ppsk"
+outcome = "pass"
+how = "Two keys on one SSID, each on its own VLAN; two phones."
+evidence = "Each phone got an address from its key's VLAN, also after the SSID went off and on."
+
+[[result]]
+feature = "ft-openuf"
+outcome = "pass"
+how = "Walked from the root to the child and back, with a phone pinging the whole time."
+evidence = """
+iPhone: auth_alg=ft both ways, one lost ping per roam, old AP dropped it at once (UBNT_ROAM).
+S22: never uses FT; full SAE reconnects, 1.5 to 1.8 s gaps.
+"""
+
+[[result]]
+feature = "band-steering"
+outcome = "pass"
+how = "Phone held on 2.4 GHz by denying it the 5 GHz BSSes, then released; repeated with Band Steering off."
+evidence = """
+On: BSS-TM-RESP status_code=0 to the 5 GHz BSS 63 s after the phone joined 2.4 GHz.
+Off: band_steering_interval 0 on both units, no BSS-TM request in 180 s.
+"""
+
+[[result]]
+feature = "min-rssi"
+outcome = "pass"
+how = "Minimum RSSI -67 dBm on the root's 5 GHz radio; walked away with a phone."
+evidence = """
+Signal below -67 dBm from 11:46:25; disconnected at 11:47:09 (44 s: 30 s hold plus heartbeat spacing).
+Refused on that radio (threshold + 3 dB), joined 2.4 GHz; back on 5 GHz when close again.
+Turning it off removed rssi_reject_assoc_rssi and rssi_ignore_probe_request.
+"""
+
+[[result]]
+feature = "load-balance"
+outcome = "pass"
+how = "Client cap 1 on the root's 5 GHz radio (set through the controller's REST API; 10.6 has no switch), two phones."
+evidence = "The more idle phone was disconnected 11 s after the second joined and moved to the other unit; turning it off removed the cap."
+
+[[result]]
+feature = "speed-limit"
+outcome = "pass"
+how = "5 Mbps down / 2 Mbps up on the network; iPhone speed test before, with and after."
+evidence = "92.3 / 92.1 without, 4.69 / 1.80 with, 92.6 / 92.8 after removal. HTB class and IFB built, then removed."
+
+[[result]]
+feature = "schedule"
+outcome = "pass"
+how = "A 15-minute WiFi Blackout Schedule in the site's time zone."
+evidence = "SSIDs off and on within about 15 s of the times; the mesh link stayed up. A unit rebooted mid-blackout waited for a trusted clock, then applied it."
+
+[[result]]
+feature = "blocker"
+outcome = "pass"
+how = "Blocker on with the DHCP server excepted; a wired host looked up a phone; then the host excepted too."
+evidence = "Not excepted: the host's ARP stayed INCOMPLETE, 0/5 pings, 22 broadcasts dropped. Excepted: 5/5. DHCP kept working. Off: rules removed."
+
+[[result]]
+feature = "ap-name"
+outcome = "partial"
+how = "Advertise AP name on; both units named in the controller; beacons read from the other unit."
+evidence = """
+The WSC element carried the controller's device name on both bands, no Config Methods.
+An unnamed device beacons "openUF" (the controller sends no name); WiFiman shows the router's hostname, which openUF does not set.
+"""
+
+[[result]]
+feature = "locate"
+outcome = "pass"
+how = "Locate on, then off, in the controller."
+evidence = "The status LED blinked and returned to normal."
+
+[[result]]
+feature = "guest-portal"
+outcome = "pass"
+how = "A hotspot network; a phone joined and opened a plain HTTP page."
+evidence = "Redirected to the hotspot page, let through once authorized."
+
+[[result]]
+feature = "uplink-monitor"
+outcome = "pass"
+how = "Monitor on; the target stopped answering, then answered again."
+evidence = "SSIDs off about 50 s after, back about 5 s after the first answer."
+
+[[result]]
+feature = "mesh-one-hop"
+outcome = "pass"
+how = "The child's wired uplink pulled for 2 to 3 minutes, then plugged back; per-second recorder on the child."
+evidence = """
+2026-10-29 15:45: station on at 16 s, joined at 20 s, first inform over the mesh at 24 s.
+Failback 1 s after the cable, first wired inform at 3 s; switch entries rewritten. No loop in any run.
+Before the mesh-station fix, a child that had been cabled when a push arrived had no station and never failed over.
+"""
+
+[[result]]
+feature = "mesh-cold-boot"
+outcome = "pass"
+how = "The child booted with no cable."
+evidence = "Station enabled about 10 s after openUF started, joined the root, SSIDs up, informing."
+
+[[result]]
+feature = "clock"
+outcome = "pass"
+how = "Units booted with no working time sync (power cut; a child booting onto the mesh)."
+evidence = "Clocks 268 s and 335 s slow; openUF restarted ntpd when the controller's time disagreed, correct within about 2 minutes."
+
+[[result]]
+feature = "selfcheck"
+outcome = "pass"
+how = "sh tools/selfcheck.sh on both units after adoption."
+evidence = "15 OK / 0 FAIL / 6 SKIP and 14 OK / 0 FAIL / 6 SKIP."
+
+[[result]]
+feature = "board-profile"
+outcome = "pass"
+how = "The jiorouter-ax6000-jidu6j01 profile on JIDU6401 units: ports, radios, LED."
+evidence = "Ports 1-5 match the case labels (5 = WAN); radio0 2.4 GHz, radio1 5 GHz; Locate drives green:status."
+
+[[result]]
+feature = "port-vlan"
+outcome = "not-run"
+how = "Started: socket lan1 moved into br-openuf10 with learning off. No client address yet; to be finished."
+
+[[result]]
+feature = "ft-unifi"
+outcome = "not-run"
+how = "No genuine UniFi AP available."
+
+[[result]]
+feature = "mesh-multi-hop"
+outcome = "not-run"
+how = "Only two units; multi-hop has run in a virtual machine only."

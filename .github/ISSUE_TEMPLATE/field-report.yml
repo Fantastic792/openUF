@@ -1,0 +1,32 @@
+name: Field report
+description: Test results from real hardware, in the field-report format
+title: "Field report: <board>, <features>"
+labels: ["field-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fill in a copy of [field-reports/TEMPLATE.toml](https://github.com/Fantastic792/openUF/blob/main/field-reports/TEMPLATE.toml)
+        and paste it below. The format is described in
+        [field-reports/README.md](https://github.com/Fantastic792/openUF/blob/main/field-reports/README.md).
+        Check it first with `python3 tools/field_report.py check <file>` if you can.
+  - type: textarea
+    id: report
+    attributes:
+      label: Report (TOML)
+      description: The filled-in template. No passwords, keys, tokens or public IP addresses.
+      render: toml
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, longer logs, questions.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: The report contains no passwords, WiFi keys, tokens or public IP addresses.
+          required: true

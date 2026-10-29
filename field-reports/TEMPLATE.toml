@@ -1,0 +1,28 @@
+# openUF field report, format 1. Copy this file to
+#   field-reports/<YYYY-MM-DD>-<board>-<your-github-name>.toml
+# fill it in, run `python3 tools/field_report.py check <your file>`, and open a pull request.
+# No passwords, keys, tokens or public IP addresses: the file is published as it is.
+
+format = 1
+date = 2026-01-31                 # the day of the test (YYYY-MM-DD, no quotes)
+reporter = "your-github-name"
+board = "vendor,model"            # `ubus call system board` -> board_name
+modelmap = "auto"                 # the openUF hardware profile in use (`openuf status`)
+openwrt = "25.12.6"               # `cat /etc/openwrt_release` -> DISTRIB_RELEASE
+openuf = "0.1.5"                  # the release, or the commit you built from
+controller = "UniFi Network 10.6.106"
+gateway = "third-party"           # e.g. "UCG Ultra", "UDM Pro", "third-party"
+clients = "phone models and OS versions used"
+notes = ""
+
+# One [[result]] per feature tested. `feature` is an id from `field_report.py ids`.
+# `outcome` is pass, fail, partial or not-run. A pass, fail or partial needs `evidence`.
+[[result]]
+feature = "adoption"
+outcome = "not-run"
+how = """
+What you did, step by step, and what you expected.
+"""
+evidence = """
+Log lines (logread | grep openuf), command output or measurements that show the result.
+"""

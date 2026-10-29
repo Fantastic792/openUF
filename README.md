@@ -7,7 +7,7 @@
 <p align="center">
   <b>Run your OpenWrt access points from UniFi Network.</b><br>
   openUF makes an OpenWrt device look like a Ubiquiti access point to the UniFi controller:
-  adopt it, push your WiFi networks to it, watch its clients, and roam between it and real UniFi APs.
+  adopt it, push your WiFi networks to it, watch its clients, and mesh it with other openUF APs.
 </p>
 
 <p align="center">
@@ -19,15 +19,21 @@
 
 <p align="center">
   <a href="#install">Install</a> ·
-  <a href="#what-it-does">What it does</a> ·
-  <a href="#this-fork">This fork</a> ·
+  <a href="#using-it-with-unifi-network">Guide</a> ·
+  <a href="#tested-on-real-hardware">Tested</a> ·
+  <a href="#known-issues">Known issues</a> ·
   <a href="#hardware">Hardware</a> ·
-  <a href="#documentation">Documentation</a> ·
   <a href="#contributing">Contributing</a> ·
-  <a href="REFERENCE.md">Full reference</a>
+  <a href="#inherited-results-not-verified-here">Not yet verified</a>
 </p>
 
 ---
+
+This is an independent project, built on [yesrab/openUF](https://github.com/yesrab/openUF)
+(see [Credits](#credits)). It has its own releases, its own fixes and its own testing. Only
+what this project has tested itself is reported as tested below; the original project's
+results are kept, clearly marked, under
+[Inherited results, not verified here](#inherited-results-not-verified-here).
 
 ## See it
 
@@ -36,11 +42,6 @@ The device's own page, before and after the controller adopts it:
 | Waiting to be adopted | Managed by UniFi Network |
 |:---:|:---:|
 | ![The device page before adoption: "Waiting to be adopted", the controller's address and the device facts](screenshots/device-page-ready-for-adoption.png) | ![The device page after adoption: "This device is managed by UniFi Network"](screenshots/device-page-managed-by-unifi.png) |
-
-Two openUF access points, the **U6 IW** nodes, in a real UniFi Network topology beside a
-UniFi Cloud Gateway Ultra, serving phones, laptops and IoT devices on two WiFi networks:
-
-![UniFi Network's topology view with two openUF access points and their clients](screenshots/unifi-topology.png)
 
 It shows up in UniFi Network as a U6 In-Wall and adopts with one click:
 
@@ -55,161 +56,27 @@ The few settings that stay on the device, behind the root password:
 ## What it does
 
 - **Adoption like real hardware.** The AP announces itself on the LAN, appears in UniFi
-  Network, WiFiman and the UniFi app, and adopts with one click through the same locked-down
-  `ubnt` login the controller expects. A controller on another subnet adopts it by inform
-  URL instead, with no SSH at all.
-- **WiFi from the controller.** Networks with WPA2, WPA3 and Enhanced Open, per-network
-  VLANs, private pre-shared keys, hidden SSIDs, channel, width and power per radio,
-  802.11r/k/v, band steering, minimum RSSI, per-client speed limits, WiFi schedules, the
-  multicast and broadcast blocker, the access point's name in the beacon, client blocking and
-  Locate.
-- **Hotspot and uplink checks.** The controller's guest portal: guests are sent to its
-  hotspot page and held until they log in. The Uplink Connectivity Monitor takes the WiFi
-  networks off the air when the uplink stops answering, so clients move to an AP that still
-  has a way out.
-- **Fast roaming with genuine UniFi APs.** The built-in translator speaks UniFi's 802.11r
-  key exchange, so phones move between openUF and real UniFi access points without a
-  reconnect.
-- **Live statistics.** Clients with WiFi Experience scores, radios and channel utilisation,
-  wired hosts per port, the uplink, neighbouring access points and RF scans.
-- **Switch ports and mesh.** Per-port VLANs from the controller's Port settings, and a
-  wireless uplink to another openUF AP when the cable is out, across several hops, with the
-  loop guard keeping an AP from hanging off its own descendant.
-- **A device page instead of LuCI's login.** Like a Ubiquiti device, the AP's address shows
-  its status and sends you to the controller; LuCI stays one hidden step away, with a
-  dashboard, the matching Halo theme, and a Setup page that walks a new router through its
-  profile, the packages it needs, the controller, region and access-point mode.
+  Network and WiFiman, and adopts with one click through the same locked-down `ubnt` login
+  the controller expects. A controller on another subnet adopts it by inform URL instead.
+- **WiFi from the controller.** WPA2, WPA3 and Enhanced Open, private pre-shared keys,
+  per-network VLANs, hidden SSIDs, channel, width and power per radio, 802.11r/k/v, band
+  steering, minimum RSSI, load balance, per-client speed limits, WiFi Blackout Schedules,
+  the multicast and broadcast blocker, the access point's name in the beacon, client
+  blocking and Locate.
+- **Hotspot and uplink checks.** The controller's guest portal, and the Uplink Connectivity
+  Monitor, which takes the WiFi networks off the air when the uplink stops answering.
+- **Mesh.** A wireless uplink to another openUF AP when the cable is out, back to the cable
+  when it returns, across several hops, with a loop guard.
+- **Fast roaming.** 802.11r between openUF APs, and a translator for UniFi's own key
+  exchange so phones can roam to and from genuine UniFi APs.
+- **Live statistics.** Clients with WiFi Experience, radios and channel use, wired hosts per
+  port, the uplink, neighbouring APs and RF scans.
+- **A device page instead of LuCI's login**, with LuCI one step away, a dashboard, the Halo
+  theme, and a Setup page that walks a new router through becoming an AP.
 - **Pure Lua, no toolchain.** One command installs it on OpenWrt 24.10 or 25.12, as packages
   or as files, with upgrades in place.
 
-The core was validated on real hardware against a UniFi Cloud Gateway Ultra on UniFi
-Network 10.x. The latest full run, every feature above together, was in a virtual machine on
-OpenWrt 25.12.6 with UniFi Network 10.6.106 on 2026-10-27, fast roaming included (openUF to
-openUF through the translator; the roam to a genuine UniFi AP is the original authors'
-evidence). This fork's own hardware testing, on two JIDU6401s, and its limits are under
-[This fork](#this-fork). [REFERENCE.md](REFERENCE.md) has the
-feature-by-feature status and [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) the evidence. openUF emulates an access
-point only: no gateway or switch emulation, by design.
-
-## This fork
-
-[Fantastic792/openUF](https://github.com/Fantastic792/openUF) is built on
-[yesrab/openUF](https://github.com/yesrab/openUF) `main` (`6277bdf`, 2026-10-26) and
-contains all of it: 38 commits ahead, none behind (52 files, +7063 / −416 lines,
-2026-10-29). Releases are built from this fork, and `setup.sh` installs them.
-
-| Area | yesrab/openUF `main` | This fork |
-|---|---|---|
-| Mesh | One hop | Several hops, with the loop guard and the controller's parent choice; a downlink beacons its path element even with no uplink station |
-| Mesh failback (DSA) | A device that crossed the wireless link could stay unreachable from other sockets until a reboot | The switch-chip entries left behind are rewritten after a switchover |
-| Clock after a reboot | A clock wrong at boot could stay wrong for hours (ntpd started before DNS worked), and fast roaming between the APs then failed | Time sync is restarted when the controller's clock disagrees by more than a minute |
-| Mesh failover time | Checked once per inform, after two failed ones: 39 s to 98 s on a JIDU6401 | The cable is read every second; the station comes up 10 s after it goes (15 s measured) |
-| Mesh child's SSIDs after a Wi-Fi reload | The AP on the station's radio could stay up but silent (no beacons) until a reboot | Its beacon is restarted after two silent heartbeats, and again if hostapd refuses the first try |
-| Mesh station on a cabled AP | The controller sends a cabled AP no uplink entry, so its station went with the next push and a later cable pull stranded it | The station is built from the mesh block when the push leaves it out |
-| Uplink Connectivity Monitor | — | New: SSIDs off the air when the uplink stops answering, back on the first answer |
-| Guest portal | — | New, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF): redirect, authorize, per-guest limits, offline mode, disconnect when authorization ends |
-| AP name in the beacon | The toggle had no effect | The name is in the beacon |
-| WPA3 and Enhanced Open | The controller's first push after adoption downgraded them | Claimed from adoption on, so they stay |
-| Private pre-shared keys | A PSK VLAN was lost when its SSID went off and on | Its VLAN comes back with the SSID |
-| Load balance | Could kick a mesh child | Leaves the mesh link alone |
-| Guest WLAN | Read as a mesh link | An ordinary AP |
-| Multicast and broadcast blocker | Built once | Rebuilt when the live SSIDs change |
-| STUN | Never looked the controller's name up again | Looks it up again after 3 unanswered requests |
-| Package upgrade | Left the old daemon running | Restarts openUF and the translator |
-| LuCI | — | A Setup page for a new router |
-| Tools | — | `tools/selfcheck.sh` (on-device check per feature) and `tools/verify.py` (router and controller together) |
-
-### Tested on the JioRouter AX6000 JIDU6401
-
-Two JIDU6401s on OpenWrt 25.12.6, one adopted from a router already in use and one reset to
-defaults first, managed by a self-hosted UniFi Network 10.6.106, 2026-10-27 to 2026-10-29.
-The clients were an iPhone, a Samsung Galaxy S22 and a wired Windows PC. The 2026-10-29
-results ran on 0.1.3 with the clock and silent-SSID fixes added by hand; both fixes are in
-the next release.
-
-| Feature | Result on the JIDU6401 |
-|---|---|
-| Install | ✅ The 0.1.0 to 0.1.3 packages with `apk`; the upgrade restart checked with the service running, stopped, and in an image build |
-| Adoption | ✅ Found on the LAN and adopted over the `ubnt` account; Forget and adopt again |
-| WPA3 (SAE) | ✅ A phone joined; kept after adoption once the downgrade was fixed (the controller's first push captured, then fixed) |
-| Enhanced Open (OWE) | ✅ A phone joined with OWE |
-| Private pre-shared keys | ✅ Two phones, each on its key's VLAN with an address from that VLAN, also after the SSID went off and on |
-| Guest portal | ✅ A phone was sent to the hotspot page and let through once authorized |
-| Uplink Connectivity Monitor | ✅ SSIDs off about 50 s after the target stopped answering, back about 5 s after it answered |
-| Locate | ✅ The status LED blinked while Locate was on and went back to normal when it was turned off |
-| Mesh, one hop | ✅ Failover to the wireless link and back, six times, and once more on 0.1.3, with no loop; after the switch-entry fix, every wired host reachable after failback with no manual step; after the failover fix, the station up 15 s and joined 22–23 s after the cable was pulled (two runs). A cold boot with no cable came up on the mesh |
-| Clock after a reboot | ✅ Booted 4–6 minutes slow twice; each time openUF saw the controller's clock disagree and restarted time sync, and the clock was right within about 2 minutes |
-| Mesh child's SSIDs after a Wi-Fi reload | ✅ Without the fix the child's 5 GHz SSID went silent at every Wi-Fi reload; with it, back on the air 10–20 s later, every time |
-| Fast roaming (802.11r) between the two units | ✅ An iPhone (FT-SAE) roamed both ways with one lost ping. The S22 never uses FT; it roamed with a full WPA3 reconnect (1.5–1.8 s gap). The old AP dropped the client at once both ways |
-| WiFi Blackout Schedule | ✅ SSIDs off and back on within about 15 s of the scheduled times, in the site's time zone; the mesh link stayed up. A unit that rebooted mid-blackout waited for a trusted clock, then applied it |
-| Speed limit | ✅ A 5 / 2 Mbps limit measured 4.69 / 1.80 Mbps on an iPhone; 92 / 92 Mbps without it, before and after |
-| AP name in the beacon | ✅ The controller's device name (after naming the devices) seen in both units' beacons on both bands, with no WPS prompt fields. See the known issues for unnamed devices and WiFiman |
-| Multicast and broadcast blocker | ✅ Broadcasts from a wired host not on the exception list never reached a phone (its address lookup failed); with the host listed, they did; DHCP kept working with the DHCP server listed; turning it off removed the rules |
-| Band steering | ✅ With it on, a phone held on 2.4 GHz was asked to move to 5 GHz about a minute later and accepted; with it off, no request in 3 minutes |
-| Minimum RSSI | ✅ At -67 dBm, a phone that walked away was disconnected 44 s after its signal fell below the threshold and refused on that radio until it came back; turning it off removed the settings |
-| Load balance | ✅ With a cap of 1 client (set through the controller's API: Network 10.6 has no switch for it), the more idle of two phones was disconnected 11 s after the second joined, and it moved to the other unit |
-| `selfcheck.sh` and `verify.py` | ✅ Run against an adopted unit; `selfcheck.sh` again on 0.1.3, no failures on either unit |
-
-### What this testing does not cover
-
-- **Two units, one hop.** Multi-hop mesh (three APs or more) has run only in a virtual
-  machine.
-- **The mesh failover is measured twice.** Up to 0.1.2, between 39 s and 98 s passed from
-  the cable being pulled to the station being enabled, and up to another minute before the
-  controller heard from the child, because the cable was checked only when an inform was
-  due and failed informs back off. With the fix, two runs on these units (2026-10-28 and
-  2026-10-29): the station was enabled 15 s after the pull (10 s of waiting plus an
-  inform's 10 s connect timeout that was already running) and joined the parent at
-  22–23 s. In the second run the controller heard nothing from the child for 32 s.
-  Failback took under a second, and the first inform on the wire went 3 s after the
-  cable was back.
-- **Not yet run on this hardware:**
-  - fast roaming to or from a genuine UniFi AP;
-  - per-port VLANs;
-  - Airtime Fairness, measured;
-  - a 48–72 hour run.
-- **Known issues found by this testing**, to be fixed:
-  - The first time an AP sees a new neighbour BSSID, openUF asks the controller for its
-    whole configuration again, and that push reloads the AP's Wi-Fi: its clients drop once.
-    It happened a few times on the first day and stopped once both units had seen each
-    other's radios. openUF also takes the other openUF unit for a UniFi AP.
-  - The AP name: a device not yet named in the controller beacons `openUF`, because the
-    controller sends no name for it ("U6IW" in its UI is only the model's label). WiFiman
-    reads the router's hostname, which openUF does not set from the controller's name.
-  - Minimum RSSI and load balance disconnect clients without logging it.
-  - After a reset, a `set-inform` sent while the reset's own one is still pending is
-    overwritten; and the `ubnt` account is locked only when openUF next restarts, not at
-    adoption.
-  - The mesh failover takes 15 s, not the 10 s the code waits, while an inform is in
-    flight.
-- **One of each:** one OpenWrt release (25.12.6, `apk`; 24.10 with `opkg` untested here),
-  one controller version, no UniFi gateway (the controller was self-hosted behind an ISP
-  router), and a handful of clients for a few hours, not a long-running or busy network.
-- **Other boards** run the same code but none of them was tested in this fork. Their status
-  is in [Hardware](#hardware).
-
-## Hardware
-
-Any dual-band OpenWrt device with **16 MB of flash or more** and about 5 MB free on
-`/overlay` (the AES-GCM crypto the controller insists on needs `libopenssl3`). A **full
-`wpad` build** is required and the installer swaps it in. Boards with a profile:
-
-| Board | Notes |
-|---|---|
-| TP-Link Archer C5 v1 | The reference device, confirmed end to end |
-| TP-Link TL-WDR3500 v1 | Confirmed; 8 MB flash, needs a custom image with the crypto built in |
-| JioRouter AX6000 JIDU6101 and JIDU6J01 family | Confirmed; WiFi 6, DSA, the project's own lab APs; this fork's two JIDU6401s are under [This fork](#this-fork) |
-| TP-Link Deco M4R v1 / v2 | Adopted and meshed on a v1 by a user |
-| Xiaomi Mi Router AX3000T | Confirmed upstream, WiFi 6 |
-| TP-Link Archer A7 v5 / C7 v4 / C7 v5 | From the OpenWrt sources, not yet run on the board |
-| TP-Link Deco M5 v1 / v2 / v3 | From the OpenWrt sources, not yet run on the board |
-| TP-Link Deco M4R v4 | From the OpenWrt sources, not yet run on the board |
-| Dynalink DL-WRX36 | From the OpenWrt sources, not yet run on the board |
-| TP-Link WR1043ND v2 | Single band; profile only |
-
-Anything else runs on a generic dual-band or single-band profile, or on one the installer
-generates from the running device. Details, caveats and the identity each board presents
-are in [REFERENCE.md § Supported hardware](REFERENCE.md#supported-hardware).
+openUF emulates an access point only: no gateway or switch emulation, by design.
 
 ## Install
 
@@ -223,26 +90,22 @@ The guided installer identifies the board, asks the few things it cannot know, a
 the rest in an order that never leaves the device unreachable:
 
 1. **Interview.** Every question first. The default installs the `openuf` and
-   `luci-app-openuf` packages from the latest release, plus the Halo theme where there is
-   room; `--headless` installs the daemon alone.
+   `luci-app-openuf` packages from this project's latest release, plus the Halo theme where
+   there is room; `--headless` installs the daemon alone.
 2. **Access-point conversion.** The router role goes: no WAN, the WAN socket joins the LAN,
    DHCP server and firewall off. Everything is left installed and is one command to undo.
 3. **Hardware profile**, **controller address** and the **adoption account**, which locks
    itself once the device is adopted.
 4. **Dependencies**, including the full `wpad` build, then install and reboot.
 
-Then open UniFi Network. The AP appears under Devices (or under *Pending* when you gave it
-the controller's address), and **Adopt** does the rest.
-
-Unattended, with every answer as an option:
+Unattended, with every answer as an option (`sh setup.sh --help` lists them):
 
 ```sh
 wget -qO- https://raw.githubusercontent.com/Fantastic792/openUF/main/setup.sh | sh -s -- \
-    --yes --controller 10.0.0.5 --modelmap jiorouter-ax6000-jidu6101 --no-reboot
+    --yes --controller 10.0.0.5 --modelmap jiorouter-ax6000-jidu6j01 --no-reboot
 ```
 
-`sh setup.sh --help` lists them all. The packages alone, from the
-[release page](https://github.com/Fantastic792/openUF/releases):
+The packages alone, from the [release page](https://github.com/Fantastic792/openUF/releases):
 
 ```sh
 apk add --allow-untrusted ./openuf-<ver>.apk ./luci-app-openuf-<ver>.apk   # OpenWrt 25.12
@@ -250,34 +113,164 @@ opkg install ./openuf_<ver>_all.ipk ./luci-app-openuf_<ver>_all.ipk         # Op
 openuf deps --install        # swaps a wpad-basic build for the full one
 ```
 
-Upgrades: `openuf-update` on the device, or install the next release's packages. The
-[usage guide](USAGE.md) covers configuration, the device page, upgrading, uninstalling and
-troubleshooting.
+Upgrade with `openuf-update` on the device, or by installing the next release's packages.
+Install the packages or the files, never both. The [usage guide](USAGE.md) covers every
+option, the device page, upgrading, uninstalling and troubleshooting.
+
+## Using it with UniFi Network
+
+What this project learned running openUF against UniFi Network 10.6, in the order you meet
+it.
+
+**Adopting**
+- On the same LAN the AP appears under Devices; click **Adopt**. On another subnet, point
+  it at the controller first:
+  `ssh root@<ap> 'syswrapper.sh set-inform http://<controller>:8080/inform'`
+  (use your controller's inform port if you changed it from 8080). It then shows as
+  *Pending*.
+- After a **Forget**, wait for the AP to report in once before sending `set-inform` again;
+  one sent too early is overwritten (see [Known issues](#known-issues)).
+- **Name each device** in the controller. The name is what the beacon advertises; a device
+  never named advertises `openUF`.
+
+**WiFi settings**
+- **Minimum RSSI** goes up to -67 dBm in the UI. openUF disconnects a client after 30 s
+  below it and refuses it on that radio until it is 3 dB above.
+- **Load balance** has no switch in Network 10.6's UI. It can be set through the
+  controller's API on the device's `radio_table` (`loadbalance_enabled`, `maxsta`).
+- **Multicast and broadcast blocker:** put your DHCP server's MAC on its exception list, or
+  wireless clients get no address. That is Ubiquiti's own documented behaviour.
+- **Band steering** comes from the network's toggle or the device's own setting (Off /
+  Prefer 5G). Balance is not supported.
+- **Airtime Fairness:** set it On for the device after adoption; the controller can hold an
+  old Off and push it.
+- **Per-port VLANs:** turn on **Port VLAN** in the device's settings first, then set a
+  port's Native VLAN. On DSA boards (most WiFi 6 routers) only the native VLAN is applied.
+
+**Mesh**
+- Turn on **Wireless Meshing** for every AP that should take part. The wired AP then offers
+  a hidden mesh network; an AP whose cable goes switches to it about 16 s later and is back
+  on the controller within about 25 s, then returns to the cable within a second of it
+  coming back. Since 0.1.5 a cabled AP keeps its mesh station even though the controller
+  only sends it the mesh name and key.
+- The Uplink Connectivity Monitor is on by default in new sites. An AP with no way out takes
+  its SSIDs off the air after about 50 s, so clients move elsewhere.
+
+**Checking an AP**
+- `sh tools/selfcheck.sh` (from the source tree, copied over with `scp -O`) checks every
+  feature the controller has turned on and prints OK, FAIL or SKIP for each.
+- `logread | grep -E 'openuf|backhaul|uplinkmon'` shows what openUF did and why.
+
+## Tested on real hardware
+
+Two **JioRouter AX6000 JIDU6401** units on OpenWrt 25.12.6, managed by a self-hosted UniFi
+Network 10.6.106 with no UniFi gateway, 2026-10-27 to 2026-10-29. One unit wired, the other
+on a cable or the mesh. Clients: an iPhone, a Samsung Galaxy S22 and a wired PC. The full
+record, in the [field-report format](field-reports/README.md), is
+[field-reports/2026-10-29-jiorouter-jidu6401-fantastic792.toml](field-reports/2026-10-29-jiorouter-jidu6401-fantastic792.toml).
+
+| Feature | Result |
+|---|---|
+| Install and upgrade | ✅ 0.1.0 to 0.1.3 with `apk`; the upgrade restarts openUF and the translator |
+| Adoption | ✅ Found on the LAN and adopted; Forget and adopt again (see Known issues) |
+| WPA3 (SAE) | ✅ Both phones; WPA3 kept after adoption |
+| Enhanced Open (OWE) | ✅ A phone joined with OWE |
+| Private pre-shared keys | ✅ Two phones, each on its key's VLAN, also after the SSID went off and on |
+| Fast roaming between the two units | ✅ iPhone with FT-SAE, one lost ping per roam, both ways. The S22 does not use FT and roamed with a full reconnect (1.5 to 1.8 s) |
+| Band steering | ✅ On: a phone on 2.4 GHz was asked to move to 5 GHz about a minute later and accepted. Off: no request in 3 minutes |
+| Minimum RSSI | ✅ At -67 dBm a phone walking away was disconnected 44 s after falling below, and refused until it came back |
+| Load balance | ✅ With a cap of 1, the more idle of two phones was disconnected 11 s after the second joined |
+| Speed limit | ✅ 5 / 2 Mbps measured as 4.69 / 1.80 Mbps; 92 / 92 Mbps without |
+| WiFi Blackout Schedule | ✅ Off and on within about 15 s of the times, mesh link untouched |
+| Multicast and broadcast blocker | ✅ A host not on the exception list could not reach a phone; listed, it could; DHCP kept working |
+| AP name in the beacon | ✅ The controller's device name in both units' beacons, no WPS prompt (unnamed devices: Known issues) |
+| Locate | ✅ The LED blinked and stopped |
+| Guest portal | ✅ Redirected to the hotspot page, let through once authorized |
+| Uplink Connectivity Monitor | ✅ SSIDs off about 50 s after the uplink stopped answering, back about 5 s after |
+| Mesh, one hop | ✅ Cable pulled: station on at 16 s, joined at 20 s, controller reached at 24 s. Back on the cable 1 s after it returned. No loop in any run |
+| Mesh, cold boot without a cable | ✅ Came up on the mesh |
+| Clock after a reboot | ✅ Booted 4 to 6 minutes slow; corrected within about 2 minutes |
+| `selfcheck.sh` | ✅ No failures on either unit |
+| Per-port VLANs | ⏳ Started: the port moves to its VLAN's bridge; client test not finished |
+
+Also run in a virtual machine (OpenWrt 25.12.6, UniFi Network 10.6.106, 2026-10-27): every
+feature above together, multi-hop mesh, and fast roaming between openUF APs through the
+translator.
+
+**Not run here yet:** fast roaming with a genuine UniFi AP, multi-hop mesh on hardware,
+Airtime Fairness measured, OpenWrt 24.10, any other board, a UniFi gateway, and a run longer
+than a few hours. The original project's results for some of these are
+[below](#inherited-results-not-verified-here).
+
+## Known issues
+
+Found by this project's testing, to be fixed:
+
+- **A new neighbour reloads WiFi once.** The first time an AP sees a neighbour's radio, it
+  asks the controller for its whole configuration, and that push reloads its WiFi: clients
+  drop once. It stops once the APs have seen each other. openUF also takes another openUF AP
+  for a UniFi AP.
+- **AP name and hostname.** A device not named in the controller beacons `openUF`, because
+  the controller sends no name for it. WiFiman shows the router's hostname, which openUF does
+  not yet set from the controller's name.
+- **Silent disconnects.** Minimum RSSI and load balance disconnect clients without a log line.
+- **Re-adoption.** After a Forget, a `set-inform` sent while the reset's own one is pending
+  is overwritten, and the `ubnt` account is locked only when openUF next restarts.
+- **Mesh switch time.** The station comes up 15 to 16 s after the cable goes, not the 10 s
+  the code waits, when a report to the controller is already in flight.
+
+## Hardware
+
+Any dual-band OpenWrt device with **16 MB of flash or more** and about 5 MB free on
+`/overlay` (the AES-GCM crypto the controller insists on needs `libopenssl3`). A **full
+`wpad` build** is required and the installer swaps it in.
+
+| Board | Profile | Tested here |
+|---|---|---|
+| JioRouter AX6000 JIDU6J01 family (JIDU6J01, 6201, 6401, 6601, 6701) | `jiorouter-ax6000-jidu6j01` | ✅ JIDU6401, see above. DFS channels are left out on purpose: this chip fails the radar check |
+| JioRouter AX6000 JIDU6101 | `jiorouter-ax6000-jidu6101` | Not here; [inherited](#inherited-results-not-verified-here) |
+| TP-Link Archer C5 v1 | `archer-c5-v1` | Not here; inherited |
+| TP-Link TL-WDR3500 v1 | `tl-wdr3500-v1` | Not here; inherited (8 MB flash, needs an image with the crypto built in) |
+| TP-Link Deco M4R v1 / v2 | `deco-m4r-v1` | Not here; inherited |
+| Xiaomi Mi Router AX3000T | `xiaomi-ax3000t` | Not here; inherited |
+| TP-Link Archer A7 v5 / C7 v4 / C7 v5, Deco M5 v1-v3, Deco M4R v4, Dynalink DL-WRX36 | from the OpenWrt sources | Never run on the board |
+| TP-Link WR1043ND v2 | `tl-wr1043ndv2` | Single band; profile only |
+
+Anything else runs on a generic dual-band or single-band profile, or on one the installer
+generates from the running device. Each profile's details are in
+[REFERENCE.md § Supported hardware](REFERENCE.md#supported-hardware). A board you have
+tested belongs in a [field report](field-reports/README.md).
 
 ## Documentation
 
 | Document | What it is for |
 |---|---|
-| [REFERENCE.md](REFERENCE.md) | **The full reference.** Every feature with its validation status, the hardware matrix, the detailed quick start, local testing and protocol notes |
 | [USAGE.md](USAGE.md) | Installing by hand, every configuration option, the device page and LuCI app, upgrading, troubleshooting |
+| [REFERENCE.md](REFERENCE.md) | Every feature with its implementation status, the hardware matrix, local testing and protocol notes. Its status column is largely the original project's |
 | [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) | What was confirmed against a live controller, with the wire evidence; it wins where other documents disagree |
 | [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md) | What is not implemented yet, what is known about it, and the experiment plan |
 | [PACKAGING.md](PACKAGING.md) | The OpenWrt packages, the LuCI app, the theme and the release workflow |
+| [field-reports/](field-reports/README.md) | Hardware test results, and how to send yours |
 | [CLAUDE.md](CLAUDE.md) | Working notes for contributors: the constraints, the landmines, and how to add a hardware profile |
 
 ## Contributing
 
 Issues and pull requests are welcome at [github.com/Fantastic792/openUF](https://github.com/Fantastic792/openUF).
 
+**Send a field report.** The most useful contribution: test a feature on your hardware and
+send the result in the [field-report format](field-reports/README.md), as a pull request
+with one TOML file or through the **Field report** issue form. A failure is as useful as a
+pass. `python3 tools/field_report.py check <file>` validates it before you send it.
+
 **Report a problem** with the board and OpenWrt version, the controller version, and the
 output of `openuf status` and `logread -e openuf` on the device. Say what the controller
-showed.
+showed. Leave out passwords, WiFi keys and public addresses.
 
-**Add a hardware profile.** The most useful contribution. On a DSA board the installer can
-generate one (`setup.sh`, or *Export* on the LuCI settings page); otherwise write
-`openuf/modelmap/<vendor>-<model>.lua` from the board's OpenWrt DTS and `board.d` entry,
-following [CLAUDE.md § Adding a new device map](CLAUDE.md#adding-a-new-device-map), and say
-in its header what was and was not confirmed on the hardware.
+**Add a hardware profile.** On a DSA board the installer can generate one (`setup.sh`, or
+*Export* on the LuCI settings page); otherwise write `openuf/modelmap/<vendor>-<model>.lua`
+from the board's OpenWrt DTS and `board.d` entry, following
+[CLAUDE.md § Adding a new device map](CLAUDE.md#adding-a-new-device-map), and say in its
+header what was and was not confirmed on the hardware.
 
 **Change the code.** The daemon is Lua 5.1 as OpenWrt ships it, the installers are POSIX
 shell for busybox; the constraints are listed in [CLAUDE.md](CLAUDE.md). Before a pull
@@ -291,22 +284,48 @@ sh tools/dist.sh --verify                                    # the stripped tree
 
 A new test file is registered in `tests/run_tests.lua`. Comments explain *why*, naming the
 failure that motivated the code. Where a fact cannot be determined, report nothing rather
-than a plausible guess. Protocol changes start from PROTOCOL-VALIDATION.md, and anything
-the controller sends that openUF does not act on stays counted in the unhandled ledger
-until it is implemented. No device addresses, passwords or controller keys go into the
-tree. CI runs the suite and the release verification on every push.
+than a plausible guess. Protocol changes start from PROTOCOL-VALIDATION.md. No device
+addresses, passwords or controller keys go into the tree. CI runs the suite, the release
+verification and the field-report check on every push.
 
 **Test without hardware.** `sh tools/simulate.sh --adopt` runs an adoption round-trip against
 the Python controller stub; `tools/validation/` has a Docker UniFi controller for the real
 thing.
 
+## What this project changed
+
+Compared with [yesrab/openUF](https://github.com/yesrab/openUF) `main` at `6277bdf`
+(2026-10-26), the point it started from:
+
+| Area | Before | Now |
+|---|---|---|
+| Mesh | One hop | Several hops, with the loop guard and the controller's parent choice; a downlink beacons its path element even with no uplink station |
+| Mesh station on a cabled AP | The controller sends a cabled AP no uplink entry, so its station went with the next push and a later cable pull stranded it | Built from the mesh name and key when the push leaves it out |
+| Mesh failover time | Checked once per report, after two failed ones: 39 s to 98 s | The cable is read every second; the station comes up 10 to 16 s after it goes |
+| Mesh failback (DSA) | A device that crossed the wireless link could stay unreachable from other ports until a reboot | The switch entries left behind are rewritten |
+| Mesh child's SSIDs after a WiFi reload | The AP on the station's radio could stay up but silent until a reboot | Its beacon is restarted after two silent heartbeats |
+| Clock after a reboot | A clock wrong at boot could stay wrong for hours, and fast roaming then failed | Time sync is restarted when the controller's clock disagrees by more than a minute |
+| Uplink Connectivity Monitor | — | New |
+| Guest portal | — | New, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF): redirect, authorize, per-guest limits, offline mode, disconnect when authorization ends |
+| AP name in the beacon | The toggle had no effect | The name is in the beacon |
+| WPA3 and Enhanced Open | The controller's first push after adoption downgraded them | Kept |
+| Private pre-shared keys | A key's VLAN was lost when its SSID went off and on | Comes back with the SSID |
+| Load balance | Could kick a mesh child | Leaves the mesh link alone |
+| Guest WLAN | Read as a mesh link | An ordinary AP |
+| Multicast and broadcast blocker | Built once | Rebuilt when the live SSIDs change |
+| STUN | Never looked the controller's name up again | Looks it up again after 3 unanswered requests |
+| Package upgrade | Left the old daemon running | Restarts openUF and the translator |
+| LuCI | — | A Setup page for a new router |
+| Tools | — | `tools/selfcheck.sh`, `tools/verify.py`, and field reports with `tools/field_report.py` |
+
+Fixes from yesrab/openUF after `6277bdf` are merged in by hand.
+
 ## Credits
 
-This repository, [Fantastic792/openUF](https://github.com/Fantastic792/openUF), is built on
-[yesrab/openUF](https://github.com/yesrab/openUF): everything up to its `6277bdf` is
-yesrab's and its contributors' work, and later yesrab fixes are merged in by hand.
-openUF began as a fork of [jonasevcik/openUF](https://github.com/jonasevcik/openUF) and
-still exchanges work with it. The 802.11r translator for genuine UniFi APs is
+Built on [yesrab/openUF](https://github.com/yesrab/openUF): everything up to its `6277bdf`
+is yesrab's and its contributors' work. openUF began as a fork of
+[jonasevcik/openUF](https://github.com/jonasevcik/openUF) and still exchanges work with it.
+The 802.11r translator for genuine UniFi APs is
 [d-malinowski/unifi-openwrt-roaming](https://github.com/d-malinowski/unifi-openwrt-roaming),
 whose author also contributed the interoperability work around it. The protocol groundwork
 came from [amd989/unifi-gateway](https://github.com/amd989/unifi-gateway),
@@ -318,3 +337,33 @@ Built on [OpenWrt](https://openwrt.org/) and [LuCI](https://github.com/openwrt/l
 
 [GPL-3.0-or-later](LICENSE). [NOTICE](NOTICE) lists the copyright holders and preserves the
 MIT notice of the original openUF. `luci-theme-halo` is Apache-2.0.
+
+## Inherited results, not verified here
+
+The original projects ([yesrab/openUF](https://github.com/yesrab/openUF) and, before it,
+[jonasevcik/openUF](https://github.com/jonasevcik/openUF)) reported the results below on
+their own hardware. This project has changed a lot since (the list above), and **has not
+re-run these tests on its current code**. They are probably still true, but they are not
+verified. If you can run any of them, please send a [field report](field-reports/README.md):
+a pull request with one TOML file, or the **Field report** issue form. A confirmed result
+moves up into [Tested on real hardware](#tested-on-real-hardware) with your name on it.
+
+| Result reported by the original project | Field-report id |
+|---|---|
+| The core validated on real hardware against a **UniFi Cloud Gateway Ultra** on UniFi Network 10.x | `adoption`, `statistics` |
+| **Fast roaming between openUF and a genuine UniFi AP** through the 802.11r translator | `ft-unifi` |
+| **Per-port VLANs** on a Xiaomi AX3000T against a UCG Ultra, with a client getting its address on the assigned VLAN | `port-vlan` |
+| **VLAN-tagged SSIDs**, end to end with a client on a tagged IoT network | `vlan-ssid` |
+| **Airtime Fairness** On, pushed by a UCG Ultra and read back on four radios (ath10k, ath9k, two mt76) | `airtime-fairness` |
+| **IoT Optimization: Force WiFi 4 Mode**, end to end | `radio-settings` |
+| **Mesh** on a TP-Link Deco M4R v1, adopted and meshed by a user | `mesh-one-hop`, `board-profile` |
+| **TP-Link Archer C5 v1** confirmed end to end, the reference device | `board-profile` |
+| **TP-Link TL-WDR3500 v1** confirmed, with a custom image | `board-profile` |
+| **JioRouter AX6000 JIDU6101**, the original lab APs | `board-profile` |
+| **Xiaomi Mi Router AX3000T** confirmed, WiFi 6 | `board-profile` |
+| **OpenWrt 24.10** with `opkg` | `openwrt-24.10` |
+| The feature-by-feature status in [REFERENCE.md](REFERENCE.md) and the evidence in [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md), except where this README's own results cover it | any |
+
+The original project's topology view, two openUF APs beside a UniFi Cloud Gateway Ultra:
+
+![UniFi Network's topology view with two openUF access points and their clients](screenshots/unifi-topology.png)

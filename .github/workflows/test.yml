@@ -62,6 +62,17 @@ jobs:
       - name: Package and verify the stripped tree
         run: sh tools/dist.sh --verify
 
+  field-reports:
+    name: Field reports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Every report is published as it is: the checker refuses unknown feature
+      # ids, results without evidence, and anything that looks like a secret or
+      # a public address (tools/field_report.py, field-reports/README.md).
+      - name: Check every report
+        run: python3 tools/field_report.py check field-reports/*.toml
+
   python-controller-syntax:
     name: Python controller syntax check
     runs-on: ubuntu-latest
