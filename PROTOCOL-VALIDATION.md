@@ -2927,3 +2927,162 @@ switched on for a live WLAN on the production APs, which is a config push to ask
 to take. The earlier source-MAC half of the blocker *was* measured on real hardware
 (14/14 dropped, 0/15 once allow-listed, AX3000T 2026-09-02) and is unchanged.
 
+
+### MAC-based VLANs (jonasevcik 1f017d1, 2026-10-27)
+
+**In this tree** `fw_caps` is `0x1110` with the sign bit, sent as `-2147479280`: jonasevcik's
+`0x100000` (RADIUS Dynamic Authorization) and `0x800000` (Hotspot 2.0) are not claimed here
+until those features are ported. The RADIUS MAC authentication refusal below is in the code,
+but this tree has no RADIUS MAC authentication yet. This project's own lab controller has no
+gateway either, so it cannot emit these keys; the feature is unit-tested here only.
+
+Their evidence follows, as they wrote it.
+
+
+Not RADIUS at all, though the sweep's axis-2 table had filed it next to MAC auth. It is the
+controller's per-CLIENT **"Virtual Network Override"**: a client set to another network lands
+on that network's VLAN whatever SSID it joins. The emitter
+(`com/ubnt/service/config/ubntconf/fdwW`) reads every `user` object carrying
+`virtual_network_override_enabled`, groups them by `virtual_network_override_id`, and writes
+the whole site's map to EVERY WLAN index:
+
+```
+aaa.<n>.accept_mac.status=enabled       (once, before the first entry)
+aaa.<n>.accept_mac.<k>.mac              aaa.<n>.accept_mac.<k>.vlanid
+switch.vnet.<n>.{name,vlan,mac.<k>}     (the same map for a switch identity)
+```
+
+`status` is **not** the discriminator and openUF does not read it: the writer emits it from
+inside the loop that writes the first entry, so it is present exactly when entries are. The
+entries are the whole signal — the block's presence says nothing, which is this protocol's
+usual shape.
+
+**Two gates, the second site-wide.** `hyFnQ2.supportsMacBasedVlans()` =
+`hasFirmwareCapability(Integer.MIN_VALUE)` = `fw_caps` `0x80000000`, claimed since
+2026-10-27. Beside it `com/ubnt/service/bz/bWpcUrDmeyjdNnrWeZ.kCNoUwYXLXMAUl(siteId)`
+requires BOTH of:
+
+- a device that `isUbios()` and either claims the bit or is one of **23 listed gateway
+  models** (`UDMPRO`, `UDMPROMAX`, `UXG`, `UDMPROSE`, `UDW`, `UDM`, `UDR`, `UDRULT`,
+  `UDMA67A`, `UDMA6B7`, `UDMA6B9`, `UCGMAX`, `UXGB`, `UDMENT`, `UXGENT`, `UXGA6AA`,
+  `UDMA6A8`, `UX`, `UDMA69B`, `UDMA6B4`, `UDMEA39`, `UDMEA4B`, `UDMA6AD`);
+- an EMPTY set difference between {devices with the `ACCESS_POINT` or `SWITCH` feature and
+  `HAS_CLIENTS`, minus 11 excluded switch models} and {devices claiming the bit}.
+
+So one AP without the bit switched the feature off for every client in the site — which is
+where openUF stood. The home gateway is model `UDRULT`: in the list, and it already claims
+the bit (`fw_caps` read live from the controller's own device record, 2026-10-27). With both
+APs now claiming it, the quorum is satisfied here.
+
+**The consumer is hostapd's accept-MAC list**, whose lines take an optional VLAN id after
+the address. Read out of hostapd v2.12-devel — the build both APs run:
+
+- `hostapd/config_file.c:hostapd_config_read_maclist()` parses `<mac>[ \t]<vlan_id>` per
+  line, `#` comments, a leading `-` removing an entry.
+- `src/ap/ieee802_11_auth.c:hostapd_check_acl()` consults `accept_mac` **first, before
+  `macaddr_acl` is looked at**, and a match returns `HOSTAPD_ACL_ACCEPT` carrying the VLAN.
+  An unlisted station falls through to the `macaddr_acl` default. So an accept file on its
+  own assigns VLANs without restricting access, which is exactly the feature.
+  `hostapd_allowed_address()` keeps that VLAN for every mode but
+  `USE_EXTERNAL_RADIUS_AUTH`, where `dynamic_vlan=0` clears it.
+- `src/ap/ieee802_11.c:ieee802_11_set_radius_info()` then requires the VLAN to be in
+  `conf->vlan` (`hostapd_vlan_valid`) or **refuses the station** — it does not fall back to
+  the VAP's network. Hence a `wifi-vlan` section per VLAN, which `src/ap/vlan_init.c`
+  confirms is created from `vlan_file` whatever `dynamic_vlan` says.
+
+**Three ways in, because OpenWrt owns the same file for "MAC Address Filter"** (`ap.uc`'s
+`iface_macfilter`, which also has a `macfile` option appending an arbitrary file to the one
+it writes):
+
+| WLAN's MAC Address Filter | How openUF's entries reach hostapd |
+|---|---|
+| none | a raw `accept_mac_file=` line to openUF's own file. No `macaddr_acl` is emitted, so hostapd's default (accept-unless-denied) still admits unlisted clients |
+| `allow` | the schema's `macfile`, appended by `ap.uc` to the accept file it writes from `maclist` — and openUF drops those addresses from `maclist`, so each appears exactly once. An override the allow list does not permit is skipped: adding it would widen the admin's whitelist |
+| `deny` | the raw line again, minus any address on the deny list — the accept list is checked first and would otherwise let a denied client in |
+
+`vlan_no_bridge` (which keeps hostapd out of the bridge netifd already built) sits behind
+`vlan_possible && dynamic_vlan` in `iface_vlan`. `ap.uc` sets `vlan_possible` itself for
+every psk/sae/eap auth type, so `dynamic_vlan=1` suffices there; on an **open or OWE** WLAN
+neither is ever set, so openUF emits `vlan_no_bridge=1` raw.
+
+**Refused outright on a WLAN with RADIUS MAC authentication**: `macaddr_acl=2` asks the
+server about every client, and an accept-list entry returns ACCEPT before the question is
+asked. A VLAN override is not worth bypassing an access control.
+
+**The file is written before anything points at it.** Verified against real hostapd: an
+`accept_mac_file` naming a missing file gives `MAC list file … not found` →
+`Failed to read accept_mac_file` → `1 errors found in configuration file` → `Failed to set
+up interface`, and the same for one malformed line (`Invalid MAC address 'not-a-mac 20' at
+line 2`). Either takes the WLAN off the air, so on a write failure openUF abandons the plan
+and provisions the WLAN without the overrides.
+
+**The leading newline in openUF's file is load-bearing, and not for the obvious reason.**
+`ap.uc` writes `join('\n', maclist)` with no terminator, so in the `macfile` case openUF's
+first byte lands on the end of the last allow-list address. That does **not** fail:
+`hwaddr_aton()` reads exactly six octets and ignores the rest (`src/utils/common.c`), so the
+joined line is read as that LAST address and the VLAN id is taken from after its first
+space — the mapped client's. The allow-listed station would silently get the override and the
+intended one no entry at all. Confirmed both ways against hostapd v2.12-devel: the joined
+line draws no complaint, and the generator's real output with the newline is
+
+```
+00:00:5e:00:53:09\n# openUF: MAC-based VLANs.\n00:00:5e:00:53:01 20\n
+```
+
+**Lab, 2026-10-27.** The claim itself is validated: the lab controller accepted
+`fw_caps = -2138042096` with the bit reading set in its own device record, device state 1,
+`grep -c "handle_response failed"` = 0. The generated UCI was then run through **the device's
+own ucode generator** (`openwrt/rootfs:x86-64-25.12.0` + `wifi-scripts`, `ap.generate()`
+driven directly) in all three modes: the no-filter case produced `dynamic_vlan=1`,
+`vlan_file`, `vlan_no_bridge=1` and openUF's raw `accept_mac_file=` with **no `macaddr_acl`**;
+the allow case produced ap.uc's own `accept_mac_file` + `macaddr_acl=1` with openUF's content
+appended cleanly; the open case produced openUF's raw `vlan_no_bridge=1` and nothing else.
+Every one of those configs, and the generator's own output file, was parsed by a real hostapd
+v2.12-devel with zero errors. `tools/cfg-coverage.lua` over a capture with the keys spliced
+in reports all four `accept_mac.<k>.{mac,vlanid}` as **consumed** and `accept_mac.status` as
+**inert**, which is the intended split.
+
+**The lab controller CANNOT emit these keys** — the site gate needs a ubios gateway and the
+lab has none. Tested rather than inferred: a corporate network on VLAN 20 was created there,
+a Virtual Network Override set on a lab client, the AP force-provisioned — and the resulting
+`system_cfg` holds a full `aaa.1.*` block with **zero** `accept_mac` keys. (Side finding: the
+override network must be *corporate*; a `vlan-only` one is refused with
+`api.err.NetworkAssignedAsVlanOverrideIsNotCorporate`.)
+
+**Wire captured on the home controller, 2026-10-27** (UniFi Network on a UCG Ultra), with a
+Virtual Network Override set on a placeholder client — a MAC no device has — onto the IoT
+network, VLAN 10. Verbatim, and the same block arrived on **every** WLAN index, which is the
+emitter writing the site's whole map per WLAN:
+
+```
+aaa.1.accept_mac.status=enabled      aaa.2.accept_mac.status=enabled
+aaa.1.accept_mac.1.mac=00:00:5e:00:53:01
+aaa.1.accept_mac.1.vlanid=10         (and identically for aaa.2, aaa.3)
+```
+
+(The MAC above is the documentation placeholder that was actually used, not a mapped real
+address.) This is the capture `tests/test_inform_packet.lua` replays.
+
+**Hardware, 2026-10-27, both APs — end to end.** `fw_caps` reads `-2138042096`
+(`0x80901110`) in the real controller's device record for both boards. With the override
+live, each of the three WLANs on each AP got its own accept file
+(`/etc/openuf/macvlan-openuf_<radio>_<ssid>`, holding the leading blank line, the comment and
+`00:00:5e:00:53:01 10`), a `wifi-vlan` section into the existing `openuf_vlan10`, and in
+**live hostapd**: `accept_mac_file=` pointing at that file, `vlan_file` carrying
+`10 phyX-apY-10`, `dynamic_vlan=1`, `vlan_no_bridge=1`, and **no `macaddr_acl`** — so
+unlisted clients still associate as before. Each VAP's VLAN netdev came up in
+**`br-openuf10`**, the bridge netifd owns, and there is no `brvlan*` device on either board,
+which is `vlan_no_bridge=1` doing its job. All three SSIDs stayed on the air on both boards
+and `logread` shows no maclist, VLAN or hostapd error. Identical on the Archer C5
+(ath79, ath10k + ath9k) and the AX3000T (filogic, mt76, DSA).
+
+**Teardown confirmed in the same window.** The override was switched off and both APs
+force-provisioned: every accept file is gone, no `dynamic_vlan`, no `_vlan10` section and no
+`accept_mac` line survives on either board, the SAE raw lines on the same WLANs are
+untouched (so the `hostapd_bss_options` append is intact), and all three SSIDs stayed up. The
+placeholder client entry was then deleted and the site left with no overrides.
+
+⚠️ **Not claimed:** no real client has been moved to a VLAN by MAC. The placeholder MAC
+belongs to no device, so nothing authenticated against the accept list — the list's effect on
+a real association is still unproven on hardware, though `hostapd_check_acl()` is read above
+and the file hostapd loaded is the one openUF wrote.

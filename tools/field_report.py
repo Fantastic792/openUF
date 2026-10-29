@@ -29,6 +29,7 @@ FEATURES = {
     "owe": "Enhanced Open (OWE), a client joined with OWE",
     "ppsk": "Private pre-shared keys: each key's client on its own VLAN",
     "vlan-ssid": "A WiFi network on a tagged VLAN, a client got an address on it",
+    "mac-vlan": "A client's Virtual Network Override put it on that VLAN (MAC-based VLAN)",
     "hidden-ssid": "Hide WiFi Name",
     "radio-settings": "Channel, width and transmit power from the controller",
     "ft-openuf": "802.11r fast roaming between two openUF APs",

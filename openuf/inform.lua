@@ -2098,7 +2098,26 @@ function M.build_json(st, cfg, ufhw)
 		-- itself is wlansched.lua. 0x400000 (schedule_invert) stays
 		-- unclaimed: the controller then inverts the blackout windows into
 		-- on-times itself, the form the 4.0.15 firmware reads.
-		fw_caps          = (dbg_caps and tonumber(dbg_caps.fw_caps)) or 0x1110,
+		-- Bit 0x80000000 (Integer.MIN_VALUE): MAC-based VLANs, the per-client
+		-- "Virtual Network Override". Device.supportsMacBasedVlans() =
+		-- hasFirmwareCapability(Integer.MIN_VALUE), and the emitter
+		-- (ubntconf/fdwW) needs it AND a site-wide quorum: a ubios gateway that
+		-- claims the bit or is one of 23 listed models, and NO client-bearing AP
+		-- or switch in the site that fails to claim it. One AP without the bit
+		-- therefore switched the feature off for every device in the site --
+		-- which is where openUF stood until 2026-10-27.
+		--
+		-- SIGNED, deliberately: the sum is written as a negative number because
+		-- fw_caps is a Java `int` on the controller side (a genuine gateway
+		-- reports its own caps negative for the same reason), and 0x80101110
+		-- sent as 2148537104 is out of range for the deserializer. Subtracting
+		-- 0x80000000 from a positive sum is exactly what setting the sign bit
+		-- means in two's complement.
+		--
+		-- openUF claims the switch and schedule bits (0x1110) plus this one;
+		-- the RADIUS-DAS (0x100000) and Hotspot 2.0 bits belong to features
+		-- not in this tree. A debug_caps override is taken as given.
+		fw_caps          = (dbg_caps and tonumber(dbg_caps.fw_caps)) or (0x1110 - 0x80000000),
 		-- wifi_caps, the first WiFi bitmask. Bit 0x4 is
 		-- Device.supportBandsteering(): without it the controller never emits
 		-- the device-level bandsteering.* block (the AP's own Band Steering
@@ -2384,6 +2403,55 @@ end
 local function _wire_group_rekey(v)
 	if type(v) ~= "string" or not v:match("^%d+$") or #v > 9 then return nil end
 	return tostring(tonumber(v))
+end
+
+-- aaa.<n>.accept_mac.* -- MAC-based VLANs ("Virtual Network Override").
+--
+-- Per CLIENT, not per WLAN: the controller's own UI calls it Virtual Network
+-- Override and it lives on the client, which is why the SAME list reaches every
+-- WLAN in the site. The emitter (10.6.106
+-- com/ubnt/service/config/ubntconf/fdwW) groups every user object carrying
+-- virtual_network_override_enabled by its override network, then writes, per
+-- WLAN index n:
+--   aaa.<n>.accept_mac.status=enabled      (once, before the first entry)
+--   aaa.<n>.accept_mac.<k>.mac             k = 1..
+--   aaa.<n>.accept_mac.<k>.vlanid          that network's VLAN id
+-- (a switch identity gets the same list as switch.vnet.<n>.{name,vlan,mac.<k>}).
+--
+-- TWO gates, and the second one is site-wide -- see build_json for fw_caps
+-- 0x80000000, and PROTOCOL-VALIDATION.md for the gateway/AP/switch quorum.
+--
+-- status is NOT the discriminator and is deliberately not read: the writer
+-- emits it from inside the same loop that writes the first entry, so it is
+-- present exactly when there is at least one entry and absent exactly when
+-- there is none. The entries are the whole signal.
+local function _wire_mac_vlans(a)
+	local out, seen = {}, {}
+	local k = 1
+	while a["accept_mac." .. k .. ".mac"] do
+		local mac = tostring(a["accept_mac." .. k .. ".mac"]):lower()
+		local vid = tonumber(a["accept_mac." .. k .. ".vlanid"])
+		local why
+		if not is_mac(mac) then
+			why = "not a MAC address"
+		elseif not vid or vid ~= math.floor(vid) or vid < 1 or vid > 4094 then
+			why = "VLAN id out of range"
+		elseif seen[mac] then
+			-- A client has one override network, so the controller cannot send
+			-- the same MAC twice. If it ever did, two accept-list lines for one
+			-- station would leave hostapd's bsearch to pick one of them.
+			why = "a duplicate of an earlier entry"
+		end
+		if why then
+			io.stderr:write(("inform: dropping MAC-based VLAN entry %d -- %s\n")
+				:format(k, why))
+		else
+			seen[mac] = true
+			out[#out + 1] = {mac = mac, vid = vid}
+		end
+		k = k + 1
+	end
+	return #out > 0 and out or nil
 end
 
 -- Tri-state read of a `status` key for the radio/VAP disable controls:
@@ -2912,6 +2980,10 @@ function M._parse_wifi_system_cfg(sys_raw)
 				-- not by UCI.
 				is_guest              = _wire_bool(w.is_guest) or false,
 				x_passphrase          = a["wpa.psk"],
+				-- aaa.<n>.accept_mac.*: MAC-based VLANs, the controller's
+				-- per-client "Virtual Network Override". See _wire_mac_vlans
+				-- for the wire shape and why `status` is not the discriminator.
+				mac_vlans             = _wire_mac_vlans(a),
 				fast_roaming_enabled  = (a["ft.status"] == "enabled"),
 				-- aaa.<n>.wpa3.ft.status: FT for the SAE akm specifically,
 				-- a SEPARATE toggle from ft.status. Confirmed from the

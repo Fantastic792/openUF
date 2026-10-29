@@ -149,6 +149,10 @@ it.
   old Off and push it.
 - **Per-port VLANs:** turn on **Port VLAN** in the device's settings first, then set a
   port's Native VLAN. On DSA boards (most WiFi 6 routers) only the native VLAN is applied.
+- **A client's Virtual Network Override** (MAC-based VLAN, set on the client's page) puts it
+  on that network's VLAN on any SSID. The controller only sends it when the site has a UniFi
+  gateway and every AP and switch in the site supports it, so one older AP turns it off
+  everywhere. The override network must be a corporate network.
 
 **Mesh**
 - Turn on **Wireless Meshing** for every AP that should take part. The wired AP then offers
@@ -317,6 +321,7 @@ Compared with [yesrab/openUF](https://github.com/yesrab/openUF) `main` at `6277b
 | Guest WLAN | Read as a mesh link | An ordinary AP |
 | Multicast and broadcast blocker | Built once | Rebuilt when the live SSIDs change |
 | Multicast Suppression | Conservative pushed nothing; Aggressive came without its ARP/DHCP bypass | Both modes, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
+| MAC-based VLANs (Virtual Network Override) | Not claimed, so one openUF AP turned the feature off for the whole site | Claimed and applied through hostapd's accept-MAC list, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | STUN | Never looked the controller's name up again | Looks it up again after 3 unanswered requests |
 | Package upgrade | Left the old daemon running | Restarts openUF and the translator |
 | LuCI | — | A Setup page for a new router |
@@ -367,6 +372,7 @@ moves up into [Tested on real hardware](#tested-on-real-hardware) with your name
 | **Xiaomi Mi Router AX3000T** confirmed, WiFi 6 | `board-profile` |
 | **OpenWrt 24.10** with `opkg` | `openwrt-24.10` |
 | **Multicast Suppression** from jonasevcik/openUF: both modes captured on the wire and the nft rules accepted by a real nft, but no frame admitted or denied by type on the air | `blocker` |
+| **MAC-based VLANs** from jonasevcik/openUF: the push captured on a live controller with a UCG Ultra, and the accept file, VLAN section and live hostapd confirmed on two APs; no real client has been moved to a VLAN by MAC | `mac-vlan` |
 | The feature-by-feature status in [REFERENCE.md](REFERENCE.md) and the evidence in [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md), except where this README's own results cover it | any |
 
 The original project's topology view, two openUF APs beside a UniFi Cloud Gateway Ultra:
