@@ -2943,6 +2943,24 @@ broadcast flood from the wired side for 5 s, counted on the client's WiFi interf
 real driver or RF is involved. Not yet repeated on a hardware AP.
 
 
+### One wireless commit per push (jonasevcik 8f45d6a, 2026-10-28)
+
+`apply_config` hands one UCI cursor to `wlan_add`, `ppsk_add` and `mac_vlans_add` and commits
+once; `set_wlan_exclusive` commits only on a change. jonasevcik measured it by replaying a
+capture through a recording cursor (wireless commits 18 → 6 on their three-WLAN capture).
+
+**This project's VM lab, 2026-10-29**, counting every rewrite of `/etc/config/wireless` with
+inotify during one controller push, two APs receiving the same push, one still on the build
+before this change:
+
+| push | before | after |
+|---|---|---|
+| one WLAN on two radios (a setting flipped) | 5 | 4 |
+| two WLANs added, three on two radios (6 VAPs) | 9 | 4 |
+
+All SSIDs came up on both builds, with no errors. The saving grows with the number of WLANs,
+since the old code committed once per VAP.
+
 ### MAC-based VLANs (jonasevcik 1f017d1, 2026-10-27)
 
 **In this tree** `fw_caps` is `0x1110` with the sign bit, sent as `-2147479280`: jonasevcik's
