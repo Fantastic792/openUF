@@ -322,6 +322,7 @@ Compared with [yesrab/openUF](https://github.com/yesrab/openUF) `main` at `6277b
 | Multicast and broadcast blocker | Built once | Rebuilt when the live SSIDs change |
 | Multicast Suppression | Conservative pushed nothing; Aggressive came without its ARP/DHCP bypass | Both modes, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | MAC-based VLANs (Virtual Network Override) | Not claimed, so one openUF AP turned the feature off for the whole site | Claimed and applied through hostapd's accept-MAC list, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
+| TDLS, the Country IE and the pairwise cipher | Sent by the controller and dropped | Applied; the cipher only where the radio supports it, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | STUN | Never looked the controller's name up again | Looks it up again after 3 unanswered requests |
 | Package upgrade | Left the old daemon running | Restarts openUF and the translator |
 | LuCI | — | A Setup page for a new router |
@@ -372,6 +373,7 @@ moves up into [Tested on real hardware](#tested-on-real-hardware) with your name
 | **Xiaomi Mi Router AX3000T** confirmed, WiFi 6 | `board-profile` |
 | **OpenWrt 24.10** with `opkg` | `openwrt-24.10` |
 | **Multicast Suppression** from jonasevcik/openUF: both modes captured on the wire and the nft rules accepted by a real nft. This project has since run all three modes over simulated WiFi in its VM lab (see [PROTOCOL-VALIDATION](PROTOCOL-VALIDATION.md#multicast-suppression-jonasevcik-f46cf36-2026-10-27)); not yet on a real radio | `blocker` |
+| **TDLS and the Country IE** from jonasevcik/openUF: written into UCI and hostapd on two APs by a real push; the **pairwise cipher** probe read on two boards (one 5 GHz radio reports CCMP only) | `radio-settings` |
 | **MAC-based VLANs** from jonasevcik/openUF: the push captured on a live controller with a UCG Ultra, and the accept file, VLAN section and live hostapd confirmed on two APs; no real client has been moved to a VLAN by MAC | `mac-vlan` |
 | The feature-by-feature status in [REFERENCE.md](REFERENCE.md) and the evidence in [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md), except where this README's own results cover it | any |
 
