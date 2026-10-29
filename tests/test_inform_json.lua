@@ -2069,6 +2069,27 @@ return {
 			-- order, so fw_caps is sometimes the last one and followed by `}`.
 			assert_true(raw:find('"fw_caps":-2146430704', 1, true) ~= nil,
 				"and it is serialized as a negative integer, not 2148536592")
+			assert_eq(d.fw2_caps, 0,
+				"and no fw2_caps bit where Hotspot 2.0 is not supported")
+		end
+	},
+	{
+		name = "inform json: a Hotspot-2.0-capable hostapd adds fw_caps 0x800000 and fw2_caps 0x80000",
+		fn = function()
+			-- supportHotspot2() is hasFirmwareCapability(0x800000) and
+			-- supportsRadSec() is hasFirmware2Capability(0x80000); the REST
+			-- validator that admits a Passpoint profile onto a WLAN requires
+			-- BOTH (supportsHotspot2Passpoint(), 10.6.106), so the two are
+			-- claimed together, off the one probe.
+			local orig = inform._sysinfo.hs20_supported
+			inform._sysinfo.hs20_supported = function() return true end
+			local ok, err = pcall(function()
+				local d = build()
+				assert_eq(d.fw_caps, 0x901110 - 0x80000000, "the Hotspot 2.0 bit joins fw_caps")
+				assert_eq(d.fw2_caps, 0x80000, "and RadSec is claimed for the gate")
+			end)
+			inform._sysinfo.hs20_supported = orig
+			if not ok then error(err, 0) end
 		end
 	},
 	{

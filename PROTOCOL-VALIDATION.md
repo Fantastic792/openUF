@@ -1716,6 +1716,25 @@ hostapd generator and the 10.6.106 jar:
   and its POSTROUTING twin). Claiming the bit would make the controller **stop** sending
   them and send a single `bga_filter` key instead: no new capability, and a regression risk
   if the new key were mis-parsed. Left unclaimed deliberately, not for want of an equivalent.
+- **`fw_caps` `0x800000` (Hotspot 2.0) is now claimed**, gated on a probe: the local
+  generator must know `iw_enabled` and the hostapd binary must carry `hs20_conn_capab`
+  (`CONFIG_HS20`). OpenWrt has the whole interworking option set, so "no equivalent" was
+  wrong. Without the bit the controller drops a Passpoint WLAN outright
+  (`ubntconf/LsyaJoEysWb`), so no `aaa.<n>.hs20.*` key is capturable at all.
+- **`fw2_caps` `0x80000` (RadSec) is now claimed too, for a feature openUF does not have.**
+  This is a trade, stated here as plainly as the win. The REST validator
+  `com/ubnt/service/W/ctfbDsCjrxgkv` computes
+  `supportsHotspot2Passpoint() = supportHotspot2() && supportsRadSec()` and rejects the
+  WLAN with `api.err.DevicePasspointNotSupported` otherwise, where
+  `supportsRadSec() = hasFirmware2Capability(524288)` reads the field **`fw2_caps`**
+  (`com/ubnt/data/hyFnQ.getFirmware2Capabilities()`) — a third firmware mask openUF had
+  never sent. Passpoint is therefore unreachable without claiming RadSec. What the claim
+  changes on the wire is that a RadSec RADIUS server now arrives with its certificate
+  *filenames*, which is the only thing that distinguishes it from a plaintext server;
+  openUF drops such a server with a log instead of sending the shared secret in the clear.
+  Before the claim it was indistinguishable, so the claim is the safer side of the trade —
+  but openUF speaks no RADIUS-over-TLS, and a site that depends on RadSec will see its
+  server dropped, not used.
 
 - **Multicast Suppressor** (`wifi_caps2` `0x400000` → `wireless.<n>.multicast.suppressor`):
   could be enforced in nft like the Multicast/Broadcast Blocker, but it is the same feature
@@ -2977,6 +2996,118 @@ before this change:
 
 All SSIDs came up on both builds, with no errors. The saving grows with the number of WLANs,
 since the old code committed once per VAP.
+
+### Hotspot 2.0 / Passpoint: `aaa.<n>.hs20.*` (jonasevcik ce7163f, 2026-10-26)
+
+**In this tree** `fw_caps` gains `0x800000` and `fw2_caps` `0x80000` only where the probe
+says hostapd can answer ANQP; the rest is as they wrote it.
+
+
+Confirmed on the wire in the lab (10.6.106) on 2026-10-26: a WLAN with an embedded
+`hotspot2` object, pushed to an openUF AP claiming `fw_caps` `0x800000` and `fw2_caps`
+`0x80000`, carries 55 `aaa.<n>.hs20.*` keys plus `wireless.<n>.dgaf_disable`. Emitter:
+`com/ubnt/service/config/VAZShipWTNxlo`.
+
+Three gates had to be passed before any of it was capturable, and each one cost a wrong
+first attempt:
+
+1. **`fw_caps` `0x800000`** — without it `ubntconf/LsyaJoEysWb` drops the WLAN from the
+   AP's config entirely, so the push contains no `hs20` key.
+2. **`fw2_caps` `0x80000`** — a *third* firmware capability mask openUF had never sent,
+   read by `hyFnQ.getFirmware2Capabilities()` from the field `"fw2_caps"`. The REST
+   validator `com/ubnt/service/W/ctfbDsCjrxgkv` computes
+   `supportsHotspot2Passpoint() = supportHotspot2() && supportsRadSec()` and refuses the
+   WLAN with `api.err.DevicePasspointNotSupported`, so Passpoint cannot be reached without
+   claiming RadSec. See [Capability bitmasks](#capability-bitmasks) for the trade.
+3. **The profile must be an embedded object on the WLAN, not a reference.**
+   `hotspot2conf_id` is not a `WlanConf` field and is silently dropped (the first attach
+   produced a push with zero `hs20` keys). The settings live in a `hotspot2` object inside
+   the wlanconf, whose schema (`api/fields/WlanConf.json`) is a **subset** of the
+   standalone `api/fields/Hotspot2Conf.json`.
+
+That subset is the whole reachable keyspace. These keys exist in the emitter and **cannot
+be made to arrive** on a WLAN, so openUF reads none of them and no consumer is keyed on
+them: `hessid`, `anqp_domain_id`, `network_auth_type`/`network_auth_url`,
+`t_c_filename`/`t_c_timestamp`, `osu_ssid`, `osu.*`, `icon.*`,
+`gas_comeback_delay`/`gas_frag_limit`, `qos.map.*`/`qos.exception.*`. OSU and icons are
+unimplementable anyway: the installed hostapd (`wpad-mbedtls`, v2.12-devel) has no
+`osu_server_uri`, `osu_ssid` or `hs20_icon` option at all. `aaa.<n>.hs20.esr` does arrive
+but is deliberately not read — `ap.uc` never emits `esr`, so a field for it would be a
+consumer with no producer at the other end.
+
+The captured block, verbatim apart from placeholder addresses (it is replayed in full by
+`tests/test_inform_packet.lua`):
+
+```
+aaa.1.hs20.status=enabled              aaa.1.hs20.access_network_type=2
+aaa.1.hs20.internet=enabled            aaa.1.hs20.asra=disabled
+aaa.1.hs20.esr=disabled                aaa.1.hs20.uesa=disabled
+aaa.1.hs20.venue_group=2               aaa.1.hs20.venue_type=8
+aaa.1.hs20.disable_dgaf=disabled       aaa.1.hs20.deauth_req_timeout=60
+aaa.1.hs20.network_availability=13     aaa.1.hs20.hs20_domain_name_list=example.com,example.net
+aaa.1.hs20.venue_name.1.lang=eng       aaa.1.hs20.venue_name.1.name=openUF Lab
+aaa.1.hs20.venue_name.1.url=https://example.com/venue
+aaa.1.hs20.nai_realm.1.status=enabled  aaa.1.hs20.nai_realm.1.encoding=0
+aaa.1.hs20.nai_realm.1.name=example.com
+aaa.1.hs20.nai_realm.1.eap_method=13
+aaa.1.hs20.nai_realm.1.eap_method.auth.1.id=5
+aaa.1.hs20.nai_realm.1.eap_method.auth.1.val=6
+aaa.1.hs20.1.roaming_consortium=506f9a aaa.1.hs20.2.roaming_consortium=001bc504bd
+aaa.1.hs20.3gpp.1.mcc=230              aaa.1.hs20.3gpp.1.mnc=01
+aaa.1.hs20.friendly_name.1.language=eng
+aaa.1.hs20.friendly_name.1.text=openUF Operator
+aaa.1.hs20.capab.1.protocol=6          aaa.1.hs20.capab.1.port=80
+aaa.1.hs20.capab.1.status=open
+aaa.1.hs20.metrics.status=enabled      aaa.1.hs20.metrics.info=1
+aaa.1.hs20.metrics.downlink_speed=8000 aaa.1.hs20.metrics.uplink_speed=1000
+aaa.1.hs20.metrics.downlink_load=80    aaa.1.hs20.metrics.uplink_load=40
+aaa.1.hs20.metrics.measurement=3000
+wireless.1.dgaf_disable=disabled
+```
+
+Key shapes worth writing down, because none of them is the obvious one:
+
+- The roaming-consortium index comes **before** the name (`hs20.<k>.roaming_consortium`),
+  unlike every other indexed block here.
+- `network_availability` is already the combined `(IPv4 availability << 2) | IPv6`
+  octet hostapd wants as `ipaddr_type_availability`; the controller does the combining.
+- `hs20_domain_name_list` arrives as one comma-separated string, which is also hostapd's
+  `domain_name` format, so it passes through untouched.
+- An MNC keeps the width it was sent with (`01` stays two digits, `002` three).
+- `capab.<k>.status` is a word (`open`/`closed`/`unknown`) and hostapd wants
+  `1`/`0`/`2`.
+- `metrics.info` is a decimal on the wire and **hex in hostapd**: `hs20_wan_metrics`'s
+  first field is parsed with `hexstr2bin()` over exactly two characters, so `1` must be
+  written as `01`. This was found by feeding openUF's own generated config to a real
+  hostapd — a rejected line is a config *parse* error, and hostapd then refuses the whole
+  BSS, not just the line.
+
+Consumer side, read from `/usr/share/ucode/wifi/ap.uc` on an Archer C5 (25.12,
+`wpad-mbedtls`) on 2026-10-26: `iface_hs20()` is gated on `config.hs20` and
+`iface_interworking()` on `config.iw_enabled`, which it turns into `interworking=1`. Two
+hazards made openUF write every cumulative list as a raw `hostapd_bss_options` line
+instead of a UCI list option:
+
+- `wifi.common`'s `append()` joins an array with **spaces** into one `name=a b c` line,
+  which is not what `venue_name`, `nai_realm`, `roaming_consortium`, `domain_name`,
+  `anqp_3gpp_cell_net`, `hs20_oper_friendly_name` or `hs20_conn_capab` means — each needs
+  one line per entry.
+- `iface_interworking()` contains `if (config.anqp_3gpp_cell_net) config.domain_name =
+  join(',', config.anqp_3gpp_cell_net)`, i.e. it **overwrites** `domain_name` with the
+  cell-net list.
+
+Raw options are appended last by `generate()`, after every `append_vars()` call, so
+hostapd reads them last. Verified end to end on an Archer C5 on 2026-10-26: the wifi-iface
+section openUF generates for the captured push was fed to the **device's own** ucode
+generator (read-only, output to a temp file), which produced `interworking=1`, `hs20=1`,
+`hs20_wan_metrics=01:8000:1000:80:40:3000` and all fourteen raw lines; that exact config
+then parsed on a real hostapd v2.12-devel with **zero** `Line N:` errors. ⚠️ No Passpoint
+client has associated, and no Passpoint WLAN exists on the production controller.
+
+A last consumer-side constraint shapes the parser: hostapd refuses a configuration that
+has `hs20=1` without WPA2-Enterprise/CCMP ("HS 2.0: WPA2-Enterprise/CCMP configuration is
+required for Hotspot 2.0 functionality"), so openUF accepts an `hs20` block only on a
+WPA-Enterprise WLAN and logs the drop otherwise.
 
 ### RADIUS MAC authentication and Dynamic Authorization (jonasevcik bd2e29b, 2026-10-27)
 
