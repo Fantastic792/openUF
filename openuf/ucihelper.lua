@@ -1524,19 +1524,39 @@ end
 local function bcfilt_rules(entries)
 	local rules = {}
 	for _, e in ipairs(entries) do
+		-- "Multicast Suppression" has three positions and the wire names
+		-- none of them, so the mode is the pair of keys (see inform's vap
+		-- build): the blocker's own key means Aggressive -- block, with the
+		-- bypass types and the allow-list -- and the suppressor key on its
+		-- own means Conservative, which only limits the rate. Aggressive
+		-- wins when both arrive, since a rate limit under a block is dead
+		-- weight.
 		if e.bcfilt_enabled then
-			rules[#rules + 1] = {ifname = e.ifname, macs = e.bcfilt_macs or {}}
+			rules[#rules + 1] = {
+				ifname = e.ifname,
+				macs   = e.bcfilt_macs or {},
+				bypass = e.bcfilt_bypass,
+			}
+		elseif e.mcast_suppressor then
+			rules[#rules + 1] = {ifname = e.ifname, limit = true}
 		end
 	end
 	return rules
 end
 
 -- What a ruleset covers, order-free: the resync compares this with the one
--- last built to decide whether there is anything to rebuild.
+-- last built to decide whether there is anything to rebuild. The bypass set
+-- and the rate limit are part of it, or switching Aggressive's bypass types
+-- or Conservative on and off would look like no change.
 local function bcfilt_sig(rules)
 	local parts = {}
 	for _, r in ipairs(rules) do
+		local bypass = {}
+		for tok in pairs(r.bypass or {}) do bypass[#bypass + 1] = tok end
+		table.sort(bypass)
 		parts[#parts + 1] = tostring(r.ifname) .. "=" .. table.concat(r.macs or {}, ",")
+			.. (#bypass > 0 and ("+" .. table.concat(bypass, ",")) or "")
+			.. (r.limit and "~limit" or "")
 	end
 	table.sort(parts)
 	return table.concat(parts, " ")
@@ -1896,6 +1916,27 @@ function M.apply_config(resp, cfg, opts)
 				if vap.bcfilt_macs and #vap.bcfilt_macs > 0 then
 					extra.openuf_bcfilt_macs = table.concat(vap.bcfilt_macs, " ")
 				end
+				-- The frame types the blocker must pass (bcfilt.bypass_types), in
+				-- the wire's own spelling so the stamp stays readable and the
+				-- startup reapply rebuilds an identical ruleset. Sorted, since the
+				-- parser hands over a set.
+				--
+				-- Neither stamp needs an M.DELETE for the shrinking case: every
+				-- openuf_ wifi-iface section is wlan_clear()ed and rebuilt on each
+				-- push, so an emptied allow-list or a withdrawn bypass list cannot
+				-- survive into the next one.
+				if vap.bcfilt_bypass then
+					local toks = {}
+					for tok in pairs(vap.bcfilt_bypass) do toks[#toks + 1] = tok end
+					table.sort(toks)
+					extra.openuf_bcfilt_bypass = table.concat(toks, " ")
+				end
+			end
+			if vap.mcast_suppressor ~= nil then
+				-- "Multicast Suppression". Recorded for the same reason as the
+				-- blocker above: the enforcement is nftables, applied after the wifi
+				-- reload, and this stamp is what the startup reapply re-derives from.
+				extra.openuf_mcast_suppress = vap.mcast_suppressor and "1" or "0"
 			end
 			if vap.l2_isolation ~= nil then
 				-- "Client Isolation": drop station-to-station frames inside the
@@ -2096,9 +2137,11 @@ function M.apply_config(resp, cfg, opts)
 			-- An OWE transition VAP has two netdevs, and both get the rules.
 			for _, ifname in ipairs(M.get_ifnames_for_vap(vap.radio, vap.ssid)) do
 				entries[#entries + 1] = {
-					ifname         = ifname,
-					bcfilt_enabled = vap.bcfilt_enabled,
-					bcfilt_macs    = vap.bcfilt_macs,
+					ifname           = ifname,
+					bcfilt_enabled   = vap.bcfilt_enabled,
+					bcfilt_macs      = vap.bcfilt_macs,
+					bcfilt_bypass    = vap.bcfilt_bypass,
+					mcast_suppressor = vap.mcast_suppressor,
 				}
 			end
 		end
@@ -2208,18 +2251,27 @@ local function runtime_entries()
 		-- teardown: the reload that disabled it took its interface, and with it
 		-- every qdisc and every nft rule that named it.
 		if s.disabled == "1" then return end
-		if s.openuf_bcfilt == "1" then wanted = wanted + 1 end
+		if s.openuf_bcfilt == "1" or s.openuf_mcast_suppress == "1" then wanted = wanted + 1 end
 		local ok_if, ifnames = pcall(M.get_ifnames_for_vap, s.device, s.ssid)
 		if not ok_if then return end
 		local macs = {}
 		for mac in (s.openuf_bcfilt_macs or ""):gmatch("%S+") do
 			macs[#macs + 1] = mac
 		end
+		-- Rebuilt as a set, the shape the parser produces, so the reapply and
+		-- the setparam path hand bcfilter.lua identical rules.
+		local bypass
+		for tok in (s.openuf_bcfilt_bypass or ""):gmatch("%S+") do
+			bypass = bypass or {}
+			bypass[tok] = true
+		end
 		for _, ifname in ipairs(ifnames) do
 			entries[#entries + 1] = {
-				ifname         = ifname,
-				bcfilt_enabled = (s.openuf_bcfilt == "1"),
-				bcfilt_macs    = macs,
+				ifname           = ifname,
+				bcfilt_enabled   = (s.openuf_bcfilt == "1"),
+				bcfilt_macs      = macs,
+				bcfilt_bypass    = bypass,
+				mcast_suppressor = (s.openuf_mcast_suppress == "1"),
 			}
 		end
 	end)

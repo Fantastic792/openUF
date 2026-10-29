@@ -138,8 +138,11 @@ it.
   below it and refuses it on that radio until it is 3 dB above.
 - **Load balance** has no switch in Network 10.6's UI. It can be set through the
   controller's API on the device's `radio_table` (`loadbalance_enabled`, `maxsta`).
-- **Multicast and broadcast blocker:** put your DHCP server's MAC on its exception list, or
-  wireless clients get no address. That is Ubiquiti's own documented behaviour.
+- **Multicast Suppression** (the old multicast and broadcast blocker): *Aggressive* blocks
+  group traffic toward clients except ARP, neighbour discovery and DHCP, and except
+  senders on its allow-list; *Conservative* only rate-limits it (100 packets/s, openUF's own
+  figure). A controller too old to send the ARP/DHCP bypass gets the strict blocker: then put
+  your DHCP server's MAC on the allow-list, or wireless clients get no address.
 - **Band steering** comes from the network's toggle or the device's own setting (Off /
   Prefer 5G). Balance is not supported.
 - **Airtime Fairness:** set it On for the device after adoption; the controller can hold an
@@ -313,6 +316,7 @@ Compared with [yesrab/openUF](https://github.com/yesrab/openUF) `main` at `6277b
 | Load balance | Could kick a mesh child | Leaves the mesh link alone |
 | Guest WLAN | Read as a mesh link | An ordinary AP |
 | Multicast and broadcast blocker | Built once | Rebuilt when the live SSIDs change |
+| Multicast Suppression | Conservative pushed nothing; Aggressive came without its ARP/DHCP bypass | Both modes, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | STUN | Never looked the controller's name up again | Looks it up again after 3 unanswered requests |
 | Package upgrade | Left the old daemon running | Restarts openUF and the translator |
 | LuCI | — | A Setup page for a new router |
@@ -362,6 +366,7 @@ moves up into [Tested on real hardware](#tested-on-real-hardware) with your name
 | **JioRouter AX6000 JIDU6101**, the original lab APs | `board-profile` |
 | **Xiaomi Mi Router AX3000T** confirmed, WiFi 6 | `board-profile` |
 | **OpenWrt 24.10** with `opkg` | `openwrt-24.10` |
+| **Multicast Suppression** from jonasevcik/openUF: both modes captured on the wire and the nft rules accepted by a real nft, but no frame admitted or denied by type on the air | `blocker` |
 | The feature-by-feature status in [REFERENCE.md](REFERENCE.md) and the evidence in [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md), except where this README's own results cover it | any |
 
 The original project's topology view, two openUF APs beside a UniFi Cloud Gateway Ultra:

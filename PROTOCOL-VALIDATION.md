@@ -2810,3 +2810,120 @@ through the real UI with the resulting wire payload captured or the effect verif
   runs in Python instead.
 - **Deleting a stale wireless client record and waiting for it to reappear.** The pattern works
   for wired clients but wireless ones never came back (45+ s). Recreate the WLAN instead.
+
+## Ported from jonasevcik/openUF
+
+Evidence for features brought over from [jonasevcik/openUF](https://github.com/jonasevcik/openUF),
+copied from their PROTOCOL-VALIDATION.md with the commit each came from. Their lab and
+hardware, not this project's: these results have not been re-run here.
+
+### Multicast Suppression (jonasevcik f46cf36, 2026-10-27)
+
+
+Settled 2026-10-27, closing the last implementable row of axis 2. The row asked about
+`wireless.<n>.advanced_isolation.*`; that turned out to be a decline (below), and the
+real find was next to it.
+
+**The control.** 10.6.106's WLAN form has "Multicast Suppression" with three positions,
+whose own description is the whole semantic brief:
+
+> Limits multicast and broadcast traffic to reduce WiFi airtime usage. Conservative
+> prevents storms; Aggressive blocks all except DHCP and ARP
+
+(`SETTINGS_WIFI_FORM_ADVANCED_MULTICAST_SUPPRESSION_DESC`, the `en` locale bundle under
+`webapps/ROOT/app-unifi/react/data/locales/`. Worth remembering as a source: the config
+writer gives the wire format, the locale bundle gives the *intent*, and for a key with
+no readable firmware consumer that is the only statement of what the AP should do.)
+
+The UI's own REST mapping shows it is the **old Multicast and Broadcast Blocker** in new
+clothes, not a new feature:
+
+```js
+bc_filter_enabled:      mode === AGGRESSIVE
+bc_filter_list:         mode === AGGRESSIVE && allowlist
+multicast_suppressor_mode: mode
+```
+
+**The gates.** Two emitters, one capability bit:
+
+| key | emitter | gate |
+|---|---|---|
+| `wireless.<n>.multicast.suppressor` | `VAZShipWTNxlo` (the WLAN writer) | `wlan.isEnhancedIot()`-style single `if`: `supportsMulticastSuppressor()` **and** mode ∈ {conservative, aggressive} **and** `!isServiceWlan()` |
+| `wireless.<n>.bcfilt.*` + `bcfilt.bypass_types` | `com/ubnt/service/config/ubntconf/EYFcHmSpOqr` | emits nothing unless `bc_filter_enabled` **or** that same triple; `bypass_types` only for the triple |
+
+`supportsMulticastSuppressor()` is `hasWifiCapability2(0x400000)` — an unclaimed bit, the
+same shape as the `acsdfs` finding. **So the cost of not claiming it was not a missing
+feature but a wrong one:** a WLAN set to Conservative pushed nothing at all, and a WLAN
+set to Aggressive pushed a blocker with no ARP/DHCP carve-out, which openUF then enforced
+to the letter.
+
+**The mode is not on the wire.** `multicast.suppressor` is a bare `enabled` for
+Conservative and Aggressive alike. What distinguishes them is whether a `bcfilt` block
+comes with it — the *presence* of a block, which is normally this protocol's classic
+decoy. Here it is load-bearing, because the jar proves `bcfilt.status` is written for
+Aggressive and only Aggressive. Both captures, verbatim from the lab:
+
+```
+# multicast_suppressor_mode=conservative -- the key alone, on both band entries
+wireless.1.multicast.inspect=false
+wireless.1.multicast.suppressor=enabled
+wireless.2.multicast.inspect=false
+wireless.2.multicast.suppressor=enabled
+
+# multicast_suppressor_mode=aggressive
+wireless.1.multicast.suppressor=enabled
+wireless.1.bcfilt.status=enabled
+wireless.1.bcfilt.bypass_types=ARP|NSNA|DHCPV4|DHCPV6
+wireless.1.bcfilt.1.status=enabled
+wireless.1.bcfilt.1.mac=00:00:5e:00:53:02
+wireless.1.bcfilt.2.status=enabled
+wireless.1.bcfilt.2.mac=00:00:5e:00:53:01
+```
+
+`multicast.inspect` sits in the same block and stays a decoy: constant across every
+toggle, and `cfg-coverage` still reports it `inert`.
+
+**`bypass_types` is a single literal.** The writer does
+`put("wireless." + n + ".bcfilt.bypass_types", "ARP|NSNA|DHCPV4|DHCPV6")` — one constant
+string, so those four tokens are the closed vocabulary, not a sample. openUF maps each to
+one nft `accept` placed before the drop, and names-and-drops anything else rather than
+treating an unmapped token as "allowed":
+
+| token | nft match |
+|---|---|
+| `ARP` | `ether type arp` |
+| `NSNA` | `ether type ip6 icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert }` |
+| `DHCPV4` | `ether type ip udp dport { 67, 68 }` |
+| `DHCPV6` | `ether type ip6 udp dport { 546, 547 }` |
+
+**The allow-list is bigger than the admin's.** `EYFcHmSpOqr` unions
+`bc_filter_list` with every UniFi device MAC in the site *and* the gateway's
+`getLanPeerMacs()`, which is why the UI says gateways need not be added by hand. openUF
+needs no code for this — it consumes whatever MACs arrive.
+
+**Conservative has no parameters, so its rate is openUF's own.** `limit rate over
+100/second burst 50 packets drop`, chosen against a measurement rather than a guess: on
+both production APs, over 60 s, `/sys/class/net/<br>/statistics/multicast` moved 3.2 and
+3.6 frames/s on the main bridge and 1.4 and 1.5 on the IoT VLAN's. 100 pkt/s is ~30×
+that. Recorded as openUF's choice in README and USAGE, not as a controller value.
+`limit rate **over**` is the form that drops the excess; a bare `limit rate ... drop`
+matches while *under* the rate and would discard the ordinary traffic and pass the storm.
+
+**Verification.** Tier 1: 1154 pass, 13 new guards each mutation-tested red (including
+the `over` keyword and the accept-before-drop ordering). Tier 2: both modes captured
+verbatim above, every new key `consumed` in `cfg-coverage` (`multicast.inspect` still
+`inert`), 0 `handle_response failed`, the recording-cursor replay produces the intended
+UCI stamps and nft text, and every generated statement was accepted by a real nft 1.0.9
+and reloaded idempotently against dummy netdevs. Switching the WLAN to Off produced a
+setparam with none of the keys, so teardown is confirmed too. Tier 3: both APs deployed,
+restarted, informing, `wifi_caps2 0x400070` accepted by the production controller with
+steady noops and no new push; no WLAN here uses the control, so both APs show an empty
+`openuf_bcfilt` chain and no stamps — which is the correct outcome and what was checked.
+
+⚠️ **Not claimed:** no frame has been admitted or denied *by type*. Proving that needs
+either network namespaces (unavailable in the validation container — `ip netns add` fails
+with `mount --make-shared /var/run/netns failed: Operation not permitted`) or the control
+switched on for a live WLAN on the production APs, which is a config push to ask for, not
+to take. The earlier source-MAC half of the blocker *was* measured on real hardware
+(14/14 dropped, 0/15 once allow-listed, AX3000T 2026-09-02) and is unchanged.
+
