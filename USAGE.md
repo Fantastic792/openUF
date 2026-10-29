@@ -1179,7 +1179,7 @@ Settings carried through from the controller:
 | Auto/Custom DTIM Period | `dtim_period` |
 | Key caching (`auth_cache`, REST only, default **on**) | `okc` (`0`/`1`). The controller sends it only on a WPA-Enterprise WLAN, which this tree does not provision yet, so nothing is written today and OpenWrt's own default applies (on for sae/owe and for FT) |
 | TDLS (`tdls_prohibit`, REST only) | `tdls_prohibit` (`0`/`1`), 1:1. On every WLAN's push, so this always writes |
-| Country IE / 802.11d (`country_beacon`, REST only) | per-**radio** `ieee80211d` (`0`/`1`). The wire key is per WLAN; `ieee80211d` is a wifi-device option, so openUF turns it on for a radio if **any** WLAN on that radio asks for it. A radio no WLAN carried the key for is left alone. It only reaches hostapd once a regulatory domain is set: the generator drops it otherwise, which is also what keeps hostapd from treating it as fatal |
+| Country IE / 802.11d (`country_beacon`, REST only) | per-**radio** `ieee80211d` (`0`/`1`). The wire key is per WLAN; `ieee80211d` is a wifi-device option, so openUF turns it on for a radio if **any** WLAN on that radio asks for it. A radio no WLAN carried the key for is left alone. It only reaches hostapd once a regulatory domain is set: the generator drops it otherwise, which is also what keeps hostapd from treating it as fatal. **On a 5 GHz radio "off" is ignored and `ieee80211d=1` is written anyway**: OpenWrt emits `ieee80211h=1` for every 5 GHz radio with a country, and hostapd refuses the whole interface with *"Cannot enable IEEE 802.11h without IEEE 802.11d enabled"* (`hostapd.add_iface failed` in `logread`, a radio with no SSID). openUF logs `Country IE off is not applicable on 5 GHz` once when it overrides. A radio whose band cannot be determined is treated as 5 GHz, for the same reason |
 | Pairwise cipher (`wpa.1.pairwise`, from wlanconf `wpa_enc`, REST only) | the second token of `encryption`: `psk2+gcmp`, `psk2+ccmp256`, `sae+gcmp`, … `CCMP` (the controller's `auto` and `ccmp`) writes no suffix, since it is the generator's own default; `gcmp-256` never arrives, the controller refuses it. **Gated on the radio's cipher suites**, read over `ucode -l nl80211` (`iw` 6.17 prints none): a cipher the phy does not report keeps the default and logs `controller asked for pairwise cipher … -- keeping …`, because hostapd treats an unprogrammable cipher as fatal and the WLAN would never come up. Where two radios serve one band the band's set is the intersection; an unknown probe never vetoes. OWE is left alone |
 | Multicast Enhancement | `multicast_to_unicast` |
 | Minimum Data Rate | per-**radio** `basic_rate` / `supported_rates` / `legacy_rates` / `beacon_rate` |
@@ -1446,6 +1446,33 @@ the reports (hostapd delivers them as ubus *notifications*, so `ubus listen` sho
 only `ubus subscribe` works), `logread | grep BEACON-REQ-TX-STATUS` shows requests going
 out, and `/tmp/openuf-rrm.jsonl` is the spool, drained on every inform. Rows sourced this
 way show a blank WiFi Name and Security.
+
+**DFS radar reporting** (from jonasevcik/openUF). On a DFS channel (52–144) the radio must
+leave the channel for 30 minutes when it detects radar. hostapd does that by itself; what was
+missing is telling the controller, which otherwise logs nothing and the channel change looks
+unexplained. openUF reads `DFS-RADAR-DETECTED` off hostapd's control socket (the same
+`hostapd_cli -a /tmp/openuf-bresp.sh` monitors the 802.11k enrichment uses) and sends it as
+the AP's own event:
+
+```
+inform_as_notif = true, notif_reason = "event",
+notif_payload = {event_string = "EVT_AP_RadarDetected",
+                 channel = "100", freq = 5500, vap = "phy1-ap0"}
+```
+
+The controller logs *"&lt;AP&gt; detected radar on channel 100 (5500 MHz)"* and raises the
+matching alert. `channel` is a string and `freq` a number, because that is how 10.6.106's
+handler reads them; with either missing the controller discards the event. The channel comes
+from `freq`, where the radar was seen, not from the BSS's centre frequency. One detection is
+reported once even when the radio carries several BSSes; at most 16 events wait while the
+controller is unreachable. Nothing to configure: the monitors are kept running whenever a
+radio is on a DFS channel or on `auto` on 5 GHz, even with `rrm_enrichment = false` and
+`assoc_tracker = false` (the `ubus subscribe` child is not started for this alone). The log
+line is `inform: DFS radar detected on channel 100 (5500 MHz) on phy1-ap0 -- reported to the
+controller`. The other `DFS-*` events reach the spool and are dropped (no controller handler);
+`grep DFS- /tmp/openuf-rrm.jsonl` after a hostapd start on a DFS channel shows the CAC pair,
+which proves the path without waiting for radar. Note that the JioRouter profiles keep DFS
+channels out (the MT7986 driver fails CAC), so there this only matters on other boards.
 
 **MAC-based VLANs ("Virtual Network Override")** (from jonasevcik/openUF). A client given a
 Virtual Network Override, on the client's own page, belongs on that network's VLAN whatever
@@ -2047,6 +2074,8 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | A client's Virtual Network Override does nothing | The controller only sends overrides when the site has a UniFi OS gateway and every AP and switch claims `fw_caps 0x80000000`: one device without it turns the feature off for the whole site. With `debug_dump_file` set in `conf.lua`, `grep accept_mac` the capture to see whether the keys arrived at all |
 | The override arrives but the client stays on the SSID's network | `cat /etc/openuf/macvlan-openuf_*` is openUF's file; `cat /var/run/hostapd-<ifname>.maclist` is OpenWrt's when the WLAN also has a MAC Address Filter. `logread \| grep -i "MAC-based VLAN"` gives the reason an address was left out: a VLAN it could not build (no `lan_cpueth`), an allow list that does not permit it, a deny list that names it |
 | A WLAN with an override vanished from the air | `logread \| grep -i "maclist\|accept_mac"`. hostapd drops the whole WLAN over an accept file it cannot read or a line it cannot parse, so the file went missing after it was written, or something else rewrote it |
+| A 5 GHz radio has no SSID after a config push; `logread` shows `hostapd.add_iface failed` | `logread \| grep -B3 "errors found"`. *"Cannot enable IEEE 802.11h without IEEE 802.11d enabled"* means `ieee80211d=0` on a 5 GHz radio, which openUF builds before 2026-10-29 could write when a WLAN turned the Country IE off; upgrade, or `uci set wireless.<radio>.ieee80211d=1; uci commit; wifi` |
+| A 5 GHz radio left its DFS channel and the controller logged nothing | The radar event comes off hostapd's control socket, so it needs a monitor attached: `pgrep -f '[h]ostapd_cli .*-a /tmp/openuf-bresp.sh'` must list one per BSS, and `hostapd-utils` must be installed. `grep DFS- /tmp/openuf-rrm.jsonl` right after a hostapd start on a DFS channel should show the CAC pair; if that is empty the monitors are not running |
 | Band Steering has no effect | `usteer` not installed or not running — `/etc/init.d/usteer status` |
 | Clients are steered 2.4 → 5 GHz with Band Steering off | `ubus call usteer get_config` must show `band_steering_interval: 0`. Any other value means usteer's default applies, and it steers. openUF writes the 0 on the next WiFi config push. Force Provision if it is missing |
 | Log says `device Band Steering mode "equal" is not supported` | The AP's own Band Steering is set to Balance. usteer can only balance by rejecting associations, so openUF does not map it. Use Prefer 5G or the per-WLAN toggle |

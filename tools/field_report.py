@@ -32,6 +32,7 @@ FEATURES = {
     "mac-vlan": "A client's Virtual Network Override put it on that VLAN (MAC-based VLAN)",
     "hidden-ssid": "Hide WiFi Name",
     "radio-settings": "Channel, width and transmit power from the controller",
+    "dfs": "A DFS channel: CAC completes, and a radar hit is reported to the controller",
     "ft-openuf": "802.11r fast roaming between two openUF APs",
     "ft-unifi": "802.11r fast roaming between openUF and a genuine UniFi AP",
     "band-steering": "Band steering moves a 2.4 GHz client to 5 GHz",
