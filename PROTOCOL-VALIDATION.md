@@ -2964,7 +2964,18 @@ since the old code committed once per VAP.
 ### The site's auto-channel DFS switch and channel blacklist (jonasevcik 6883b20, 2026-10-27)
 
 **In this tree** `wifi_caps2` gains `0x10` on top of our own bits (`0x4000F2`); a board
-profile's `acs_exclude_dfs` is never lifted by the site's switch. Their evidence follows.
+profile's `acs_exclude_dfs` is never lifted by the site's switch.
+
+**This project's VM lab, 2026-10-29.** Two APs on Auto, a site with the default
+"conservative" preset. Once the controller had re-pushed after seeing `wifi_caps2`
+`0x4020F2`, the 2.4 GHz `radio.1.blklst=12,2,13,3,14,4,5,7,8,9,10` became
+`chanlist='1' '6' '11'` (stamped `openuf_chanlist`) in UCI and `chanlist=1 6 11` in live
+hostapd, and ACS picked 11 on one AP and 6 on the other. With the site's 5 GHz DFS switch
+turned on, the push carried `radio.2.acsdfs=enabled` (read from a one-push `debug_dump_file`
+capture, deleted after) and the AP, whose profile excludes DFS, kept `acs_exclude_dfs=1` in
+UCI and in hostapd. No ACS has yet chosen among DFS channels here.
+
+Their evidence follows.
 
 | mask | bit | predicate | effect without it |
 |---|---|---|---|
