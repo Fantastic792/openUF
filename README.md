@@ -95,7 +95,7 @@ point only: no gateway or switch emulation, by design.
 
 [Fantastic792/openUF](https://github.com/Fantastic792/openUF) is built on
 [yesrab/openUF](https://github.com/yesrab/openUF) `main` (`6277bdf`, 2026-10-26) and
-contains all of it: 36 commits ahead, none behind (52 files, +6924 / −412 lines,
+contains all of it: 38 commits ahead, none behind (52 files, +7063 / −416 lines,
 2026-10-29). Releases are built from this fork, and `setup.sh` installs them.
 
 | Area | yesrab/openUF `main` | This fork |
@@ -302,6 +302,9 @@ thing.
 
 ## Credits
 
+This repository, [Fantastic792/openUF](https://github.com/Fantastic792/openUF), is built on
+[yesrab/openUF](https://github.com/yesrab/openUF): everything up to its `6277bdf` is
+yesrab's and its contributors' work, and later yesrab fixes are merged in by hand.
 openUF began as a fork of [jonasevcik/openUF](https://github.com/jonasevcik/openUF) and
 still exchanges work with it. The 802.11r translator for genuine UniFi APs is
 [d-malinowski/unifi-openwrt-roaming](https://github.com/d-malinowski/unifi-openwrt-roaming),
