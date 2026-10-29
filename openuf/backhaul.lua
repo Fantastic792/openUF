@@ -233,12 +233,62 @@ end
 -- The uplink station is written ENABLED only while the device is already on
 -- its wireless uplink (st.backhaul_mode == "wireless"); otherwise disabled,
 -- and tick() flips it when the wire goes away.
+-- The 5 GHz radio's UCI name (the band a backhaul runs on), or nil. Read from
+-- the radios' own `band`/`hwmode`, as everything else here does.
+function M.mesh_radio()
+	local band = {}
+	for name, opt, val in (M._popen("uci -q show wireless") or ""):gmatch("wireless%.([%w_]+)%.(%w+)='?([^'\n]*)'?") do
+		if opt == "band" and (val == "5g") then band[#band + 1] = name
+		elseif opt == "hwmode" and val == "11a" then band[#band + 1] = name end
+	end
+	table.sort(band)
+	return band[1]
+end
+
+-- The uplink a push leaves out. The controller sends the station entry only
+-- to a device it last saw on its wireless uplink: a wired child gets the mesh
+-- block (status, essid, psk) and no vwire entry at all, captured on a
+-- JIDU6401 2026-10-29. Taking that literally left a wired child with no
+-- station, so pulling its cable stranded it -- no mesh, no log line. The block
+-- carries everything a station needs, so it is built here on the radio the
+-- last pushed uplink used (st.backhaul_ul), else the downlink's, else the
+-- 5 GHz one, and written disabled like any other: tick() enables it only once
+-- the wired carrier is gone.
+local function implied_uplink(dl_radio, st)
+	local last = st and type(st.backhaul_ul) == "table" and st.backhaul_ul or {}
+	local radio = last.radio or dl_radio or M.mesh_radio()
+	if type(radio) ~= "string" or radio == "" then return nil end
+	return {role = "uplink", radio = radio, ssid = last.vport, devname = last.devname}
+end
+
 function M.plan(mesh, entries, cfg, st)
 	if type(mesh) ~= "table" or not mesh.status then return nil end
 	if type(mesh.essid) ~= "string" or mesh.essid == "" then return nil end
 	if type(mesh.psk) ~= "string" or #mesh.psk < 8 or #mesh.psk > 64 then return nil end
 	local plan = {}
+	local list, ul_entry, dl_radio = {}, nil, nil
 	for _, e in ipairs(entries or {}) do
+		list[#list + 1] = e
+		if type(e) == "table" and e.radio then
+			if e.role == "uplink" then ul_entry = e
+			elseif e.role == "downlink" then dl_radio = e.radio end
+		end
+	end
+	if ul_entry then
+		-- Remembered for the pushes that leave it out (implied_uplink).
+		if st then st.backhaul_ul = {radio = ul_entry.radio, vport = ul_entry.ssid, devname = ul_entry.devname} end
+	else
+		local implied = implied_uplink(dl_radio, st)
+		if implied then
+			list[#list + 1] = implied
+			M._log(("no mesh uplink in the push -- the station is built from the mesh block on %s, "
+				.. "so this AP can still fail over"):format(implied.radio))
+		else
+			M._log("no mesh uplink in the push and no 5 GHz radio -- this AP cannot fail over to the mesh")
+		end
+	end
+	entries = list
+	for _, e in ipairs(entries) do
 		if type(e) == "table" and e.radio then
 			if e.role == "downlink" then
 				plan.downlink = {

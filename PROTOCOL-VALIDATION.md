@@ -1425,6 +1425,27 @@ does not pin the child to the parent's channel in the config, so the station its
 follow the parent (the parent's own channel is in its push). The `vport-<mac>` naming matches
 fxkr's 2015 capture of a real UAP's uplink VAP.
 
+### A wired child gets no uplink entry — 2026-10-29
+
+Two JIDU6401s, 10.6.106, Wireless Meshing on for both. The child had meshed earlier and was
+then cabled. One full push to it (cfgversion blanked, `debug_dump_file` on, mesh lines only):
+
+```
+mesh.status=enabled  mesh.version=3  mesh.essid=vwire-<site>  mesh.psk=<site key>
+wireless.1  mode=master usage=user  parent=radio0
+wireless.3  mode=master usage=user  parent=radio1
+(no usage=uplink, no usage=downlink entry)
+```
+
+The controller sends the uplink station entry only to a device it last saw on its wireless
+uplink. openUF used to build the station only from that entry, so once a push reached the
+cabled child its station section was gone; pulling the cable then left it with nothing to
+join (no attempt on the parent's downlink, nothing logged). `backhaul.plan` now builds the
+station from the mesh block when the entry is missing, on the radio of the last pushed
+uplink (`st.backhaul_ul`), else the downlink's, else the 5 GHz one, written disabled as
+always. What real firmware does in this case was not captured; it has to do the same to
+fail over, since the push gives it nothing else.
+
 ### The parent names its children — 2026-10-03
 
 The controller resolves each station of a downlink VAP to a device by the station's

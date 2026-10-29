@@ -660,6 +660,13 @@ https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
   touches `/var/run/openuf.clock-ok` (survives a restart, not a reboot). The firmware
   keeps every VAP up until NTP has set the time; so does this. Down is the netdev; up is
   the netdev plus hostapd `STOP_AP` + `update_beacon`, or the BSS stays silent.
+- **A wired AP's push has no mesh uplink entry; the station is built anyway.** The
+  controller sends `usage=uplink` only to a device it last saw meshed; a cabled child gets
+  `mesh.status/essid/psk` and no vwire entry (PROTOCOL-VALIDATION § Wireless uplink,
+  2026-10-29). `backhaul.plan` builds the station from the mesh block on the last pushed
+  uplink's radio (`st.backhaul_ul`), else the downlink's, else `mesh_radio()` (5 GHz).
+  Taking the push literally removed the station on the next push and stranded a child
+  whose cable was then pulled.
 - **A clock the controller says is off restarts ntpd; openUF never sets the clock.**
   BusyBox ntpd started at boot before its servers resolve never syncs (two JIDU6401s after
   a power cut, and a mesh child booting without its cable, every time). Every answer's

@@ -142,6 +142,9 @@ local TYPED = {
 	backhaul_ie               = "string",
 	backhaul_pin              = "string",
 	backhaul_blacklist        = "string",
+	-- The last pushed mesh uplink ({radio, vport, devname}): a push that
+	-- leaves the uplink out (a wired child) rebuilds the station from it.
+	backhaul_ul               = "table",
 	-- The tagged SSIDs' VLANs carried over the mesh hop on a swconfig board
 	-- ({bridge, vids}, meshvlan.lua): kernel state, rebuilt at startup.
 	meshvlan                  = "table",

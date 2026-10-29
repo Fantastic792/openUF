@@ -105,6 +105,7 @@ contains all of it: 36 commits ahead, none behind (52 files, +6924 / −412 line
 | Clock after a reboot | A clock wrong at boot could stay wrong for hours (ntpd started before DNS worked), and fast roaming between the APs then failed | Time sync is restarted when the controller's clock disagrees by more than a minute |
 | Mesh failover time | Checked once per inform, after two failed ones: 39 s to 98 s on a JIDU6401 | The cable is read every second; the station comes up 10 s after it goes (15 s measured) |
 | Mesh child's SSIDs after a Wi-Fi reload | The AP on the station's radio could stay up but silent (no beacons) until a reboot | Its beacon is restarted after two silent heartbeats, and again if hostapd refuses the first try |
+| Mesh station on a cabled AP | The controller sends a cabled AP no uplink entry, so its station went with the next push and a later cable pull stranded it | The station is built from the mesh block when the push leaves it out |
 | Uplink Connectivity Monitor | — | New: SSIDs off the air when the uplink stops answering, back on the first answer |
 | Guest portal | — | New, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF): redirect, authorize, per-guest limits, offline mode, disconnect when authorization ends |
 | AP name in the beacon | The toggle had no effect | The name is in the beacon |
