@@ -2961,6 +2961,92 @@ before this change:
 All SSIDs came up on both builds, with no errors. The saving grows with the number of WLANs,
 since the old code committed once per VAP.
 
+### The site's auto-channel DFS switch and channel blacklist (jonasevcik 6883b20, 2026-10-27)
+
+**In this tree** `wifi_caps2` gains `0x10` on top of our own bits (`0x4000F2`); a board
+profile's `acs_exclude_dfs` is never lifted by the site's switch. Their evidence follows.
+
+| mask | bit | predicate | effect without it |
+|---|---|---|---|
+| `wifi_caps2` | `0x10` (16) | `Device.supportsAcsDfs()` = `hasWifiCapability2(16)` | The controller emits **neither** `radio.<n>.acsdfs` **nor** `radio.<n>.blklst`: one `if (supportsAcsDfs())` in `com/ubnt/service/config/ubntconf/PFljhxhmKJyhpeIhf` guards the block that writes both, so the site's auto-channel DFS switch and its channel blacklist are silently dropped. Confirmed live in the lab: claimed, both appear (and nothing else moves). |
+
+#### Radio and system keys (their Axis 1/2), settled 2026-10-27
+
+The last of the four axes' leftovers: `qos.mode`, `radio.<n>.antenna.gain`, `radio.outdoor`,
+`backup_channel`, `scan_list.*`, `ch144` and `system.monitor.*`. Settled from the controller
+side first, which is cheap and decisive: a key the 10.6.106 jar never writes cannot arrive,
+whatever the firmware does with it. Method: `grep -rl` each key literal over the 21 629
+extracted classes (the writer builds keys as `"radio." + n` plus a literal suffix, so the
+suffix is searchable), then decompile the hits with CFR.
+
+| Key | In the jar? | Verdict |
+|---|---|---|
+| `radio.<n>.acsdfs`, `radio.<n>.blklst` | yes, `config/ubntconf/PFljhxhmKJyhpeIhf` | **implemented** — see below |
+| `qos.mode` | yes, `config/VAZShipWTNxlo:2078` | **decline: constant by construction.** The writer emits the literal `"mode", "1"` — there is no setting behind it, like `wireless.<n>.wmm`. |
+| `radio.<n>.antenna.gain`, `radio.<n>.antenna` | yes, `config/VAZShipWTNxlo:510` | **decline: no consumer, and the value is not about this hardware.** It comes from the controller's own radio config document (`antenna_gain`, default 6; a U6-IW identity gets 3 with `antenna_id=-1`, i.e. built-in), so it describes the *impersonated* AP's antennas, not the host board's. 6.8.2 feeds it to a QCA vendor ioctl (`iwpriv <dev> ant_gain <n>`). UCI `antenna_gain` is in 25.12's `wireless.wifi-device.json` schema but appears **nowhere** in `/usr/share/ucode/wifi/` or `/lib/netifd/` on either AP — a stored-and-dropped option, the shape CLAUDE.md warns about. |
+| `radio.outdoor` | yes, `config/VAZShipWTNxlo:492` | **decline: no equivalent consumer.** A real toggle (site `outdoor_mode_enabled`, with a per-device override; `devmgr/kDxteQiUX:114-119`), but 6.8.2 applies it as `iwpriv <dev> outdoor <0\|1>`, a QCA regulatory switch. mac80211's nearest knob is `country3` — the Country IE's environment octet — which only changes what clients are *told*, not the channel/power table the radio uses. Not a trade to make blind on a 5 GHz radio: `ieee80211d`/`h` already took both APs' 5 GHz down once. |
+| `radio.<n>.backup_channel`, `radio.<n>.scan_list.{status,channels}`, `radio.<n>.ch144` | **no hits at all** | **decline: no emitter.** Consumed by `ubntbox` (the strings are right beside `blklst`), but nothing in the controller writes them, so they can never reach an AP. |
+| `system.monitor.*` | only `memory.threshold` and `critical_memory.threshold`, `config/lwueNrOWUBYJX:802-806` | **decline: gateway-only.** They are written from a per-model enum (`config/kYktyHCkPVCBdJC`) whose entries are UDM/UDR/UCG/UXG — `ifPresent`, so an AP identity gets nothing. The firmware's `system.monitor.<x>.{host,poll_interval,status}` ping monitor has no emitter whatsoever. |
+
+#### `radio.<n>.acsdfs` / `radio.<n>.blklst` — the site's auto-channel limits
+
+Both keys sit inside one `if (hyFnQ2.supportsAcsDfs())` in
+`com/ubnt/service/config/ubntconf/PFljhxhmKJyhpeIhf`, and `supportsAcsDfs()` is
+`hasWifiCapability2(16)`. So one unclaimed capability bit was hiding two real settings:
+
+```java
+if (hyFnQ2.supportsAcsDfs()) {
+    // BAND_NA only: enabled/disabled from radios_configuration[radio=na].dfs
+    OWIoHe.kCNoUwYXLXMAUl(stringBuilder, "radio." + n, "acsdfs", string);
+    if ("auto".equals(channel)) {           // only while the radio is on Auto
+        // channels_blacklist, grouped by band
+        OWIoHe.kCNoUwYXLXMAUl(stringBuilder, "radio." + n, "blklst", String.join(",", set));
+    }
+}
+```
+
+Both come from the site's **Radio AI** setting (`get/setting/radio_ai`): `radios_configuration`
+carries a `dfs` boolean per band, `channels_blacklist` a list of `{radio, channel,
+channel_width}`. A default site is not empty — the `conservative` preset blacklists every
+2.4 GHz channel but 1/6/11, which is what the lab controller shipped with.
+
+U7LR 6.8.2's side, from `sbin/ubntbox`: `blklst` becomes `wifitool <dev> block_acs_channel
+<list>` (and `block_acs_channel 0` to clear), and `acsdfs=disabled` the same call over the
+hardcoded DFS list `52,56,…,144`. Neighbouring strings show the firmware also narrows 2.4 GHz
+ACS to 1/6/11 unless `acs_2g_allch` is set, which has no controller key.
+
+openUF's equivalents, both `wifi-device` options read by hostapd's ACS:
+
+- `acsdfs` → `acs_exclude_dfs` (hostapd's own flag; written as explicit 0/1).
+- `blklst` → `chanlist`. hostapd has **no blacklist**, only the candidate list, so the
+  blacklist is inverted against the channels the radio's regdomain allows, taken from the
+  `iw phy` output `ucihelper.phy_caps` already parses (minus `no IR` channels: an AP may not
+  beacon there). `openuf_chanlist` is the ledger that lets the list be removed again when the
+  key vanishes from the wire, without touching a hand-set `chanlist`.
+
+Three cases where openUF deliberately writes nothing, each logged: a blacklist that excludes
+nothing this radio could have used (no churn), a blacklist covering the whole band (an ACS
+with no candidate never comes up), and a radio on Auto whose UCI declares no `band`/`hwmode`
+— `band_for_device` would fall back to the channel number, and `auto` is not one, so its
+answer is "na" for every radio, which would hand a 2.4 GHz radio a list of 5 GHz channels.
+
+Lab, 10.6.106, 2026-10-27: claiming the bit made both keys appear, and flipping the site's
+DFS switch produced a **one-key diff** (`radio.2.acsdfs` `disabled` → `enabled`, nothing else
+in 668 lines moved) with `acs_exclude_dfs` following it 1 → 0. `blklst` arrives unsorted
+(`12,2,13,3,…` — a Java `Set`), which is why the parser keeps what it is given and the
+ordering comes from the band's own channel list. `tools/cfg-coverage.lua` puts both in
+**consumed**.
+
+Hardware, 2026-10-27, both boards: the real site has DFS off for auto-channel, and after a
+Force Provision `acs_exclude_dfs=1` was in UCI on the 5 GHz radio of each AP and in its live
+`/var/run/hostapd-phy*.conf` (the 2.4 GHz BSS carries the schema default 0, which
+`hostapd.uc` emits for every radio). Both radios here are pinned, so no `blklst` is pushed at
+all; the inversion was instead run against each board's real channel list through the real
+`rf_config` with a mock cursor, giving `36,40,44,48,149,153,157,161,165,169,173` for a DFS
+blacklist on 5 GHz — exactly the non-DFS channels CZ allows, on ath10k and on mt76 — and the
+teardown clearing both the list and its stamp. Not claimed: no radio here runs on Auto, so no
+ACS has actually chosen under the restriction.
+
 ### The nightly dfs-reset, and the controller's cron verbs (jonasevcik ba3dec5, 2026-10-27)
 
 **In this tree** `refresh-walled-garden` is declined and logged: the walled garden is not

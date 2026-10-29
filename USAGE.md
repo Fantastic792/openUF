@@ -1447,6 +1447,45 @@ only `ubus subscribe` works), `logread | grep BEACON-REQ-TX-STATUS` shows reques
 out, and `/tmp/openuf-rrm.jsonl` is the spool, drained on every inform. Rows sourced this
 way show a blank WiFi Name and Security.
 
+**Auto-channel limits: the site's DFS switch and channel blacklist** (from jonasevcik/openUF).
+
+Settings → Radios carries two things that only matter while a radio is on **Auto**: whether
+auto-channel may land on a DFS channel, and a per-band list of channels it must not pick.
+The controller sends both per radio, and only to a device claiming `wifi_caps2` `0x10`
+(`supportsAcsDfs()`), which openUF does since 2026-10-27.
+
+| Wire key | When it is sent | UCI (`wifi-device`) | hostapd |
+|---|---|---|---|
+| `radio.<n>.acsdfs=enabled\|disabled` | 5 GHz radio, always | `acs_exclude_dfs` 0/1 | `acs_exclude_dfs` |
+| `radio.<n>.blklst=12,2,13,…` | any radio, only while its channel is `auto` | `chanlist` (+ `openuf_chanlist`) | `chanlist` |
+
+`blklst` is a **blacklist**, and hostapd has no blacklist — only `chanlist`, the list ACS may
+choose from. So openUF inverts it against the channels the radio's regdomain actually allows,
+read from `iw phy` (which already drops what the domain forbids, and openUF drops "no IR"
+channels on top: an AP may not beacon there). The order the controller sends does not matter;
+the list is written ascending.
+
+Three deliberate refusals, each logged:
+
+- **A blacklist that excludes nothing the radio could have used** (say channel 14 in a
+  regdomain without it) writes no `chanlist` at all, instead of churning the band's whole
+  channel list into UCI on every push.
+- **Every channel of the band blacklisted** leaves auto-channel unrestricted: an ACS with no
+  candidate is a radio that does not come up.
+- **A radio on Auto whose UCI declares no `band`/`hwmode`** is left alone. The band would
+  have to be guessed from the channel, and `auto` is not a channel — the guess answers
+  "5 GHz" for every radio, which would hand a 2.4 GHz radio a list of 5 GHz channels.
+
+`openuf_chanlist` records that openUF wrote the list, so when the site clears its blacklist
+(the key simply vanishes) the `chanlist` is removed again — while a `chanlist` set by hand on
+an unstamped radio is never touched.
+
+Both keys are inert on a radio pinned to a fixed channel: they are written, visible in UCI,
+and read by nothing until that radio is switched back to Auto. U7LR 6.8.2 does the same work
+through `wifitool <dev> block_acs_channel`, with the DFS list hardcoded for `acsdfs=disabled`.
+
+**A board's own DFS exclusion wins.** A profile that sets `acs_exclude_dfs` in `dev.conf.radio` (the JioRouter maps) keeps DFS out of auto-channel even when the site allows DFS: the site can add the restriction, never lift a board's.
+
 **DFS radar reporting** (from jonasevcik/openUF). On a DFS channel (52–144) the radio must
 leave the channel for 30 minutes when it detects radar. hostapd does that by itself; what was
 missing is telling the controller, which otherwise logs nothing and the channel change looks
@@ -2102,6 +2141,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | A 5 GHz radio has no SSID after a config push; `logread` shows `hostapd.add_iface failed` | `logread \| grep -B3 "errors found"`. *"Cannot enable IEEE 802.11h without IEEE 802.11d enabled"* means `ieee80211d=0` on a 5 GHz radio, which openUF builds before 2026-10-29 could write when a WLAN turned the Country IE off; upgrade, or `uci set wireless.<radio>.ieee80211d=1; uci commit; wifi` |
 | A 5 GHz radio left its DFS channel and the controller logged nothing | The radar event comes off hostapd's control socket, so it needs a monitor attached: `pgrep -f '[h]ostapd_cli .*-a /tmp/openuf-bresp.sh'` must list one per BSS, and `hostapd-utils` must be installed. `grep DFS- /tmp/openuf-rrm.jsonl` right after a hostapd start on a DFS channel should show the CAC pair; if that is empty the monitors are not running |
 | A 5 GHz radio is on the wrong channel after a radar hit and stays there | `sed -n '/openuf-cron-begin/,/openuf-cron-end/p' /etc/crontabs/root` must carry `0 2 * * * /usr/bin/syswrapper.sh dfs-reset`; if it does not, the controller is not pushing the job: it only does so for a radio pinned to a DFS channel the site's country allows (`uci get wireless.<radio>.channel` must be a number, not `auto`). Run `/usr/bin/syswrapper.sh dfs-reset` to ask for it now; `logread \| grep dfs-reset` gives the reason it was left alone. The commonest is the non-occupancy list: `iw phy phy<N> channels` shows the channel as `DFS state: unavailable` with the time left |
+| Auto-channel still picks a DFS or blacklisted channel | Both keys only arrive for a radio whose channel is `auto`, and the blacklist half only then. `uci show wireless | grep -E "acs_exclude_dfs|chanlist"` shows what landed: the 5 GHz radio should carry `acs_exclude_dfs` matching Settings → Radios, and a radio on Auto in a site with a channel blacklist should carry a `chanlist` plus `openuf_chanlist=1`. Missing entirely: the controller is not sending them — `tools/heartbeat-probe.lua` must show `wifi_caps2` with bit `0x10` set (`0x2070` with roam reports on), and new wifi-device options need a **Force Provision**. Present in UCI but ACS ignores them: `grep -E "acs_exclude_dfs|chanlist" /var/run/hostapd-phy*.conf` — options reach hostapd only on a WiFi reload. `logread | grep -E "channel blacklist|auto-channel unrestricted"` names the three cases where openUF deliberately writes nothing (§ Auto-channel limits) |
 | Band Steering has no effect | `usteer` not installed or not running — `/etc/init.d/usteer status` |
 | Clients are steered 2.4 → 5 GHz with Band Steering off | `ubus call usteer get_config` must show `band_steering_interval: 0`. Any other value means usteer's default applies, and it steers. openUF writes the 0 on the next WiFi config push. Force Provision if it is missing |
 | Log says `device Band Steering mode "equal" is not supported` | The AP's own Band Steering is set to Balance. usteer can only balance by rejecting associations, so openUF does not map it. Use Prefer 5G or the per-WLAN toggle |

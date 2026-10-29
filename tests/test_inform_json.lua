@@ -2072,7 +2072,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: wifi_caps2 claims exactly advertise-name (0x40), assisted roaming (0x20), quick scan (0x80), monitor RF scan (0x2) and multicast suppression (0x400000)",
+		name = "inform json: wifi_caps2 claims exactly advertise-name (0x40), assisted roaming (0x20), quick scan (0x80), monitor RF scan (0x2), ACS DFS (0x10) and multicast suppression (0x400000)",
 		fn = function()
 			-- Confirmed via decompiling the controller: Device.
 			-- supportAdvertisingDeviceNameInBeacon() is hasWifiCapability2(64)
@@ -2082,11 +2082,13 @@ return {
 			-- is hasWifiCapability2(32) and gates wireless.<n>.btm_disassoc
 			-- (Roaming Assistant). supportsMulticastSuppressor() is
 			-- hasWifiCapability2(0x400000) and gates wireless.<n>.multicast.suppressor
-			-- plus, on Aggressive, wireless.<n>.bcfilt.bypass_types. No other bit is
+			-- plus, on Aggressive, wireless.<n>.bcfilt.bypass_types. supportsAcsDfs() is
+			-- hasWifiCapability2(16) and gates radio.<n>.acsdfs and radio.<n>.blklst,
+			-- the site's auto-channel DFS switch and channel blacklist. No other bit is
 			-- claimed (see PROTOCOL-VALIDATION.md for the ones this device does not
 			-- implement).
 			local d = build()
-			assert_eq(d.wifi_caps2, 0x4000E2, "wifi_caps2 is exactly 0x400000|0x40|0x20|0x80|0x2")
+			assert_eq(d.wifi_caps2, 0x4000F2, "wifi_caps2 is exactly 0x400000|0x80|0x40|0x20|0x10|0x2")
 		end
 	},
 	{
@@ -2696,7 +2698,7 @@ return {
 			local d = cjson.decode(inform.build_json(st, {config = {}}, ufhw))
 			assert_eq(d.fw_caps, 0x1110 - 0x80000000,
 				"shipped fw_caps without an override (0x1000: multi-block WLAN schedule; sign bit: MAC-based VLANs)")
-			assert_eq(d.wifi_caps2, 0x4000E2, "shipped wifi_caps2 without an override")
+			assert_eq(d.wifi_caps2, 0x4000F2, "shipped wifi_caps2 without an override")
 			assert_eq(d.wifi_caps, 0x1C + 0x801, "shipped wifi_caps without an override (mesh bits by default)")
 			d = cjson.decode(inform.build_json(st,
 				{config = {debug_caps = {wifi_caps = 0x2, wifi_caps2 = 0x41}}}, ufhw))
@@ -3117,16 +3119,16 @@ return {
 		-- asked for connection notifs and conf.lua has not vetoed them.
 		name = "inform json: wifi_caps2 adds 0x2000 only while roam reports are sent",
 		fn = function()
-			-- This tree's base is 0x4000E2 (multicast suppression 0x400000, 0x60 + the Quick/Airtime scan bits 0x2
+			-- This tree's base is 0x4000F2 (multicast suppression 0x400000, 0x60 + the Quick/Airtime scan bits 0x2
 			-- and 0x80 it also claims); the roam bit rides on top of that.
-			assert_eq(build().wifi_caps2, 0x4000E2, "not asked: no claim")
+			assert_eq(build().wifi_caps2, 0x4000F2, "not asked: no claim")
 			inject_sysinfo()
 			local st = {authkey = state.DEFAULT_KEY, inform_url = "http://10.0.0.1:8080/inform",
 				mac = "aa:bb:cc:dd:ee:ff", notif_assoc_stat = true}
 			local d = cjson.decode(inform.build_json(st, {config = {}}, ufhw))
-			assert_eq(d.wifi_caps2, 0x4020E2, "asked: claimed")
+			assert_eq(d.wifi_caps2, 0x4020F2, "asked: claimed")
 			d = cjson.decode(inform.build_json(st, {config = {assoc_tracker = false}}, ufhw))
-			assert_eq(d.wifi_caps2, 0x4000E2, "assoc_tracker = false: no claim")
+			assert_eq(d.wifi_caps2, 0x4000F2, "assoc_tracker = false: no claim")
 		end
 	},
 	{

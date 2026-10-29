@@ -323,6 +323,7 @@ Compared with [yesrab/openUF](https://github.com/yesrab/openUF) `main` at `6277b
 | Multicast Suppression | Conservative pushed nothing; Aggressive came without its ARP/DHCP bypass | Both modes, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | MAC-based VLANs (Virtual Network Override) | Not claimed, so one openUF AP turned the feature off for the whole site | Claimed and applied through hostapd's accept-MAC list, from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | TDLS, the Country IE and the pairwise cipher | Sent by the controller and dropped | Applied; the cipher only where the radio supports it, and the Country IE kept on for 5 GHz, where turning it off takes the radio down; from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
+| Auto-channel limits | The site's DFS switch and channel blacklist were never sent to the AP | Applied to hostapd's auto-channel; a board profile's DFS exclusion still wins; from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | DFS radar | A radar hit moved the radio off its channel, the controller logged nothing, and nothing ever moved it back | Reported to the controller as the AP's radar event, and the controller's nightly `dfs-reset` puts a pinned radio back; from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | STUN | Never looked the controller's name up again | Looks it up again after 3 unanswered requests |
 | Package upgrade | Left the old daemon running | Restarts openUF and the translator |
