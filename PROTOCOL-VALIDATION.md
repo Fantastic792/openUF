@@ -2970,6 +2970,28 @@ stayed down with `Cannot enable IEEE 802.11h without IEEE 802.11d enabled` /
 `hostapd.add_iface failed`, the 2.4 GHz radio unaffected. The same WLAN with the field unset
 had provisioned cleanly, which is why the first look found nothing.
 
+**The fix, in the same lab.** With `f6dd839` on both APs and the WLAN still asking for the
+Country IE off, the next push brought the 5 GHz radio back on its own: `radio1.ieee80211d='1'`
+beside `ieee80211h=1` in the live config, `radio0` (2.4 GHz) honouring `'0'`, every SSID up,
+and the log line `Country IE off is not applicable on 5 GHz` once per radio.
+
+**The radar event, end to end, 2026-10-29.** The AP's 5 GHz radio pinned to channel 100 at
+80 MHz through the controller, the site's country set to the US for the run: CAC completed in
+60 s, then `dfs_simulate_radar` on the simulated radio. hostapd logged `DFS-RADAR-DETECTED
+freq=5500` on two BSS sockets and moved to channel 36; openUF logged one `DFS radar detected on
+channel 100 (5500 MHz) on phy1-ap0 -- reported to the controller`; and the controller's own
+system log (`POST /v2/api/site/<site>/system-log/all`) holds an `AP_DETECTED_RADAR_V2` entry for
+that AP with `CHANNEL` 100. That is the row jonasevcik's lab could not see.
+
+**Under India's regulatory domain no CAC can start at all.** With the site's country India,
+the same channel gave `DFS start_dfs_cac() failed, -1` and the radio stayed down. wireless-regdb
+lists `country IN: DFS-UNSET` (radar channels 52–144, but no DFS region), and the kernel's
+`nl80211_start_radar_detection` returns `-EINVAL` when `reg_get_dfs_region()` is
+`NL80211_DFS_UNSET` (net/wireless/nl80211.c, 6.12). So on any OpenWrt AP set to India, DFS
+channels cannot be used whatever the driver. ⚠️ The JioRouter profiles blame the same log line
+on the MT7986 driver; that was measured under IN, so it may be the regulatory domain instead.
+To confirm on the hardware: `iw reg get` on the AP, and the CAC under a country with a DFS region.
+
 Their evidence follows, as they wrote it.
 
 **`ieee80211d='0'` on a 5 GHz radio is a production outage. Corrected 2026-10-27.**
