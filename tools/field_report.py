@@ -26,6 +26,7 @@ FEATURES = {
     "forget": "Forget in the controller, then adopt again",
     "wpa2": "A WPA2 network, a client joined",
     "wpa3": "A WPA3 (SAE) or WPA2/WPA3 network, a client joined with SAE",
+    "wpa-enterprise": "A WPA-Enterprise (802.1X) network, a client joined through a RADIUS server",
     "owe": "Enhanced Open (OWE), a client joined with OWE",
     "ppsk": "Private pre-shared keys: each key's client on its own VLAN",
     "vlan-ssid": "A WiFi network on a tagged VLAN, a client got an address on it",

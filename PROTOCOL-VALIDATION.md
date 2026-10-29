@@ -1692,7 +1692,6 @@ The two schedule bits are not claimed because openUF implements no WLAN Schedule
 openUF parses none of them. Claim both when the feature is built.
 
 - **No OpenWrt equivalent, or out of scope:**
-  - `radio_caps2` `0x4`: WPA3-Enterprise-192.
   - `radio_caps2` `0x400` and `wifi_caps2` `0x1`/`0x4000`/`0x8000`: MLO and Mesh-MLO.
   - `radio_caps` `0x20000`: `radio.<n>.hard_noisefloor.*` / sensitivity level, a QCA RX-sensitivity setting.
   - `wifi_caps` `0x4000`/`0x8000`: multi-vport and Element. (`0x1`/`0x80`/`0x800` — vwire, mesh, meshv3 — moved to the gated table above on 2026-10-03; see § Wireless uplink.)
@@ -1700,6 +1699,24 @@ openUF parses none of them. Claim both when the feature is built.
   - `wifi_caps2` `0x4` Green AP, `0x10` ACS-DFS, `0x200` neighbour-in-scan, `0x20000` (an AP-group check, purpose unclear) (`0x80` quick scan and `0x2` monitor RF scan are claimed since 2026-10-03).
   - `fw_caps` `0x800000` Hotspot 2.0 (such a WLAN is skipped without it) and `0x20000000` RADIUS `filter_id`.
   - `fw2_caps` `0x80000` RadSec, `0x20` `port_table.mac_table_ipv6`, `0x80` device command retry.
+Two entries moved out of that list on 2026-10-26, after reading the 6.8.2 firmware's own
+hostapd generator and the 10.6.106 jar:
+
+- **`radio_caps2` `0x4` (WPA3-Enterprise-192) is not "no OpenWrt equivalent".** OpenWrt's
+  live ucode generator has `encryption=wpa3-192` → `auth_type=eap192` →
+  `wpa_key_mgmt=WPA-EAP-SUITE-B-192` with GCMP-256, read out of
+  `/usr/share/ucode/wifi/iface.uc` on an Archer C5 (25.12, `wpad-mbedtls`) on 2026-10-26.
+  openUF maps that value, but **still does not claim the bit**: without it the controller
+  never sends a 192-bit WLAN, so the mapping is inert and costs nothing, whereas claiming it
+  would assert a Suite-B path nothing has exercised.
+- **`wifi_caps` `0x40` (`bga_filter`) is implemented already, in the other encoding.** The
+  ebtables emitter (`ubntconf/YcZSaTCMOYFEMGE:201`) computes
+  `emit_bpdu_rules = !config.forward_bpdu && !hasWifiCapability(64)`, and `l2guard.lua`
+  parses exactly those rules (`-t nat -A PREROUTING --in-interface <dev> -d BGA -j DROP`
+  and its POSTROUTING twin). Claiming the bit would make the controller **stop** sending
+  them and send a single `bga_filter` key instead: no new capability, and a regression risk
+  if the new key were mis-parsed. Left unclaimed deliberately, not for want of an equivalent.
+
 - **Multicast Suppressor** (`wifi_caps2` `0x400000` → `wireless.<n>.multicast.suppressor`):
   could be enforced in nft like the Multicast/Broadcast Blocker, but it is the same feature
   class that breaks casting. Low priority.
@@ -2960,6 +2977,99 @@ before this change:
 
 All SSIDs came up on both builds, with no errors. The saving grows with the number of WLANs,
 since the old code committed once per VAP.
+
+### WPA-Enterprise: `aaa.<n>.radius.*` (jonasevcik 9400e68, 2026-10-26)
+
+Their evidence, as they wrote it; this project's lab run follows below it.
+
+
+An earlier revision of this document, and of `inform.lua`, stated that "the wire protocol
+carries no RADIUS server, port or secret" and skipped every WPA-Enterprise WLAN on that
+basis. **That was wrong**, and the mistake has a clear cause: the capture it rested on was
+taken from a site with no RADIUS profile configured, where the block is simply absent —
+the recurring trap this document warns about, treating a block's absence as the
+discriminator.
+
+Emitter: `com/ubnt/service/config/VAZShipWTNxlo` (controller 10.6.106, CFR). Consumer on a
+genuine AP: the hostapd generator inside `sbin/ubntbox` (firmware-confirmed for U7LR 6.8.2),
+which writes `auth_server_addr`/`auth_server_port`/`auth_server_shared_secret`, the `acct`
+twins, `radius_acct_interim_interval`, `dynamic_vlan` and `nas_identifier` from exactly
+these keys. **The eligibility filter (`ubntconf/LsyaJoEysWb`) applies no device capability
+gate to a WPA2-Enterprise WLAN**, so a controller has always been pushing this to openUF.
+
+| Key | Meaning |
+|---|---|
+| `radius.auth.<k>.{ip,port,secret}` | Authentication servers, 1-based, in the RADIUS profile's order. Port defaults to 1812. |
+| `radius.acct.<k>.{ip,port,secret}` | Accounting servers, same shape. Port defaults to 1813. Present only with `accounting_enabled`. |
+| `radius.{auth,acct}.<k>.tls` | RadSec. The certificates themselves are **not** on the wire — only filenames of files transferred by another channel, so the server cannot be completed from the push alone. |
+| `interim_update.status` / `.interval` | Interim accounting updates; the interval is seconds (default 3600). |
+| `dynamic_vlan` | `0`/`1`/`2` from the profile's "RADIUS assigned VLAN" mode (off / optional / required). |
+| `nas_identifier` | The profile's NAS id, when set. |
+| `radius.das.*`, `radius.dad.*` | DAS/CoA (disconnect/change-of-authorization). Parsed by nothing; openUF derives no field from them. |
+| `radius.macacl.status` | RADIUS **MAC authentication**, a separate control. Already flagged as a decoy in the MAC-filter row of the feature matrix. |
+
+Captured verbatim in the lab on 2026-10-26 (controller 10.6.106, a `wpaeap` wlanconf with
+two auth servers, one acct server, interim updates at 900 s and `vlan_wlan_mode: required`;
+addresses scrubbed to the documentation range):
+
+```
+aaa.1.wpa=2
+aaa.1.wpa.key.1.mgmt=WPA-EAP
+aaa.1.wpa.psk=letmeinnow
+aaa.1.radius.auth.1.ip=192.0.2.10     aaa.1.radius.auth.1.port=1812
+aaa.1.radius.auth.1.secret=…          aaa.1.radius.auth.2.ip=192.0.2.11
+aaa.1.radius.auth.2.port=1812         aaa.1.radius.auth.2.secret=…
+aaa.1.radius.acct.1.ip=192.0.2.10     aaa.1.radius.acct.1.port=1813
+aaa.1.radius.acct.1.secret=…          aaa.1.interim_update.status=enabled
+aaa.1.interim_update.interval=900     aaa.1.dynamic_vlan=2
+aaa.1.radius.macacl.status=disabled   aaa.1.hs20.status=disabled
+wireless.1.security=none
+```
+
+Two decoys in that block, both now pinned by tests:
+
+- **`aaa.<n>.wpa.psk` is still sent on an EAP WLAN** — `letmeinnow`, a dummy the controller
+  fills in. Carrying it into UCI would give the BSS a passphrase it must not have, so
+  openUF forces `x_passphrase = nil` on an Enterprise WLAN and refuses to write a `key` for
+  any encryption outside an explicit pre-shared-key allow-set.
+- **`wireless.<n>.security=none` on the same push.** The discriminator is
+  `aaa.<n>.wpa.key.<k>.mgmt`, as it is for SAE.
+
+OpenWrt side, read on an Archer C5 (ath79, 25.12, `wpad-mbedtls`, hostapd v2.12-devel) on
+2026-10-26. On 25.12 `/lib/netifd/wireless/mac80211.sh` is itself a ucode script importing
+`wifi.iface`, so `/usr/share/ucode/wifi/` is the live generator and `hostapd.sh` is dead
+weight. Calling the generator's own `parse_encryption()`/`wpa_key_mgmt()` on the device:
+
+| UCI `encryption` | `auth_type` | `wpa` | pairwise | `wpa_key_mgmt` (with 802.11r) |
+|---|---|---|---|---|
+| `wpa2+ccmp` | `eap` | 2 | CCMP | `WPA-EAP` (`+ FT-EAP`) |
+| `wpa3` | `eap2` | 2 | CCMP | `WPA-EAP-SHA256` (`+ FT-EAP`) |
+| `wpa3-mixed` | `eap-eap2` | 2 | CCMP | `WPA-EAP-SHA256 FT-EAP WPA-EAP` |
+| `wpa3-192` | `eap192` | 2 | GCMP-256 | `WPA-EAP-SUITE-B-192` (`+ FT-EAP-SHA384`) |
+| `eap` | `eap` | **0** | — | — |
+
+That last row is the trap: `encryption=eap` sets the right `auth_type` and then matches no
+`config.wpa` wildcard, so the BSS comes up with `wpa=0` — an open network where an
+Enterprise one was asked for. openUF maps the four working values and never that one.
+
+`ap.uc`'s EAP branch writes `ieee8021x=1`, `eapol_version`, the key-mgmt list and (unless
+`eap_server` is set) calls `iface_authentication_server()`/`iface_accounting_server()`
+itself, so openUF writes none of those — only the server options, the interim interval, the
+NAS id and `dynamic_vlan`. It also sets `vlan_possible = 1`, which is what makes
+`dynamic_vlan` reach hostapd at all. `iface_ppsk()` is gated to non-EAP auth types, so an
+EAP VAP's `auth_server_addr` is not re-consumed by the PPSK path.
+
+Two schema limits, both stated as narrowings in USAGE.md rather than worked around:
+`auth_server_port`/`auth_server_shared_secret` are written **once** per server list, so a
+server with its own port or secret cannot be expressed and is dropped with a log; and
+openUF writes no `wifi-vlan` section for a RADIUS-assigned VLAN (the push enumerates none),
+so with `dynamic_vlan=2` hostapd refuses a station assigned a VLAN this AP has no network
+for. The schema's `auth_server`/`auth_port`/`auth_secret`/`acct_interval`/`nasid` are
+`"type": "alias"` entries; openUF writes the canonical names `ap.uc` reads literally.
+
+`radio_caps2` `0x4` (WPA3-Enterprise-192) stays **unclaimed** — see
+[Capability bitmasks](#capability-bitmasks). WPA3-Enterprise needs only the SAE bit `0x1`;
+WPA2-Enterprise needs no bit at all.
 
 ### The site's auto-channel DFS switch and channel blacklist (jonasevcik 6883b20, 2026-10-27)
 

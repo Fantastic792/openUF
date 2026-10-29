@@ -1169,7 +1169,7 @@ Settings carried through from the controller:
 | Enhanced Open (OWE) | `encryption=owe`, from `wpa.key.1.mgmt=OWE` with no `aaa.<n>.wpa`. **Transition mode** arrives as two VAPs per radio with the same SSID (open + hidden OWE, linked by `owe_devname`). openUF writes them as one section with `owe_transition=1`, and OpenWrt's ucode generator (24.10+) builds both BSSes from it, naming the hidden one `<ssid>OWE`. Depends on openUF advertising `radio_caps2` bit `0x8`, which it does when `hostapd -vowe` passes |
 | Private Pre-Shared Keys | One `wifi-station` section per key (`openuf_<vap>_psk<k>`: `iface` = the VAP's section, `mac` = `00:00:00:00:00:00`, `key`, `vid` unless the key's network is VLAN 1) and one `wifi-vlan` per VLAN (`openuf_<vap>_vlan<vid>`: `name`/`vid` = the VLAN id, `network` = `openuf_vlan<vid>`), plus `dynamic_vlan=1` on the VAP, from `aaa.<n>.wpa.psk_file.<k>.psk`/`.vlanid`. OpenWrt turns them into hostapd's `wpa_psk_file` and `vlan_file`; the client's netdev is `<vap ifname>-<vid>`. The WLAN's own `wpa.psk` (a random passphrase the controller generates) stays the section's `key`. Needs a hostapd with VLAN support (the full `wpad-*` builds have it) and a `lan_cpueth` to build the VLANs on. `psk_radius=2` (keys from RADIUS only) skips the WLAN |
 | MAC-based VLANs ("Virtual Network Override") | `aaa.<n>.accept_mac.<k>.{mac,vlanid}` → one `<mac> <vlanid>` line of a hostapd **accept-MAC list**, plus a `wifi-vlan` section per VLAN (`openuf_<vap>_vlan<vid>`, shared with the private-pre-shared-key path) and `dynamic_vlan=1` on the VAP so OpenWrt emits `vlan_no_bridge`. The list is openUF's own file, `/etc/openuf/macvlan-<wifi-iface section>`, rebuilt on every push and removed when the WLAN has no overrides. How it reaches hostapd depends on the WLAN's MAC Address Filter: with **no filter** a raw `accept_mac_file=` line (no `macaddr_acl`, so unlisted clients still join); with **`macfilter=allow`** the schema's `macfile` option, with those addresses dropped from `maclist` so each appears once, and any override the allow list does not permit skipped; with **`macfilter=deny`** the raw line minus any address on the deny list. `accept_mac.status` is not read: the entries are the whole signal. Needs `fw_caps 0x80000000` (claimed) plus the site-wide quorum below, and a `lan_cpueth` to build the VLANs on |
-| WPA-Enterprise (802.1X) | **not supported** — the WLAN is skipped and logged. The wire protocol carries no RADIUS server/port/secret to write, so there is nothing openUF could provision |
+| WPA-Enterprise (802.1X / RADIUS) | ⚠️ Wire → UCI → the device's own hostapd generator confirmed; **no client has authenticated yet**. The controller does push the servers (`aaa.<n>.radius.{auth,acct}.<k>.{ip,port,secret}`, `interim_update.*`, `dynamic_vlan`, `nas_identifier`) — an earlier release skipped such WLANs on the belief that it did not. WPA2, WPA3, WPA2/WPA3-transition and 192-bit Enterprise all map to an encryption the OpenWrt generator turns into `wpa_key_mgmt=WPA-EAP`/`-SHA256`/`-SUITE-B-192`, and 802.11r adds FT-EAP for free. The dummy `wpa.psk` the controller still sends on an EAP WLAN is dropped, so the BSS never carries a passphrase. **Trades**: one port and one shared secret per server list (OpenWrt's schema has no per-server pair — a server that differs is dropped with a log); RadSec/TLS servers are dropped rather than contacted in the clear; DAS/CoA and RADIUS MAC auth are not implemented; and with "RADIUS assigned VLAN: required" openUF writes `dynamic_vlan=2` but no VLAN map, so hostapd refuses a station whose assigned VLAN this AP has no network for — failing closed rather than putting it on the wrong network. A basic `wpad` has no RADIUS client; openUF logs a warning and provisions anyway, since the controller applies no capability gate |
 | PMF (802.11w) | `ieee80211w` (0 disabled / 1 optional / 2 required) |
 | Fast Roaming (802.11r) | `ieee80211r`. The controller carries **two** toggles — `ft.status` for the WLAN and `wpa3.ft.status` for the SAE akm alone (SAE pushes only). OpenWrt has one switch feeding hostapd's `key_mgmt`, and on `sae-mixed` it yields FT-PSK *and* FT-SAE together, so FT is enabled if **either** asks for it and a disagreement is logged. Both keys arrive `disabled` on a WPA3-only WLAN unless openUF advertises `radio_caps2` bit `0x2`, which it does wherever it advertises `0x1` |
 | BSS Transition (802.11v) | `bss_transition` — **needs a full `wpad` build** |
@@ -1224,6 +1224,34 @@ uses) instead of a static default.
 > else is discarded before it reaches `/etc/config`. openUF's sanitizer used to keep `-`,
 > so an SSID with a hyphen cost the entire WLAN with nothing logged anywhere (found by
 > upstream, live, with an SSID of `openuf-verify`).
+
+**WPA-Enterprise: two narrowings worth knowing before you enable it.** Both are
+limits of what the UCI schema can express, not of the RADIUS config the
+controller sends.
+
+- **One port and one shared secret per server list.** OpenWrt's generator writes
+  `auth_server_port`/`auth_server_shared_secret` once and reuses them for every
+  address in `auth_server_addr`, so two servers that differ in either cannot be
+  expressed. openUF takes the port and secret from the **first** server, puts
+  every later server that agrees into the list, and drops the rest with a log
+  line naming the index (never the secret). Same for accounting. A RadSec/TLS
+  server (`radius.*.tls`) is dropped too: the controller sends only the
+  *filenames* of certificates it transfers by another channel, so the server
+  cannot be completed, and treating it as plain RADIUS would put the shared
+  secret on the wire in the clear. A WLAN whose every auth server is dropped is
+  skipped loudly rather than brought up as a BSS nobody can join.
+- **A RADIUS-assigned VLAN only works for VLANs this AP already has.** openUF
+  passes the profile's mode through as `dynamic_vlan` (1 optional / 2 required)
+  but writes no `wifi-vlan` section for it — the push enumerates no VLANs, so
+  there is nothing to build them from. hostapd's VLAN map therefore holds only
+  the VLANs the WLAN itself or a private pre-shared key brought. With
+  "RADIUS assigned VLAN: required" a station assigned anything else is refused.
+  That is deliberate: failing closed beats putting the client on the wrong
+  network, past the segmentation the setting exists for.
+
+Not implemented, and silently ignored rather than half-applied: DAS/CoA
+(`radius.das.*`/`radius.dad.*`), RADIUS MAC authentication
+(`radius.macacl.*`), and RadSec certificates.
 
 **Fast Roaming (802.11r) and the `ft_psk_generate_local` trap.** openUF sets
 `ieee80211r`, a `mobility_domain` derived from the SSID (so every AP computes the same one
@@ -1485,6 +1513,34 @@ and read by nothing until that radio is switched back to Auto. U7LR 6.8.2 does t
 through `wifitool <dev> block_acs_channel`, with the DFS list hardcoded for `acsdfs=disabled`.
 
 **A board's own DFS exclusion wins.** A profile that sets `acs_exclude_dfs` in `dev.conf.radio` (the JioRouter maps) keeps DFS out of auto-channel even when the site allows DFS: the site can add the restriction, never lift a board's.
+
+**WPA-Enterprise (from jonasevcik/openUF): two narrowings worth knowing before you enable it.** Both are
+limits of what the UCI schema can express, not of the RADIUS config the
+controller sends.
+
+- **One port and one shared secret per server list.** OpenWrt's generator writes
+  `auth_server_port`/`auth_server_shared_secret` once and reuses them for every
+  address in `auth_server_addr`, so two servers that differ in either cannot be
+  expressed. openUF takes the port and secret from the **first** server, puts
+  every later server that agrees into the list, and drops the rest with a log
+  line naming the index (never the secret). Same for accounting. A RadSec/TLS
+  server (`radius.*.tls`) is dropped too: the controller sends only the
+  *filenames* of certificates it transfers by another channel, so the server
+  cannot be completed, and treating it as plain RADIUS would put the shared
+  secret on the wire in the clear. A WLAN whose every auth server is dropped is
+  skipped loudly rather than brought up as a BSS nobody can join.
+- **A RADIUS-assigned VLAN only works for VLANs this AP already has.** openUF
+  passes the profile's mode through as `dynamic_vlan` (1 optional / 2 required)
+  but writes no `wifi-vlan` section for it — the push enumerates no VLANs, so
+  there is nothing to build them from. hostapd's VLAN map therefore holds only
+  the VLANs the WLAN itself or a private pre-shared key brought. With
+  "RADIUS assigned VLAN: required" a station assigned anything else is refused.
+  That is deliberate: failing closed beats putting the client on the wrong
+  network, past the segmentation the setting exists for.
+
+Not implemented, and silently ignored rather than half-applied: DAS/CoA
+(`radius.das.*`/`radius.dad.*`), RADIUS MAC authentication
+(`radius.macacl.*`), and RadSec certificates.
 
 **DFS radar reporting** (from jonasevcik/openUF). On a DFS channel (52–144) the radio must
 leave the channel for 30 minutes when it detects radar. hostapd does that by itself; what was
@@ -2142,6 +2198,10 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | A 5 GHz radio left its DFS channel and the controller logged nothing | The radar event comes off hostapd's control socket, so it needs a monitor attached: `pgrep -f '[h]ostapd_cli .*-a /tmp/openuf-bresp.sh'` must list one per BSS, and `hostapd-utils` must be installed. `grep DFS- /tmp/openuf-rrm.jsonl` right after a hostapd start on a DFS channel should show the CAC pair; if that is empty the monitors are not running |
 | A 5 GHz radio is on the wrong channel after a radar hit and stays there | `sed -n '/openuf-cron-begin/,/openuf-cron-end/p' /etc/crontabs/root` must carry `0 2 * * * /usr/bin/syswrapper.sh dfs-reset`; if it does not, the controller is not pushing the job: it only does so for a radio pinned to a DFS channel the site's country allows (`uci get wireless.<radio>.channel` must be a number, not `auto`). Run `/usr/bin/syswrapper.sh dfs-reset` to ask for it now; `logread \| grep dfs-reset` gives the reason it was left alone. The commonest is the non-occupancy list: `iw phy phy<N> channels` shows the channel as `DFS state: unavailable` with the time left |
 | Auto-channel still picks a DFS or blacklisted channel | Both keys only arrive for a radio whose channel is `auto`, and the blacklist half only then. `uci show wireless | grep -E "acs_exclude_dfs|chanlist"` shows what landed: the 5 GHz radio should carry `acs_exclude_dfs` matching Settings → Radios, and a radio on Auto in a site with a channel blacklist should carry a `chanlist` plus `openuf_chanlist=1`. Missing entirely: the controller is not sending them — `tools/heartbeat-probe.lua` must show `wifi_caps2` with bit `0x10` set (`0x2070` with roam reports on), and new wifi-device options need a **Force Provision**. Present in UCI but ACS ignores them: `grep -E "acs_exclude_dfs|chanlist" /var/run/hostapd-phy*.conf` — options reach hostapd only on a WiFi reload. `logread | grep -E "channel blacklist|auto-channel unrestricted"` names the three cases where openUF deliberately writes nothing (§ Auto-channel limits) |
+| A WPA-Enterprise WLAN is on the air but no client can authenticate | Read hostapd's own truth: `grep -E "wpa_key_mgmt\|auth_server_addr\|auth_server_port\|acct_server_addr\|radius_acct_interim_interval\|dynamic_vlan\|nas_identifier\|wpa_passphrase" /var/run/hostapd-phy*.conf`. Expect `wpa_key_mgmt=WPA-EAP` (plus `FT-EAP` with 802.11r), the server lines, and **no** `wpa_passphrase`. `logread \| grep -i radius` shows what hostapd made of each exchange. If the server lines are there but nothing is answered, the AP cannot reach the server, or its shared secret differs — the server's own log is the place to look, and openUF never logs a secret |
+| A WPA-Enterprise WLAN exists but `hostapd-phy*.conf` has no `auth_server_addr` | A `wpad-basic-*` build: it has no RADIUS client. openUF logs `WLAN "<ssid>" is WPA-Enterprise, but this hostapd has no RADIUS client` and provisions anyway, since the controller applies no capability gate here. `grep -c auth_server_addr /usr/sbin/hostapd` must be non-zero; swap in a full `wpad-*` as in the `bss_transition` row above |
+| A WPA-Enterprise WLAN is skipped with `no usable RADIUS authentication server` | Every server the profile names was dropped. The log line gives the reason per index: a RadSec/TLS server (not supported), no usable IPv4 address, or a missing/oversized shared secret. A second server dropped for `has its own port/secret` is the schema limit described in § 6 |
+| EAP clients authenticate but are then refused | The RADIUS profile has "RADIUS assigned VLAN: required" (`dynamic_vlan=2` in `hostapd-phy*.conf`) and the server returned a VLAN this AP has no network for — `cat /var/run/hostapd-<ifname>.vlan` lists the only ones it can honour. Set the mode to optional, or put the WLAN on a network that already carries those VLANs |
 | Band Steering has no effect | `usteer` not installed or not running — `/etc/init.d/usteer status` |
 | Clients are steered 2.4 → 5 GHz with Band Steering off | `ubus call usteer get_config` must show `band_steering_interval: 0`. Any other value means usteer's default applies, and it steers. openUF writes the 0 on the next WiFi config push. Force Provision if it is missing |
 | Log says `device Band Steering mode "equal" is not supported` | The AP's own Band Steering is set to Balance. usteer can only balance by rejecting associations, so openUF does not map it. Use Prefer 5G or the per-WLAN toggle |
