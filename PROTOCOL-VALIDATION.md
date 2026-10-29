@@ -2927,6 +2927,21 @@ switched on for a live WLAN on the production APs, which is a config push to ask
 to take. The earlier source-MAC half of the blocker *was* measured on real hardware
 (14/14 dropped, 0/15 once allow-listed, AX3000T 2026-09-02) and is unchanged.
 
+**This project's VM lab, 2026-10-29: the type half, on the air.** Two openUF APs and one plain
+client, each an OpenWrt 25.12.6 x86-64 VM with `mac80211_hwsim` radios whose frames are carried
+between the VMs, adopted by a UniFi Network 10.6.106 controller; the mode set through the
+controller's API on a WPA2 WLAN, the client associated to one AP on 5 GHz. A 500 packets/s UDP
+broadcast flood from the wired side for 5 s, counted on the client's WiFi interface:
+
+| mode | what openUF installed | flood reaching the client | ARP / DHCP |
+|---|---|---|---|
+| Off | no stamps, empty `bcfilt` chain (teardown) | 2500 / 2500 | ok |
+| Conservative | `limit rate over 100/second burst 50 packets drop` on each of the WLAN's VAPs only | 549–550 / 2500, i.e. 100/s × 5 s + the 50-packet burst | ok |
+| Aggressive | the four bypass accepts, then the type drop with the allow-list set | 0 / 2500 | a broadcast ARP request from the wired side reached the client; a DHCP exchange with the broadcast flag set (server OFFER/ACK to 255.255.255.255) completed |
+
+⚠️ Simulated radios: the frames are real 802.11 frames through mac80211 and hostapd, but no
+real driver or RF is involved. Not yet repeated on a hardware AP.
+
 
 ### MAC-based VLANs (jonasevcik 1f017d1, 2026-10-27)
 
