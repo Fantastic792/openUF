@@ -5,8 +5,9 @@ description: Use when porting a feature or commit from another openUF tree (jona
 
 # Porting an upstream feature
 
-This tree re-implements upstream work feature by feature. It does not merge blindly. CLAUDE.md's
-"Upstream" section says why and where the remotes are; this is the loop for one feature.
+This tree re-implements upstream work feature by feature. It does not merge blindly.
+`.claude/rules/upstream.md` says why and where the remotes are; this is the loop for one
+feature.
 
 ## Ground rules
 
