@@ -27,10 +27,9 @@
 	  syswrapper.sh dfs-reset                0 2 * * *      fixed DFS channel
 	  syswrapper.sh 11k-scan                 0 4 * * *      fast roaming on
 
-	schedule-action openUF already does on its own heartbeat (CRON_IN_DAEMON),
-	so it needs no crontab line; dfs-reset and 11k-scan are real crontab
-	lines into the hook. refresh-walled-garden belongs to the guest walled
-	garden, which this tree does not have yet, so it is declined and logged.
+	The first two openUF already does on its own heartbeat (CRON_IN_DAEMON,
+	CRON_IN_DAEMON_PATTERNS), so they need no crontab line; the other two are
+	real crontab lines into the hook.
 
 	Timezone -> UCI system.@system[0].timezone (the wire string IS a POSIX TZ
 	string, which is exactly what that option holds); NTP -> system.ntp.server.
