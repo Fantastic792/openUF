@@ -2032,6 +2032,34 @@ everything, when the portal or the guest WLAN goes away, or on a factory reset.
 A MAC in the `authorized` set (filled from `state.json`'s `guest_authorized`) may reach
 any host other than the AP, but the restricted subnets still apply.
 
+**The walled garden ("Pre-Authorization Access").** The controller splits the site's
+`allowed_subnet_<n>` / `restricted_subnet_<n>` list by what each entry *looks like*, not
+by which list it is in, and sends the two halves by different routes:
+
+| Entry | How it arrives | What openUF does |
+|---|---|---|
+| IP or CIDR | `ebtables.<n>.cmd` — `-I GUESTIN -p 0x800 --ip-dst <net> -j ACCEPT` and its `-I GUESTOUT … --ip-src` twin, or `-A GUESTIN … -j DROP` for a restricted one | one `ip daddr … accept` / `ip saddr … accept` / `ip daddr … drop`, above every drop (allowed) or among the restricted-subnet drops |
+| domain name | `dnsmasq.walled_garden.1.site.<n>.{allowed,restricted}`, plus empty `ALLOWED_DOMAIN_IN` / `ALLOWED_DOMAIN_OUT` / `RESTRICTED_DOMAIN_IN` chains the firmware would fill | resolved on the AP with `nslookup`, then the same rules inline |
+
+Two traps worth knowing:
+
+- **An IP entry carries no port.** The portal's own accepts do (`8880`, `8843`, `8881`),
+  and until 2026-10-26 openUF knew only that shape — so an IP walled-garden entry, and
+  the egress rule that lets its replies back, were parsed as unknown and silently
+  unenforced. Both shapes are now applied.
+- **Re-resolution is on the controller's own cadence.** Along with the garden it pushes
+  `*/10 * * * *  syswrapper.sh refresh-walled-garden 1`. openUF does that work in the
+  inform loop (`GUEST_WG_INTERVAL`, 600 s) and on every config push, so `sysconf.lua`
+  installs no crontab line for the job — the same treatment `syswrapper.sh
+  schedule-action` gets. Each name is asked twice per round, as the firmware's
+  `walled_action.sh` does, so a round-robin record does not shrink the set.
+
+The answers live in `state.json` as `guest_wg_ips` (`{allowed = {name = {ip, …}},
+restricted = …}`), which makes two things true: a reboot rebuilds the rules from the last
+good answers instead of waiting on DNS, and a name that *stops* resolving keeps the
+addresses it had. A name that has never resolved is simply not enforced, and the log says
+which one.
+
 `ip openuf_guest` redirects the marked HTTP to port **8820**. The inform daemon answers
 there between heartbeats with a `302` to the controller's portal, adding:
 - `?id=<guest MAC>`, looked up in `/proc/net/arp`;
@@ -2091,6 +2119,16 @@ authorization".
 - **The redirect needs an IPv4 address on the guest network's bridge.** The answer
   leaves from there. A guest WLAN on a VLAN where the AP has no address keeps its
   guests blocked, and they never see the portal.
+- **The walled garden is IPv4 only and resolved on the AP.** AAAA answers are
+  discarded, because both the firmware's chains and openUF's are IPv4. A name whose
+  answer differs from the client's — a CDN, geo-DNS, short-TTL round robin — can be
+  reachable at an address openUF never saw, and the ten-minute refresh is the only thing
+  that catches up. UniFi firmware has exactly the same limit; a DNS-intercepting garden
+  would need a resolver on the AP, which openUF does not run.
+- **A domain-only restricted list never arrives.** The controller emits the whole
+  `dnsmasq.walled_garden` block only when the *allowed* list contains at least one
+  domain (10.6.106), so restricted domains alone are dropped on its side. Put one
+  allowed domain in the list, or express the restriction as a subnet.
 
 **Needs** `kmod-nft-bridge` (for `iifname`/`oifname`), and `kmod-nft-nat` for the
 redirect. firewall4 already pulls in `kmod-nft-nat`.
@@ -2122,6 +2160,22 @@ that `iw dev` lists the guest SSID and a `vwire-…` BSS separately.
   (`guestportal: guest WLANs back up (…)`).
 - `guestportal: unrecognised guest rule shape`: the controller pushed a rule openUF
   doesn't know. It was not applied.
+- `guestportal: walled garden: <name> did not resolve -- keeping the last N address(es)`:
+  DNS failed for that name this round; the rules it had still stand.
+- `guestportal: walled garden: <name> did not resolve and has no earlier answer -- not
+  enforced`: that site is not in the garden at all. Check the AP's own resolver
+  (`nslookup <name>` on the device) before blaming openUF.
+- `guestportal: ignoring malformed walled-garden site`: the name did not pass openUF's
+  check (spaces, an IPv4 literal, a label over 63 characters). It never reaches a
+  command line.
+- `guestportal: walled-garden addresses changed -- rebuilding`: the ten-minute refresh
+  found a different address set and rebuilt the chains.
+
+**Check the garden:**
+
+    nft list chain bridge openuf_guest guestin | head -20   # allowed sites, above every drop
+    nft list chain bridge openuf_guest guestout             # their replies
+    grep -o '"guest_wg_ips":[^}]*}}' /etc/openuf/state.json # the last good answers
 
 ## 6d. Self-check: is each feature really in effect?
 

@@ -1736,6 +1736,14 @@ hostapd generator and the 10.6.106 jar:
   but openUF speaks no RADIUS-over-TLS, and a site that depends on RadSec will see its
   server dropped, not used.
 
+- **`fw_caps` `0x40000` (`supportIPSet()`) stays unclaimed, and that is what makes the
+  walled garden work.** It is not a missing capability but a choice of encoding: with the
+  bit, `ubntconf/jNUeeSBEuWe` sends an `ipset.status=enabled` block of hash sets; without
+  it, `VAZShipWTNxlo` sends the `dnsmasq.walled_garden.*` names and the `*/10` refresh
+  job, which openUF implements as of 2026-10-26. Claiming it would swap a working form for
+  one openUF does not implement. Settled from the jar; see
+  [the walled garden](#the-walled-garden-two-forms-split-by-what-the-entry-looks-like).
+
 - **Multicast Suppressor** (`wifi_caps2` `0x400000` → `wireless.<n>.multicast.suppressor`):
   could be enforced in nft like the Multicast/Broadcast Blocker, but it is the same feature
   class that breaks casting. Low priority.
@@ -2996,6 +3004,128 @@ before this change:
 
 All SSIDs came up on both builds, with no errors. The saving grows with the number of WLANs,
 since the old code committed once per VAP.
+
+### The guest walled garden (jonasevcik e6395d7, 2026-10-26)
+
+**In this tree** `guestportal.lua` was taken whole from that commit, which also brings
+upstream's one-transaction nft rebuild (b6dd8cf) and shared util (b7f06eb) for this module.
+Their evidence follows; this project's lab run is below it.
+
+
+Settled from the controller (10.6.106 `internal-dependencies.jar`, CFR), the AP firmware
+(U7LR 6.8.2) and a lab capture, 2026-10-26. The site's guest settings hold one flat list
+per direction — `guest_access.allowed_subnet_<n>` and `restricted_subnet_<n>`, read until
+the first blank index — and `com/ubnt/service/config/hyFnQ` runs each entry through three
+different producers:
+
+| Producer | Keeps | Used by |
+|---|---|---|
+| `Cuhf.V4` | IPv4 addresses and CIDRs (a `/32` as a bare address, a `/0` split into `0.0.0.0/1` + `128.0.0.0/1`) | the ebtables rules |
+| `Cuhf.V6` | IPv6, same shapes | the ip6tables side openUF does not implement |
+| `OWIoHe.UGwcHSHUGpYtqo` | whatever Guava's `InternetDomainName.isValid` accepts | the `dnsmasq.walled_garden` keys |
+
+Guava's check rejects an all-digit rightmost label, so the two sets never overlap: **an
+entry is either an address or a name, and which list it is in does not decide how it
+travels.**
+
+**The IP half.** `ubntconf/YcZSaTCMOYFEMGE` emits, per allowed address:
+
+    -t nat -I GUESTIN  -p 0x800 --ip-dst <net> -j ACCEPT
+    -t nat -I GUESTOUT -p 0x800 --ip-src <net> -j ACCEPT
+
+and per restricted address `-t nat -A GUESTIN -p 0x800 --ip-dst <net> -j DROP`. **These
+carry no port**, unlike the portal's own accepts (`--ip-proto 6 --ip-dport 8880 --ip-dst
+<ctl>`), which is why openUF's C1 parser rejected both lines as unknown shapes and left an
+IP walled-garden entry silently unenforced until 2026-10-26. The egress rule matches on
+`--ip-src`, so the reply direction needed its own list (`spec.accept_out`).
+
+**The domain half.** Three empty chains and the jumps into them, gated on the site having
+any garden domain at all (`devmgr/kDxteQiUX`):
+
+    -t nat -N ALLOWED_DOMAIN_IN  -P RETURN   /  -t nat -I GUESTIN  -p 0x800 -j ALLOWED_DOMAIN_IN
+    -t nat -N ALLOWED_DOMAIN_OUT -P RETURN   /  -t nat -I GUESTOUT -p 0x800 -j ALLOWED_DOMAIN_OUT
+    -t nat -N RESTRICTED_DOMAIN_IN -P RETURN /  -t nat -A GUESTIN  -p 0x800 -j RESTRICTED_DOMAIN_IN
+
+plus the names themselves, and the job that keeps them fresh. Verbatim from the lab
+(10.6.106, 2026-10-26; site settings `allowed_subnet_1=www.example.net`,
+`allowed_subnet_2=198.51.100.7/32`, `allowed_subnet_3=example.com`,
+`restricted_subnet_1..3` the RFC1918 defaults, `restricted_subnet_4=ads.example.org`):
+
+    cron.status=enabled
+    cron.1.status=enabled
+    cron.1.user=root
+    cron.1.job.1.status=enabled
+    cron.1.job.1.schedule=*/10 * * * *
+    cron.1.job.1.cmd=syswrapper.sh refresh-walled-garden 1
+    dnsmasq.walled_garden.1.status=enabled
+    dnsmasq.walled_garden.1.site.1.allowed=www.example.net
+    dnsmasq.walled_garden.1.site.2.allowed=example.com
+    dnsmasq.walled_garden.1.site.1.restricted=ads.example.org
+
+Key shapes worth writing down:
+
+- The garden index is always `1`; the firmware's `if_seq` argument is that index
+  (`syswrapper.sh refresh-walled-garden 1` → `/tmp/allowed.1.txt`,
+  `/tmp/restricted.1.txt`).
+- `allowed` and `restricted` are indexed **independently, both from 1**. `site.1.allowed`
+  and `site.1.restricted` are two different sites.
+- The order is a Java `Set`'s iteration order, not the operator's: the capture above put
+  `www.example.net` (configured third) before `example.com`. The index is all there is.
+- The whole block is emitted only when the **allowed** domain set is non-empty
+  (`if (set.size() > 0)`), so a garden of restricted domains alone never reaches the
+  device, although the `RESTRICTED_DOMAIN_IN` chain is still pushed.
+- The allowed set is wider than the operator's list: it also carries the hosts each
+  enabled payment or social-login provider needs, and `images.unsplash.com` when the
+  portal's background gallery is on.
+
+**Which form openUF gets is a capability gate.** `ubntconf/jNUeeSBEuWe` emits an
+`ipset.status=enabled` block with hash sets instead, and the caller is explicit:
+
+    boolean bl8 = this.Gdhc.NvfcKfHPI(settings) && !hyFnQ2.supportIPSet();   // the cron job
+    ...
+    if (!hyFnQ2.supportIPSet()) { this.kCNoUwYXLXMAUl(stringBuilder, settings); }  // the dnsmasq block
+
+`supportIPSet()` is `hasFirmwareCapability(0x40000)`; openUF sends `fw_caps 0x1110`, so it
+is unclaimed and the `dnsmasq.walled_garden` form is what arrives. No capture of the ipset
+form is needed for that claim, and claiming the bit would swap a working encoding for one
+openUF does not implement.
+
+**What the firmware does with it (U7LR 6.8.2, `/bin/walled_action.sh`, plaintext).**
+`ubntbox` writes the names to `/tmp/allowed.1.txt` / `/tmp/restricted.1.txt` (the strings
+`dnsmasq.walled_garden.%d.status`, `dnsmasq.walled_garden.%d.site.`, `/tmp/allowed.%d.txt`
+are all in that binary). The script then flushes the three chains, runs `nslookup` over
+each name **twice** ("so we don't miss any ip" — round-robin records), dedupes the IPv4
+answers, and appends `--ip-dst … -j ACCEPT` / `--ip-src … -j ACCEPT` /
+`--ip-dst … -j DROP`. A failed lookup is logged to `/tmp/walled_action.log` and skipped,
+which leaves that site out of the garden entirely. It runs on `ipready` (IP acquisition)
+and from the pushed cron job.
+
+**openUF (2026-10-26).** `guestportal.parse` reads both halves; `M._resolve` is the
+resolver seam (`nslookup`, addresses taken only after the first `Name:` line, since the
+header gives the resolver's own address in the same shape); `resolve_garden` asks each name
+twice like the firmware and **keeps the last good answer** for a name that stops resolving,
+in `state.json`'s `guest_wg_ips`. `inform._guest_wg_resync` re-resolves on the pushed
+cadence (600 s) and rebuilds only when the address set actually moved, and
+`sysconf.CRON_IN_DAEMON_PATTERNS` therefore installs no crontab line for the job.
+
+Verification:
+- **Tier 1:** 8 new tests; the kept-answer branch, the port-less accept, the all-digit
+  label rule, the `Name:` cut and the two resolver passes were each mutation-tested red.
+- **Tier 2:** the capture above replayed through `parse` with 0 unknown shapes, then the
+  generated statements run against the lab's **real nft 1.0.9** on a dummy netdev — every
+  statement accepted, 37 rules, identical on a second run (idempotent). Then end to end:
+  the lab AP on the new code, a force-provision, `handle_response failed` = 0, no
+  unrecognised-rule lines (there were five per push before), the two resolvable names in
+  `guestin` as four `ip daddr … accept` rules above every drop, `ads.example.org` (NXDOMAIN)
+  logged as not enforced, and `dnsmasq.walled_garden.*` gone from the dropped-key report
+  (`dnsmasq.status` and `dnsmasq.<n>.*` stay: those ask for a local resolver openUF does
+  not run).
+- **Tier 3:** deployed to both APs and confirmed **inert** — the home site runs no guest
+  portal, so no `openuf_guest` tables exist, which is the same tier the rest of the guest
+  portal has. The resolver seam itself was run on both boards against their real resolver:
+  `example.com` → two addresses, `www.iana.org` → two, `nxdomain.invalid` → none, identical
+  on ath79 and filogic. No Passpoint-style claim is made for a real guest: no guest client
+  has ever reached a garden site through openUF.
 
 ### Hotspot 2.0 / Passpoint: `aaa.<n>.hs20.*` (jonasevcik ce7163f, 2026-10-26)
 

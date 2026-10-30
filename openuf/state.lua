@@ -165,6 +165,11 @@ local TYPED = {
 	guest_vaps_down           = "table",
 	-- Reported as guest_token while the portal is on (32 hex).
 	guest_token               = "string",
+	-- The walled garden's domain half, resolved: {allowed = {name = {ip, ...}},
+	-- restricted = {...}}. Kept so a reboot rebuilds the chains from the last
+	-- good answers instead of waiting on DNS, and so a name that stops
+	-- resolving keeps the addresses it had (guestportal.resolve_garden).
+	guest_wg_ips              = "table",
 }
 -- Exported for tests and tooling that check what survives a restart (upstream
 -- names the same table FIELDS).

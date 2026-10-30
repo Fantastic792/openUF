@@ -67,17 +67,74 @@ local CAPTURE = table.concat({
 	"ebtables.52.cmd=-t broute -A BROUTING -i ath0 -p 802_1Q -j DROP",
 }, "\n") .. "\n"
 
+-- The walled garden as the 10.6.106 lab pushed it (2026-10-26), verbatim apart
+-- from the controller's address (-> 192.0.2.2) and the site's own allowed IP
+-- (-> 198.51.100.7). Site settings: allowed_subnet_1=www.example.net,
+-- allowed_subnet_2=198.51.100.7/32, allowed_subnet_3=example.com,
+-- restricted_subnet_1..3 the three RFC1918 defaults, restricted_subnet_4=
+-- ads.example.org. The IP entry became two ebtables rules and the three names
+-- became dnsmasq keys -- the split the controller makes by what the entry
+-- looks like, not by which list it is in.
+local GARDEN = table.concat({
+	"ebtables.30.cmd=-t nat -I GUESTIN -p 0x800 --ip-dst 198.51.100.7 -j ACCEPT",
+	"ebtables.31.cmd=-t nat -I GUESTOUT -p 0x800 --ip-src 198.51.100.7 -j ACCEPT",
+	"ebtables.32.cmd=-t nat -N ALLOWED_DOMAIN_IN -P RETURN",
+	"ebtables.33.cmd=-t nat -I GUESTIN -p 0x800 -j ALLOWED_DOMAIN_IN",
+	"ebtables.34.cmd=-t nat -N ALLOWED_DOMAIN_OUT -P RETURN",
+	"ebtables.35.cmd=-t nat -I GUESTOUT -p 0x800 -j ALLOWED_DOMAIN_OUT",
+	"ebtables.38.cmd=-t nat -N RESTRICTED_DOMAIN_IN -P RETURN",
+	"ebtables.39.cmd=-t nat -A GUESTIN -p 0x800 -j RESTRICTED_DOMAIN_IN",
+	"cron.status=enabled",
+	"cron.1.status=enabled",
+	"cron.1.user=root",
+	"cron.1.job.1.status=enabled",
+	"cron.1.job.1.schedule=*/10 * * * *",
+	"cron.1.job.1.cmd=syswrapper.sh refresh-walled-garden 1",
+	"dnsmasq.walled_garden.1.status=enabled",
+	"dnsmasq.walled_garden.1.site.1.allowed=www.example.net",
+	"dnsmasq.walled_garden.1.site.2.allowed=example.com",
+	"dnsmasq.walled_garden.1.site.1.restricted=ads.example.org",
+}, "\n") .. "\n"
+
+-- OpenWrt 25.12's nslookup, as read on the Archer C5: repeated Name:/Address:
+-- pairs, A and AAAA together, and the resolver's own address BEFORE the first
+-- Name: line.
+local NSLOOKUP = table.concat({
+	"Server:\t\t192.0.2.1",
+	"Address:\t192.0.2.1:53",
+	"",
+	"Non-authoritative answer:",
+	"Name:\twww.example.net",
+	"Address: 198.51.100.20",
+	"Name:\twww.example.net",
+	"Address: 198.51.100.21",
+	"",
+	"Non-authoritative answer:",
+	"Name:\twww.example.net",
+	"Address: 2606:4700:10::6814:179a",
+}, "\n") .. "\n"
+
+-- The firmware's busybox shape, which walled_action.sh's awk reads. Its
+-- header gives the resolver's own address in the same "Address N:" form and
+-- without a port, which is the whole reason for cutting at the first "Name:".
+local NSLOOKUP_BB = table.concat({
+	"Server:    127.0.0.1",
+	"Address 1: 127.0.0.1 localhost",
+	"",
+	"Name:      ads.example.org",
+	"Address 1: 198.51.100.30",
+	"Address 2: 198.51.100.31",
+}, "\n") .. "\n"
+
+-- The nft statements that took effect (see fake_nft), and the fake itself.
 local function with_capture(fn, fail_pattern)
-	local cmds, orig = {}, gp._exec
-	gp._exec = function(cmd)
-		cmds[#cmds + 1] = cmd
-		if fail_pattern and cmd:find(fail_pattern, 1, true) then return 1 end
-		return 0
-	end
-	local ok, err = pcall(fn, cmds)
+	local orig = gp._exec
+	local exec, r = fake_nft(fail_pattern and function(l) return l:find(fail_pattern, 1, true) end)
+	gp._exec = exec
+	local ok, err = pcall(fn, r.cmds)
 	gp._exec = orig
 	if not ok then error(err, 0) end
-	return cmds
+	return r.cmds, r
 end
 
 local function with_stderr(fn)
@@ -164,6 +221,151 @@ return {
 		end
 	},
 	{
+		name = "guestportal: the walled garden's two halves both parse, and nothing is left unknown",
+		fn = function()
+			local s = gp.parse(CAPTURE .. GARDEN)
+			assert_eq(#s.unknown, 0, "the domain chains and the port-less accepts are known shapes")
+			assert_eq(table.concat(s.wg_allowed, ","), "www.example.net,example.com",
+				"allowed sites in push order (the controller's own order is a Java Set's)")
+			assert_eq(table.concat(s.wg_restricted, ","), "ads.example.org", "restricted sites")
+			assert_eq(table.concat(s.accept_out, ","), "198.51.100.7", "the egress twin of an IP entry")
+			local portless
+			for _, a in ipairs(s.accept) do
+				if a.port == nil then portless = a.ip end
+			end
+			assert_eq(portless, "198.51.100.7", "an IP entry is accepted on every port, not just the portal's")
+			assert_eq(#s.accept, 4, "the three portal accepts plus the garden's")
+		end
+	},
+	{
+		name = "guestportal: a garden that is off, malformed or indexed oddly",
+		fn = function()
+			local off = gp.parse(CAPTURE .. GARDEN:gsub("walled_garden%.1%.status=enabled",
+				"walled_garden.1.status=disabled"))
+			assert_eq(#off.wg_allowed, 0, "status=disabled: the sites are not taken")
+			assert_eq(#off.wg_restricted, 0, "neither list")
+			local bad
+			local err = with_stderr(function()
+				bad = gp.parse(CAPTURE .. "dnsmasq.walled_garden.1.status=enabled\n"
+					.. "dnsmasq.walled_garden.1.site.2.allowed=ok.example\n"
+					.. "dnsmasq.walled_garden.1.site.1.allowed=a b; reboot\n"
+					.. "dnsmasq.walled_garden.1.site.3.allowed=ok.example\n"
+					.. "dnsmasq.walled_garden.1.site.4.allowed=198.51.100.7\n")
+			end)
+			assert_eq(table.concat(bad.wg_allowed, ","), "ok.example",
+				"index order, malformed dropped, duplicate taken once")
+			assert_true(err:find("reboot", 1, true) ~= nil, "the malformed name is reported")
+			assert_true(err:find("198.51.100.7", 1, true) ~= nil,
+				"an IPv4 literal is not a site name: those arrive as ebtables rules")
+			local none = gp.parse(CAPTURE)
+			assert_eq(#none.wg_allowed, 0, "no garden keys: no sites")
+		end
+	},
+	{
+		name = "guestportal: is_hostname is as strict as the controller's own check",
+		fn = function()
+			for _, good in ipairs({"example.com", "www.example.net", "a.b.c.d.example",
+					"x-1.example.com", "under_score.example", "example.com.", "e.xx"}) do
+				assert_true(gp.is_hostname(good), good .. " is a name")
+			end
+			for _, bad in ipairs({"198.51.100.7", "198.51.100.7/32", "a b.example", "a;reboot.example",
+					"-lead.example", "trail-.example", "", ".example.com", "a..b.example",
+					"example.1", "a/b.example", "$(id).example"}) do
+				assert_false(gp.is_hostname(bad), ("%q is not"):format(bad))
+			end
+			assert_false(gp.is_hostname(string.rep("a", 64) .. ".example"), "a label over 63")
+			assert_false(gp.is_hostname(string.rep("a.", 127) .. "example"), "over 253 characters")
+			assert_false(gp.is_hostname(nil), "nil")
+		end
+	},
+	{
+		name = "guestportal: _resolve reads both nslookup shapes, server address excluded",
+		fn = function()
+			local orig, asked = gp._capture, nil
+			gp._capture = function(cmd) asked = cmd; return NSLOOKUP end
+			local a = gp._resolve("www.example.net")
+			gp._capture = function() return NSLOOKUP_BB end
+			local b = gp._resolve("ads.example.org")
+			gp._capture = function() return "" end
+			local none = gp._resolve("nxdomain.example")
+			local refused = gp._resolve("a b; reboot")
+			gp._capture = orig
+			assert_eq(asked, "nslookup www.example.net", "the name, and nothing else, on the command line")
+			assert_eq(table.concat(a, ","), "198.51.100.20,198.51.100.21",
+				"every A record; the AAAA and the resolver's own address left out")
+			assert_eq(table.concat(b, ","), "198.51.100.30,198.51.100.31", "the firmware's Address N: shape")
+			assert_eq(#none, 0, "no answer")
+			assert_eq(#refused, 0, "a name that is not a name is never run")
+		end
+	},
+	{
+		name = "guestportal: resolve_garden keeps the last good answer for a name that stops resolving",
+		fn = function()
+			local orig = gp._resolve
+			local answers = {["a.example"] = {"198.51.100.20"}, ["b.example"] = {"198.51.100.21"}}
+			local calls = 0
+			gp._resolve = function(n) calls = calls + 1; return answers[n] or {} end
+			local first, failed, changed = gp.resolve_garden({"a.example", "b.example"}, nil)
+			assert_eq(failed, 0, "both resolved")
+			assert_true(changed, "from nothing to two addresses")
+			assert_eq(calls, 4, "each name asked twice, as walled_action.sh does")
+			assert_eq(table.concat(gp.garden_ips(first), ","), "198.51.100.20,198.51.100.21", "flattened")
+			answers["b.example"] = nil
+			local kept, failed2, changed2
+			local err = with_stderr(function()
+				kept, failed2, changed2 = gp.resolve_garden({"a.example", "b.example"}, first)
+			end)
+			assert_eq(failed2, 1, "one lookup failed")
+			assert_false(changed2, "the kept answer means the chains need no rebuild")
+			assert_eq(table.concat(kept["b.example"], ","), "198.51.100.21", "the last good answer stands")
+			assert_true(err:find("keeping the last 1 address", 1, true) ~= nil, "and says so")
+			local fresh
+			local err2 = with_stderr(function() fresh = gp.resolve_garden({"c.example"}, first) end)
+			assert_nil(fresh["c.example"], "a name with no earlier answer is simply not enforced")
+			assert_true(err2:find("no earlier answer", 1, true) ~= nil, "said plainly")
+			local gone = gp.resolve_garden({"a.example"}, first)
+			assert_nil(gone["b.example"], "a name the controller stopped pushing is dropped")
+			answers["a.example"] = {"198.51.100.20", "198.51.100.20"}
+			local dedup = gp.resolve_garden({"a.example"}, nil)
+			assert_eq(#dedup["a.example"], 1, "the same address twice is one address")
+			gp._resolve = orig
+			assert_eq(table.concat(gp.garden_ips({x = {"198.51.100.9"}, y = {"198.51.100.9", "198.51.100.8"},
+				z = {"nonsense"}}), ","), "198.51.100.8,198.51.100.9",
+				"garden_ips: sorted, deduplicated, and only addresses")
+			assert_eq(#gp.garden_ips(nil), 0, "no store")
+		end
+	},
+	{
+		name = "guestportal: reconcile enforces the garden, allowed above every drop",
+		fn = function()
+			local spec = gp.parse(CAPTURE .. GARDEN)
+			local garden = {allowed = {"198.51.100.20", "198.51.100.21"}, restricted = {"198.51.100.30"}}
+			local cmds, r = with_capture(function()
+				assert_eq(gp.reconcile(spec, VAPS, {}, false, garden), 38,
+					"the lab's 31 plus two allowed in, two allowed out, one restricted and the IP entry's two")
+			end)
+			assert_eq(r.runs, 1, "still one nft transaction")
+			local allow = find(cmds, "guestin ip daddr 198.51.100.20 accept")
+			local allow_out = find(cmds, "guestout ip saddr 198.51.100.20 accept")
+			local ip_entry = find(cmds, "guestin ip daddr 198.51.100.7 accept")
+			local restrict = find(cmds, "guestin ip daddr 198.51.100.30 drop")
+			local mcast = find(cmds, "guestin ip daddr 224.0.0.0/4 drop")
+			local authorized = find(cmds, "ether saddr @authorized meta pkttype other accept")
+			local last = find(cmds, "guestin drop")
+			assert_not_nil(allow, "an allowed site is accepted")
+			assert_not_nil(allow_out, "and its replies leave")
+			assert_not_nil(ip_entry, "the IP entry is accepted on every port")
+			assert_true(allow < mcast and ip_entry < mcast, "allowed comes before every drop")
+			assert_true(restrict < authorized, "a restricted site holds for an authorized guest too")
+			assert_true(restrict < last, "and before the policy drop")
+			assert_eq(find(cmds, "ALLOWED_DOMAIN"), nil, "the chains are the firmware's; the rules are inline")
+			local bare = with_capture(function() gp.reconcile(spec, VAPS, {}, false) end)
+			assert_eq(find(bare, "198.51.100.20"), nil, "no garden passed: no resolved rules")
+			assert_not_nil(find(bare, "guestin ip daddr 198.51.100.7 accept"),
+				"but the IP half needs no resolver")
+		end
+	},
+	{
 		name = "guestportal: is_guest_rule tells the portal's rules from l2guard's",
 		fn = function()
 			assert_true(gp.is_guest_rule("-t nat -A PREROUTING --in-interface ath0 -j GUESTIN"), "hook")
@@ -177,35 +379,36 @@ return {
 		name = "guestportal: reconcile builds the chains in the controller's order",
 		fn = function()
 			local spec = gp.parse(CAPTURE)
-			local cmds = with_capture(function()
+			local cmds, r = with_capture(function()
 				assert_eq(gp.reconcile(spec, VAPS, {"de:ad:be:ef:00:02"}, true), 31,
 					"every rule counted (30 in the lab with one bridged VAP)")
 			end)
+			assert_eq(r.runs, 1, "both tables in one nft run")
 			assert_nil(find(cmds, "rate_"), "rate limits are the shaper's (per-client tc classes)")
-			assert_true(cmds[1]:find("delete table bridge openuf_guest", 1, true) ~= nil, "starts from scratch")
-			assert_true(cmds[2]:find("delete table ip openuf_guest", 1, true) ~= nil, "both tables")
+			assert_eq(cmds[2], "nft delete table bridge openuf_guest", "starts from scratch")
+			assert_eq(cmds[4], "nft delete table ip openuf_guest", "both tables")
 			assert_not_nil(find(cmds, [[iifname { "phy0-ap1", "phy1-ap1" } jump guestin]]), "ingress hook on both VAPs")
 			assert_not_nil(find(cmds, [[oifname { "phy0-ap1", "phy1-ap1" } jump guestout]]), "egress hook")
 			local intercept = find(cmds, "ip daddr " .. CTL .. " tcp dport 8882 jump redirect_http")
 			local portal = find(cmds, "ip daddr " .. CTL .. " tcp dport 8880 accept")
 			local dns = find(cmds, "ether type ip udp dport 53 accept")
 			local v6 = find(cmds, "ether type ip6 drop")
-			local rfc1918 = find(cmds, "guestin 'ip daddr 10.0.0.0/8 drop'")
+			local rfc1918 = find(cmds, "guestin ip daddr 10.0.0.0/8 drop")
 			local authorized = find(cmds, "ether saddr @authorized meta pkttype other accept")
-			local http = find(cmds, "guestin 'tcp dport 80 jump redirect_http'")
-			local last = find(cmds, "guestin 'drop'")
+			local http = find(cmds, "guestin tcp dport 80 jump redirect_http")
+			local last = find(cmds, "guestin drop")
 			assert_true(intercept < portal and portal < rfc1918, "the portal is reachable before any drop")
 			assert_true(dns < rfc1918, "DNS to a private resolver passes")
 			assert_true(v6 < authorized, "IPv6 is dropped even for an authorized guest")
 			assert_true(rfc1918 < authorized, "restricted subnets hold for an authorized guest")
 			assert_true(authorized < http and http < last, "authorized passes; the rest of :80 is answered locally")
-			local selfrun = find(cmds, "guestin 'jump selfrun'")
+			local selfrun = find(cmds, "guestin jump selfrun")
 			assert_true(authorized < selfrun and selfrun < http, "selfrun after the authorized accept, before :80")
-			assert_not_nil(find(cmds, "selfrun 'meta pkttype other accept'"), "selfrun applied")
+			assert_not_nil(find(cmds, "selfrun meta pkttype other accept"), "selfrun applied")
 			assert_not_nil(find(cmds, [[iifname "phy0-ap1" ether daddr set 02:00:00:00:00:aa meta pkttype set host accept]]),
 				"marked frames go up to the bridge")
-			assert_not_nil(find(cmds, "guestout 'ip daddr 224.0.0.0/4 drop'"), "outbound multicast")
-			assert_not_nil(find(cmds, "add element bridge openuf_guest authorized '{ de:ad:be:ef:00:02 }'"), "the ledger")
+			assert_not_nil(find(cmds, "guestout ip daddr 224.0.0.0/4 drop"), "outbound multicast")
+			assert_not_nil(find(cmds, "add element bridge openuf_guest authorized { de:ad:be:ef:00:02 }"), "the ledger")
 			assert_not_nil(find(cmds, "meta mark and 0xc0000000 == 0x40000000 meta l4proto tcp redirect to :8820"),
 				"NAT to the answer's port")
 			assert_eq(find(cmds, "443"), nil, "no HTTPS answer: 443 falls to the drop")
@@ -216,12 +419,12 @@ return {
 		fn = function()
 			local spec = gp.parse(CAPTURE)
 			local off = with_capture(function() assert_eq(gp.reconcile(nil, VAPS), 0, "off") end)
-			assert_eq(#off, 2, "off: the two deletes only")
+			assert_eq(#off, 4, "off: the two deletes only (each after an add, so neither can fail)")
 			local none
 			local err = with_stderr(function()
 				none = with_capture(function() assert_eq(gp.reconcile(spec, {}), 0, "no VAPs") end)
 			end)
-			assert_eq(#none, 2, "no guest interface: the two deletes only")
+			assert_eq(#none, 4, "no guest interface: the two deletes only")
 			assert_true(err:find("deferred", 1, true) ~= nil, "says why")
 			local odd = with_capture(function()
 				with_stderr(function() gp.reconcile(spec, {{ifname = "x; reboot"}, {ifname = "phy0-ap1"}}) end)
@@ -237,42 +440,58 @@ return {
 			err = with_stderr(function()
 				cmds = with_capture(function() gp.reconcile(spec, {{ifname = "phy0-ap1"}}) end, "pkttype other")
 			end)
-			assert_not_nil(find(cmds, "guestin 'drop'"), "the drop is there")
+			assert_not_nil(find(cmds, "guestin drop"), "the drop is there")
 			assert_eq(find(cmds, "ether daddr set"), nil, "no bridge MAC to hand frames to")
 			assert_true(err:find("not bridged", 1, true) ~= nil, "unbridged reported")
 			assert_true(err:find("NOT fully enforced", 1, true) ~= nil, "a rejected rule reported")
+			assert_true(err:find('nft rejected "ether saddr @authorized meta pkttype other accept"', 1, true) ~= nil,
+				"and named")
 		end
 	},
 	{
-		name = "guestportal: set_authorized refills the set in chunks, malformed MACs skipped",
+		name = "guestportal: a rejected NAT redirect is said, and the filter still stands",
+		fn = function()
+			local spec = gp.parse(CAPTURE)
+			local n, cmds
+			local err = with_stderr(function()
+				cmds = with_capture(function() n = gp.reconcile(spec, VAPS, {}, false) end, "redirect to")
+			end)
+			assert_eq(n, 30, "every rule but the redirect")
+			assert_not_nil(find(cmds, "guestin drop"), "guests are still blocked")
+			assert_true(err:find("NAT redirect", 1, true) ~= nil, "the missing portal answer is reported")
+		end
+	},
+	{
+		name = "guestportal: set_authorized refills the set in one transaction, malformed MACs skipped",
 		fn = function()
 			local macs = {"x; reboot"}
 			for i = 1, 65 do macs[#macs + 1] = ("02:00:00:00:00:%02X"):format(i) end
-			local cmds = with_capture(function() gp.set_authorized(macs) end)
-			assert_true(cmds[1]:find("flush set bridge openuf_guest authorized", 1, true) ~= nil, "flush first")
-			assert_eq(#cmds, 3, "65 MACs: two add element commands")
+			local cmds, r = with_capture(function() gp.set_authorized(macs) end)
+			assert_eq(r.runs, 1, "flush and refill together: no moment with the set empty")
+			assert_eq(cmds[1], "nft flush set bridge openuf_guest authorized", "flush first")
+			assert_eq(#cmds, 2, "65 MACs: one add element statement")
 			assert_true(cmds[2]:find("02:00:00:00:00:0a", 1, true) ~= nil, "lowercased")
 			assert_eq(find(cmds, "reboot"), nil, "malformed never spliced")
 			local none = with_capture(function()
 				assert_false(gp.set_authorized({"02:00:00:00:00:01"}), "no table: nothing to fill")
 			end, "flush set")
-			assert_eq(#none, 1, "stops after the failed flush")
+			assert_eq(#none, 0, "a failed flush applies nothing")
 		end
 	},
 	{
 		name = "guestportal: set_selfrun opens the portal to other hosts, and closes it",
 		fn = function()
 			local open = with_capture(function() assert_true(gp.set_selfrun(true), "applied") end)
-			assert_true(open[1]:find("flush chain bridge openuf_guest selfrun", 1, true) ~= nil, "flush first")
+			assert_eq(open[1], "nft flush chain bridge openuf_guest selfrun", "flush first")
 			assert_eq(#open, 2, "one rule")
-			assert_true(open[2]:find("selfrun 'meta pkttype other accept'", 1, true) ~= nil,
+			assert_true(open[2]:find("selfrun meta pkttype other accept", 1, true) ~= nil,
 				"other hosts only: the AP itself stays behind the portal's rules")
 			local closed = with_capture(function() assert_true(gp.set_selfrun(false), "closed") end)
 			assert_eq(#closed, 1, "closed: the flush only")
 			local none = with_capture(function()
 				assert_false(gp.set_selfrun(true), "no table")
 			end, "flush chain")
-			assert_eq(#none, 1, "stops after the failed flush")
+			assert_eq(#none, 0, "a failed flush applies nothing")
 		end
 	},
 	{
