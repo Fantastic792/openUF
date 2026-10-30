@@ -2407,9 +2407,12 @@ return {
 						assert_eq(s.sae_groups, nil, "wpa2: no groups")
 						assert_eq(s.hostapd_bss_options, nil, "wpa2: no raw options")
 					else
-						assert_eq(s.sae_groups, "19 20", sec .. ": groups")
+						-- sae_groups is not a wifi-iface option on 25.12.6: netifd would
+						-- drop it, so it rides the raw lines with the other two.
+						assert_eq(s.sae_groups, nil, sec .. ": no UCI sae_groups")
 						assert_eq(table.concat(s.hostapd_bss_options, ","),
-							"sae_anti_clogging_threshold=5,sae_sync=7", sec .. ": raw options")
+							"sae_groups=19 20,sae_anti_clogging_threshold=5,sae_sync=7",
+							sec .. ": raw options")
 					end
 				end)
 			end
