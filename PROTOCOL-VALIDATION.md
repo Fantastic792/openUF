@@ -3146,6 +3146,15 @@ Verification:
   on ath79 and filogic. No Passpoint-style claim is made for a real guest: no guest client
   has ever reached a garden site through openUF.
 
+**This project's VM lab, 2026-10-30: the garden on the air.** The site's guest portal on (no
+auth) with "Pre-Authorization Access" holding a domain (`example.com`) and an address
+(`1.1.1.1/32`), and a WPA2 WLAN made a guest network. On the AP the guest table's `guestin` carried
+`ip daddr 104.20.23.154 accept`, `ip daddr 172.66.147.243 accept` (the domain, resolved on the AP)
+and `ip daddr 1.1.1.1 accept`, with the matching `ip saddr` accepts in `guestout`, all above the
+restricted-subnet drops. From an unauthorised guest client over WiFi: `http://1.1.1.1/` answered
+301 and `http://example.com/` 200 (both reached the internet), while `http://9.9.9.9/` got openUF's
+302 to `http://<controller>:8880/guest/s/default/?id=<client>&ap=<ap>&...&ssid=<ssid>`.
+
 ### Hotspot 2.0 / Passpoint: `aaa.<n>.hs20.*` (jonasevcik ce7163f, 2026-10-26)
 
 **In this tree** `fw_caps` gains `0x800000` and `fw2_caps` `0x80000` only where the probe
@@ -3929,6 +3938,23 @@ A notif inform with a *minimal* identity (mac/model/version only) is refused wit
 The one-shot controls above had to repeat what `build_json` puts in `_notif_identity` —
 serial, platform, hostname, ip, inform_url, cfgversion, required_version, state, uptime.
 Worth knowing before writing another notif test by hand.
+
+### SAE tuning and station keys in this project's VM lab (2026-10-30)
+
+A WPA3-only WLAN created over the controller's REST API with `sae_anti_clogging=7`,
+`sae_sync=9`, `sae_groups=[19,20]` and one `sae_psk` entry bound to the client's MAC. On the AP:
+`encryption='sae'`, the raw lines `sae_anti_clogging_threshold=7` and `sae_sync=9` in live
+hostapd beside `ieee80211w=2`, a `wifi-station` for the bound MAC and a `.sae` password file
+holding `<key>|mac=<that MAC>`. The client joined with the **station key** (not the WLAN
+passphrase): `AP-STA-CONNECTED ... auth_alg=sae`, 4-way handshake completed, a lease, traffic.
+
+**Correction to jonasevcik's "`sae_groups` is a wifi-iface option".** On OpenWrt 25.12.6 it is not
+in `/usr/share/schema/wireless.wifi-iface.json` (the SAE options there are `sae_pwe`,
+`sae_require_mfp`, `sae_password_file`, `sae_track_password`, `sae_ext_key`), so netifd drops a UCI
+`sae_groups` and `ap.uc`'s `set_default(config, 'sae_groups', '19 20 21')` goes out: the lab's
+first push produced `sae_groups=19 20 21` with UCI saying `19 20`. Fixed in `22a9af5`: it now
+rides `hostapd_bss_options`, which the generator appends after its own lines, and the live
+config reads `sae_groups=19 20 21` then `sae_groups=19 20` (hostapd keeps the last).
 
 ### WPA3 station keys: `aaa.<n>.sae.psk.*` (jonasevcik 8d0f5ed, 2026-10-26)
 
