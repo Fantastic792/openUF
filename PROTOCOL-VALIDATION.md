@@ -652,6 +652,11 @@ retried on failure, logged once per distinct error). Probes sent to the group fr
 `02 08` over multicast with `02 09` and ignored `01 00 00 00` sent there. A request that
 arrives as both a broadcast and a multicast copy is answered once (the limit above).
 
+**This project's VM lab, 2026-10-30.** An openUF AP with `l2_announce = true`, probed from the
+lab's LAN: `01 00 00 00` unicast drew `01 00`, `02 08 00 00` unicast and to `233.89.188.1` drew
+`02 09`, `01 04 00 06 <its MAC>` drew `01 04`, each unicast from UDP 10001 with a 161-byte
+packet; `01 04` naming another MAC, and an unknown request, drew nothing.
+
 **IPv6 (NOT done, gap).** WiFiman also sends both probes to `ff02::1` every second from a
 link-local address, and `mcad` opens an IPv6 socket on port 10001 (`init_mcast_sock`, family
 `AF_INET6`), so a real AP may answer there. openUF listens on IPv4 only. What we know: a v4
