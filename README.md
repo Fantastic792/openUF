@@ -229,6 +229,10 @@ Found by this project's testing, to be fixed:
   is overwritten, and the `ubnt` account is locked only when openUF next restarts.
 - **Mesh switch time.** The station comes up 15 to 16 s after the cable goes, not the 10 s
   the code waits, when a report to the controller is already in flight.
+- **DFS channels under country India.** Linux's regulatory database gives India no DFS
+  region, and the kernel then refuses the radar check on every driver, so channels 52-144
+  cannot be used in a site set to India. The JioRouter profiles keep DFS out for this
+  reason; whether the MT7986 runs DFS under another country is not yet checked.
 
 ## Hardware
 
