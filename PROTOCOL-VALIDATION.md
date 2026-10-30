@@ -2806,7 +2806,14 @@ ARM64 U6/U7 (incl. U6-IW) stays opaque; nothing below is claimed for it. Method:
   `sae.{pwe,confirm_immediate,anti_clogging,sync,groups,psk.<n>.{mac,vlan,id}}`, `owe_ptk_workaround`, `fils.*`,
   `ft_r0_key_lifetime`/`r1_max_key_lifetime`/`rkh_pos_timeout`/`ft_over_ds`/`rsn_preauth`, `wpa.{strict_rekey,gmk_rekey,group_update_count}`,
   `wpa3.enhanced_192`, `btm_disassoc.{status,threshold}`, `disable_na_mcast_to_ucast`. 6.8.2 also ships its own `wpad`, `scan-rrm`, `airtime-scan`.
-- Per-feature results are in the feature matrix rows (27 = SAE tuning).
+- **Controller side (10.6.106 `internal-dependencies.jar`, CFR):** none of `sae.pwe`, `sae.confirm_immediate`, `owe_ptk_workaround`,
+  `r0_key_lifetime`, `r1_max_key_lifetime`, `rkh_pos_timeout`, `rsn_preauth`, `wpa.{strict_rekey,gmk_rekey,group_update_count}`, `fils.*`
+  occurs in the controller: the firmware understands them but nothing sends them, so they need no openUF code. (OWE: firmware's
+  `owe_ptk_workaround=1` default equals OpenWrt's; `ap.uc:22` hardcodes the hidden BSS name `<ssid>OWE`, not overridable.)
+- **`sae.psk.<n>`** (emitter `XWWFgnDBrNRLQZ`, wlanconf `sae_psk` list of `{psk, mac, vlan, id}`): entry `mac=ff:ff:ff:ff:ff:ff` is the WLAN's own key
+  (WPA3-only: sent here instead of `wpa.psk`); others are station-bound (`mac` absent = any), `vlan` ≥ 1, `dynamic_vlan` 2 if `sae_psk_vlan_required`.
+  Firmware writes `sae_password=<key>[|mac=][|vlanid=][|id=]`. openUF: feature matrix row 28.
+- Per-feature results are in the feature matrix rows (27 = SAE tuning, 28 = SAE station keys).
 
 ## Open questions
 
@@ -3922,6 +3929,12 @@ A notif inform with a *minimal* identity (mac/model/version only) is refused wit
 The one-shot controls above had to repeat what `build_json` puts in `_notif_identity` —
 serial, platform, hostname, ip, inform_url, cfgversion, required_version, state, uptime.
 Worth knowing before writing another notif test by hand.
+
+### WPA3 station keys: `aaa.<n>.sae.psk.*` (jonasevcik 8d0f5ed, 2026-10-26)
+
+Their feature-matrix row:
+
+| 28 | SAE station keys | `aaa.<n>.sae.psk.<k>.{psk,mac,vlan,id}` | ✅ Wire → UCI → hostapd confirmed 2026-10-26 on both APs, all radios (temp WPA3-only WLAN, REST `sae_psk` with an any-station key, a key bound to a MAC, a VLAN-10 key): `wifi-station` sections with the right `mac`/`vid`, hostapd `.sae` lines `<key>\|mac=<mac>[\|vlanid=10]`, `phy*-ap*-10` netdevs bridged into `br-openuf10`, all removed again on delete. ⚠️ No client joined. Joins the `psk_file` private keys (deduped); the `ff:..` entry is skipped. |
 
 ### SAE tuning: anti-clogging, sync, groups (jonasevcik a64bcfc, 2026-10-26)
 
