@@ -1081,6 +1081,7 @@ update.sh           on-device updater (installed as openuf-update): backup, inst
 tools/              dist.sh (package), check.sh (preflight), simulate.sh (e2e),
                     deploy.sh (push a build to adopted APs and run update.sh on each),
                     heartbeat-probe.lua (what one inform costs a board: forks and reads),
+                    fw-extract.sh (rootfs of a UniFi MIPS AP firmware: xz, cpio, binwalk),
                     strip.lua, test_controller.py, validation/ (docker controller)
 PROTOCOL-VALIDATION.md   evidence for every protocol claim — read before disputing one
 REVERSE-ENGINEERING.md   the open questions: unimplemented surfaces + experiment plans

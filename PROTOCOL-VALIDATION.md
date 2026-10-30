@@ -1336,8 +1336,9 @@ the file service by site name), **not** `system.properties`. Lab, 10.4.57: a lin
 `config.selfrun_guest_mode=off` to `data/sites/default/config.properties` made the next
 push carry `selfrun_guest_mode=off`, with no restart needed.
 
-**What the AP does with it (UniFi firmware, BZ2 3.9.27 and 4.0.15).** Current firmware is
-encrypted. These builds are not, and their selfrun code is identical:
+**What the AP does with it (UniFi firmware, BZ2 3.9.27 and 4.0.15).** Both builds are
+plaintext (as is every MIPS/QCA956x build read since, see the newer firmware audit; only
+the ARM64 U6/U7 images are opaque), and their selfrun code is identical:
 - `/bin/mcad` enters SELFRUN (state 3, writes `/var/run/system.selfrun`, calls
   `syswrapper.sh set_selfrun`) once its consecutive-failure count reaches 3 (`fail_count`
   at object offset 0x264, `sltiu …, 3`). The first successful inform calls `unset_selfrun`.
@@ -2522,8 +2523,9 @@ Fourth review, covering upstream's 82 commits of 1–17 October 2026 (`08d0003..
 tags `v0.10.0` and `v0.11.0`), re-implemented here commit by commit (a three-way apply per
 commit, the displaced blocks hand-placed in this tree's layout, their tests ported by name)
 rather than merged. Two things changed how upstream works and both matter for reading what
-follows. **They now read UniFi AP firmware**: current builds are encrypted (the U6-InWall
-dead end below still stands), but UAP BZ2 3.9.27 to 4.0.15 are plaintext, and
+follows. **They now read UniFi AP firmware**: the ARM64 U6/U7 images are opaque (the U6-InWall
+dead end below still stands), but the MIPS/QCA956x builds are plaintext (BZ2 3.9.27 to
+4.0.15 here; later builds in the newer firmware audit, `tools/fw-extract.sh`), and
 `/usr/etc/syswrapper.sh`, `/bin/mcad`, `/bin/ubntbox`, `libubnt.so` and `umac.ko` say what
 a real AP does with each key. Those claims are labelled "firmware-confirmed for 3.9.27 to
 4.0.15" and are not claims about current firmware. And **every piece of hardware evidence
