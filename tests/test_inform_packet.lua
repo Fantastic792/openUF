@@ -9235,4 +9235,32 @@ return {
 			assert_true(out:find("<redacted>") ~= nil, "and says it was redacted")
 		end
 	},
+	{
+		name = "inform packet: an SSID or passphrase holding '=', quotes or multibyte text arrives byte-exact",
+		fn = function()
+			-- The wire is key=value lines and the controller sends values
+			-- verbatim, so "=" is legal inside an SSID or a passphrase. Every
+			-- one of these is something an admin can type into the WLAN form.
+			local cases = {
+				{ "Caf=e",                 "pa=ss=word" },
+				{ "a b \"c\" $d \e 'f'",  "sp ace\"$`\'#;|&" },
+				{ "Café",                  "pässwörd" },
+				{ "नमस्ते घर",             "पासवर्ड1234" },
+				{ "你好WiFi",              "密码密码密码" },
+				{ "مرحبا",                 "كلمة السر" },
+				{ "😀 Home",               "😀😀😀😀" },
+				{ string.rep("é", 16),     string.rep("x", 63) },  -- 32-byte SSID, 63-char PSK
+			}
+			for _, c in ipairs(cases) do
+				local ssid, psk = c[1], c[2]
+				local raw = "aaa.1.ssid=" .. ssid .. "\naaa.1.wpa=2\n"
+					.. "aaa.1.wpa.key.1.mgmt=WPA-PSK\naaa.1.wpa.psk=" .. psk .. "\n"
+					.. "wireless.1.ssid=" .. ssid .. "\nwireless.1.parent=radio0\n"
+				local _, vt = inform._parse_wifi_system_cfg(raw)
+				assert_eq(#vt, 1, "one WLAN for ssid " .. ssid)
+				assert_eq(vt[1].ssid, ssid, "ssid byte-exact")
+				assert_eq(vt[1].x_passphrase, psk, "passphrase byte-exact for " .. ssid)
+			end
+		end
+	},
 }

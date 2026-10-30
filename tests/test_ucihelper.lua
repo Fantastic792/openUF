@@ -5718,4 +5718,26 @@ Wiphy phy2
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		name = "ucihelper: multibyte and punctuated SSIDs get valid, distinct sections and keep their bytes",
+		fn = function()
+			with_ucihelper(function(db)
+				-- The mock rejects section names outside [%w_], as uci does.
+				local ssids = { "Café", "Cafe", "नमस्ते घर", "你好WiFi", "مرحبا",
+					"😀 Home", "Caf=e", "a b \"c\" $d" }
+				local psk = "sp ace\"$`\'#;|&=x"
+				local seen = {}
+				for _, ssid in ipairs(ssids) do
+					ucihelper.wlan_add("radio0", ssid, "wpa2", psk)
+					local name = ucihelper.vap_section_name("radio0", ssid)
+					assert_nil(seen[name], "no two SSIDs share a section: " .. ssid)
+					seen[name] = true
+					local s = db.wireless[name]
+					assert_not_nil(s, "section written for " .. ssid)
+					assert_eq(s.ssid, ssid, "ssid stored verbatim")
+					assert_eq(s.key, psk, "passphrase stored verbatim")
+				end
+			end)
+		end
+	},
 }

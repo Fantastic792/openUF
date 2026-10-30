@@ -382,4 +382,43 @@ return {
 			end)
 		end
 	},
+	{
+		name = "state: a write or close that fails (full overlay) keeps the previous state file",
+		fn = function()
+			with_tmp(function()
+				local good = { authkey = "aabbccddeeff00112233445566778899", adopted = true,
+					cfgversion = "abc123", inform_url = "http://unifi:8080/inform" }
+				state.save(good)
+				local before = io.open(TMP):read("*a")
+				local real_open = io.open
+				for _, failing in ipairs({ "write", "close" }) do
+					-- A full jffs2/ubifs overlay opens the file fine and fails
+					-- the write, or the flush at close.
+					io.open = function(path, mode)
+						if path == TMP .. ".tmp" then
+							return {
+								write = function()
+									if failing == "write" then return nil, "No space left on device" end
+									return true
+								end,
+								close = function()
+									if failing == "close" then return nil, "No space left on device" end
+									return true
+								end,
+							}
+						end
+						return real_open(path, mode)
+					end
+					local ok, err = pcall(state.save, { authkey = DEFKEY, adopted = false })
+					io.open = real_open
+					assert_false(ok, failing .. " failure raises")
+					assert_contains(err, "No space left on device", "reason in the error")
+					assert_eq(io.open(TMP):read("*a"), before, "old file untouched after a failed " .. failing)
+					local st = state.load()
+					assert_true(st.adopted, "still adopted after a failed " .. failing)
+					assert_eq(st.authkey, good.authkey, "authkey kept")
+				end
+			end)
+		end
+	},
 }

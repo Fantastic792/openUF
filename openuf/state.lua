@@ -268,8 +268,16 @@ function M.save(st)
 		end
 	end
 	local body = cjson.encode(st)
-	f:write(body)
-	f:close()
+	-- A full overlay fails the write or the close, not the open. Renaming that
+	-- short file over the good one cost the adoption on the next start (the
+	-- load falls back to defaults), so the old file stays until a write lands.
+	local wrote, werr = f:write(body)
+	local closed, cerr = f:close()
+	if not (wrote and closed) then
+		os.remove(tmp)
+		error("state.save: cannot write " .. tmp .. ": " .. tostring(werr or cerr)
+			.. " -- keeping the previous state file")
+	end
 	local ok, err = os.rename(tmp, M._state_file)
 	if not ok then
 		os.remove(tmp)
