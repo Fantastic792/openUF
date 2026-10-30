@@ -238,7 +238,7 @@ Any dual-band OpenWrt device with **16 MB of flash or more** and about 5 MB free
 
 | Board | Profile | Tested here |
 |---|---|---|
-| JioRouter AX6000 JIDU6J01 family (JIDU6J01, 6201, 6401, 6601, 6701) | `jiorouter-ax6000-jidu6j01` | ✅ JIDU6401, see above. DFS channels are left out on purpose: this chip fails the radar check |
+| JioRouter AX6000 JIDU6J01 family (JIDU6J01, 6201, 6401, 6601, 6701) | `jiorouter-ax6000-jidu6j01` | ✅ JIDU6401, see above. DFS channels are left out on purpose: the radar check failed when tested, under country India, where no Linux AP can run one (see Known issues) |
 | JioRouter AX6000 JIDU6101 | `jiorouter-ax6000-jidu6101` | Not here; [inherited](#inherited-results-not-verified-here) |
 | TP-Link Archer C5 v1 | `archer-c5-v1` | Not here; inherited |
 | TP-Link TL-WDR3500 v1 | `tl-wdr3500-v1` | Not here; inherited (8 MB flash, needs an image with the crypto built in) |
@@ -246,6 +246,7 @@ Any dual-band OpenWrt device with **16 MB of flash or more** and about 5 MB free
 | Xiaomi Mi Router AX3000T | `xiaomi-ax3000t` | Not here; inherited |
 | TP-Link Archer A7 v5 / C7 v4 / C7 v5, Deco M5 v1-v3, Deco M4R v4, Dynalink DL-WRX36 | from the OpenWrt sources | Never run on the board |
 | TP-Link WR1043ND v2 | `tl-wr1043ndv2` | Single band; profile only |
+| BT Home Hub 5 Type A | `bt-homehub-v5a` | Not here; [inherited](#inherited-results-not-verified-here) (adopted on 25.12.6 by a jonasevcik/openUF contributor) |
 
 Anything else runs on a generic dual-band or single-band profile, or on one the installer
 generates from the running device. Each profile's details are in
@@ -383,6 +384,7 @@ moves up into [Tested on real hardware](#tested-on-real-hardware) with your name
 | **Mesh** on a TP-Link Deco M4R v1, adopted and meshed by a user | `mesh-one-hop`, `board-profile` |
 | **TP-Link Archer C5 v1** confirmed end to end, the reference device | `board-profile` |
 | **TP-Link TL-WDR3500 v1** confirmed, with a custom image | `board-profile` |
+| **BT Home Hub 5 Type A** (lantiq xrx200, DSA): adoption, the WiFi push and live clients on OpenWrt 25.12.6 against a UCG Ultra; `install.sh`, radio settings and Locate not confirmed | `board-profile` |
 | **JioRouter AX6000 JIDU6101**, the original lab APs | `board-profile` |
 | **Xiaomi Mi Router AX3000T** confirmed, WiFi 6 | `board-profile` |
 | **OpenWrt 24.10** with `opkg` | `openwrt-24.10` |

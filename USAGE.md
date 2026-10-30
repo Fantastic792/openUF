@@ -494,6 +494,9 @@ dev = dofile("modelmap/dynalink-dl-wrx36.lua")
 -- For Xiaomi Mi Router AX3000T (MT7981 / filogic — DSA; adopted from upstream):
 dev = dofile("modelmap/xiaomi-ax3000t.lua")
 
+-- For BT Home Hub 5 Type A (lantiq xrx200, DSA — no swconfig):
+dev = dofile("modelmap/bt-homehub-v5a.lua")
+
 -- For any other dual-band OpenWrt AP:
 dev = dofile("modelmap/generic-dualband-ap.lua")
 
