@@ -65,6 +65,97 @@ local PROC_NET_DEV = table.concat({
 
 return {
 	{
+		name = "announce: _refresh keeps the previous values when a source cannot be read",
+		fn = function()
+			local o_popen, o_read, o_state = announce._popen, announce._read_file, announce._state
+			announce._popen = function() return "" end
+			announce._read_file = function() return nil end
+			announce._state = {load = function() error("unreadable") end}
+			local ok, err = pcall(function()
+				local cfg = {iface = "br-lan", ip = {10, 0, 0, 9}, hostname = "kept",
+					uptime = 77, adopted = true}
+				announce._refresh(cfg)
+				assert_eq(table.concat(cfg.ip, "."), "10.0.0.9", "ip kept")
+				assert_eq(cfg.hostname, "kept", "hostname kept")
+				assert_eq(cfg.uptime, 77, "uptime kept")
+				assert_eq(cfg.adopted, true, "adopted kept when state is unreadable")
+				assert_nil(announce.adopted(), "adopted() answers nil rather than guessing")
+			end)
+			announce._popen, announce._read_file, announce._state = o_popen, o_read, o_state
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "announce: _refresh re-reads ip, hostname, uptime and the adopted flag each tick",
+		fn = function()
+			-- The packet was built from startup values for the life of the
+			-- process: IsDefault said "unadopted" forever, the IP was the
+			-- boot-time one, uptime counted from daemon start.
+			local o_popen, o_read, o_state = announce._popen, announce._read_file, announce._state
+			announce._popen = function(cmd)
+				if cmd:find("ip -4 addr show dev br-lan", 1, true) then
+					return "    inet 10.1.2.3/24 brd 10.1.2.255 scope global br-lan\n"
+				end
+				return ""
+			end
+			announce._read_file = function(path)
+				if path == "/proc/uptime" then return "4242.55 8000.10\n" end
+				if path == "/proc/sys/kernel/hostname" then return "ap-two\n" end
+				return nil
+			end
+			announce._state = {load = function() return {adopted = true} end}
+			local ok, err = pcall(function()
+				local cfg = {iface = "br-lan", state_file = "/x/state.json",
+					ip = {192, 168, 1, 1}, hostname = "openUF", uptime = 7, adopted = false}
+				announce._refresh(cfg)
+				assert_eq(table.concat(cfg.ip, "."), "10.1.2.3", "IP re-read from the interface")
+				assert_eq(cfg.hostname, "ap-two", "hostname re-read")
+				assert_eq(cfg.uptime, 4242, "uptime is the system's, from /proc/uptime")
+				assert_eq(cfg.adopted, true, "adopted follows state.json")
+				assert_eq(announce._state._state_file, "/x/state.json", "conf.lua's state path is used")
+				local pkt = announce.build_packet(sample_cfg(cfg))
+				assert_eq(string.byte(find_tlv(pkt, 0x17), 1), 0x00, "and the packet says adopted")
+			end)
+			announce._popen, announce._read_file, announce._state = o_popen, o_read, o_state
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "announce: a v1 discovery request is answered with a version 1 / command 0 packet carrying the same TLVs",
+		fn = function()
+			local cfg = sample_cfg()
+			local reply = announce.reply_for("\1\0\0\0", cfg)
+			assert_true(reply ~= nil, "a v1 request gets a reply")
+			assert_eq(string.byte(reply, 1), 0x01, "version 1")
+			assert_eq(string.byte(reply, 2), 0x00, "command 0, as a UCG Ultra answers it")
+			assert_eq(find_tlv(reply, 0x0b), "openUF", "hostname TLV")
+			assert_eq(find_tlv(reply, 0x0c), "U6IW", "platform TLV")
+			assert_eq(find_tlv(reply, 0x16), "6.6.55-openUF-0.1", "short firmware TLV")
+			-- Same body as the broadcast: only the two header bytes differ.
+			assert_eq(reply:sub(3), announce.build_packet(cfg):sub(3), "identical TLVs and length")
+		end
+	},
+	{
+		name = "announce: a v2 discovery request is answered with version 2 / command 9",
+		fn = function()
+			local reply = announce.reply_for("\2\8\0\0", sample_cfg())
+			assert_true(reply ~= nil, "a v2 request gets a reply")
+			assert_eq(string.byte(reply, 1), 0x02, "version 2")
+			assert_eq(string.byte(reply, 2), 0x09, "command 9 (0x08 was the request)")
+			assert_eq(find_tlv(reply, 0x01), string.char(0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad), "hardware address TLV")
+		end
+	},
+	{
+		name = "announce: the version suffix has one definition",
+		fn = function()
+			local cfg = sample_cfg()
+			cfg.version_suffix = nil
+			local short = find_tlv(announce.build_packet(cfg), 0x16)
+			assert_eq(short, cfg.fw_ver .. announce.VERSION_SUFFIX, "default suffix is M.VERSION_SUFFIX")
+			assert_eq(announce.VERSION_SUFFIX, "-openUF-0.2", "the shipped value")
+		end
+	},
+	{
 		name = "announce: packet starts with 0x02 0x06 header",
 		fn = function()
 			local pkt = announce.build_packet(sample_cfg())
@@ -479,135 +570,217 @@ return {
 		end
 	},
 	{
-		name = "announce: _refresh re-reads ip, hostname, uptime and the adopted flag each tick",
+		name = "announce: the IsDefault byte follows the adopted flag",
 		fn = function()
-			-- The packet was built from startup values for the life of the
-			-- process: IsDefault said "unadopted" forever, the IP was the
-			-- boot-time one, uptime counted from daemon start.
-			local o_popen, o_read, o_state = announce._popen, announce._read_file, announce._state
-			announce._popen = function(cmd)
-				if cmd:find("ip -4 addr show dev br-lan", 1, true) then
-					return "    inet 10.1.2.3/24 brd 10.1.2.255 scope global br-lan\n"
-				end
-				return ""
-			end
+			-- 0x17 is IsDefault: 1 = unadopted (factory default), 0 = adopted.
+			-- The entry point never passed `adopted`, so this byte said
+			-- "factory default" for the life of the process however long ago
+			-- the device was adopted, and the controller's Discover list said
+			-- so too. _refresh now re-reads it from state.json each tick.
+			local un = announce.build_packet(sample_cfg())
+			local ad = announce.build_packet(sample_cfg({adopted = true}))
+			assert_eq(find_tlv(un, 0x17), string.char(0x01), "unadopted -> 1")
+			assert_eq(find_tlv(ad, 0x17), string.char(0x00), "adopted -> 0")
+		end
+	},
+	{
+		name = "announce: _refresh re-reads uptime, ip and the adopted flag each tick",
+		fn = function()
+			announce._holder = nil
+			-- Everything the packet carries that can change while the
+			-- broadcaster runs. Before this the packet was frozen at the
+			-- values read at startup: uptime counted seconds since the DAEMON
+			-- started rather than since boot, and the IP stayed whatever the
+			-- interface had at boot -- wrong after a DHCP renewal or a
+			-- controller-pushed static address.
+			local orig_read, orig_popen, orig_state =
+				announce._read_file, announce._popen, announce._state
 			announce._read_file = function(path)
-				if path == "/proc/uptime" then return "4242.55 8000.10\n" end
-				if path == "/proc/sys/kernel/hostname" then return "ap-two\n" end
+				if path == "/proc/uptime" then return "864000.42 1700000.00\n" end
+				if path == "/proc/sys/kernel/hostname" then return "ap2\n" end
+				if path == "/sys/class/net/lan1/address" then return "aa:bb:cc:dd:ee:ff\n" end
 				return nil
 			end
+			announce._popen = function(cmd)
+				if cmd:find("^ip ") then return "inet 10.0.9.7/24 brd 10.0.9.255 scope global lan1\n" end
+				return ""
+			end
 			announce._state = {load = function() return {adopted = true} end}
-			local ok, err = pcall(function()
-				local cfg = {iface = "br-lan", state_file = "/x/state.json",
-					ip = {192, 168, 1, 1}, hostname = "openUF", uptime = 7, adopted = false}
-				announce._refresh(cfg)
-				assert_eq(table.concat(cfg.ip, "."), "10.1.2.3", "IP re-read from the interface")
-				assert_eq(cfg.hostname, "ap-two", "hostname re-read")
-				assert_eq(cfg.uptime, 4242, "uptime is the system's, from /proc/uptime")
-				assert_eq(cfg.adopted, true, "adopted follows state.json")
-				assert_eq(announce._state._state_file, "/x/state.json", "conf.lua's state path is used")
-				local pkt = announce.build_packet(sample_cfg(cfg))
-				assert_eq(string.byte(find_tlv(pkt, 0x17), 1), 0x00, "and the packet says adopted")
-			end)
-			announce._popen, announce._read_file, announce._state = o_popen, o_read, o_state
-			if not ok then error(err, 0) end
+
+			local cfg = sample_cfg({iface = "lan1", uptime = 30, adopted = false})
+			announce._refresh(cfg)
+			announce._read_file, announce._popen, announce._state =
+				orig_read, orig_popen, orig_state
+
+			assert_eq(cfg.uptime, 864000, "uptime is seconds since BOOT, not since daemon start")
+			assert_eq(cfg.hostname, "ap2", "hostname is re-read")
+			assert_true(cfg.adopted, "the adopted flag is re-read from state.json")
+			assert_eq(table.concat(cfg.ip, "."), "10.0.9.7", "the live address wins over the boot one")
 		end
 	},
 	{
-		name = "announce: _refresh keeps the previous values when a source cannot be read",
+		name = "announce: _refresh keeps the previous value when a source cannot be read",
 		fn = function()
-			local o_popen, o_read, o_state = announce._popen, announce._read_file, announce._state
-			announce._popen = function() return "" end
+			announce._holder = nil
+			-- A proc file that is missing, or a state module that cannot be
+			-- found, must not blank a field that was correct a second ago.
+			local orig_read, orig_popen, orig_state =
+				announce._read_file, announce._popen, announce._state
 			announce._read_file = function() return nil end
-			announce._state = {load = function() error("unreadable") end}
-			local ok, err = pcall(function()
-				local cfg = {iface = "br-lan", ip = {10, 0, 0, 9}, hostname = "kept",
-					uptime = 77, adopted = true}
-				announce._refresh(cfg)
-				assert_eq(table.concat(cfg.ip, "."), "10.0.0.9", "ip kept")
-				assert_eq(cfg.hostname, "kept", "hostname kept")
-				assert_eq(cfg.uptime, 77, "uptime kept")
-				assert_eq(cfg.adopted, true, "adopted kept when state is unreadable")
-				assert_nil(announce.adopted(), "adopted() answers nil rather than guessing")
-			end)
-			announce._popen, announce._read_file, announce._state = o_popen, o_read, o_state
-			if not ok then error(err, 0) end
+			announce._popen = function() return "" end
+			announce._state = {load = function() error("no state file") end}
+
+			local cfg = sample_cfg({iface = "lan1", uptime = 30, adopted = true,
+				hostname = "ap2", ip = {10, 0, 9, 7}})
+			announce._refresh(cfg)
+			announce._read_file, announce._popen, announce._state =
+				orig_read, orig_popen, orig_state
+
+			assert_eq(cfg.uptime, 30, "uptime keeps the counted value")
+			assert_eq(cfg.hostname, "ap2", "hostname is kept")
+			assert_true(cfg.adopted, "the adopted flag is kept, not reset to false")
+			assert_eq(table.concat(cfg.ip, "."), "10.0.9.7", "the ip is kept")
 		end
 	},
 	{
-		name = "announce: the version suffix has one definition",
+		name = "announce: the version suffix has exactly one definition",
 		fn = function()
+			-- It used to be written out in build_packet and again in the entry
+			-- point, so the short/verbose strings could drift from what the
+			-- daemon actually announced.
 			local cfg = sample_cfg()
-			cfg.version_suffix = nil
-			local short = find_tlv(announce.build_packet(cfg), 0x16)
-			assert_eq(short, cfg.fw_ver .. announce.VERSION_SUFFIX, "default suffix is M.VERSION_SUFFIX")
-			assert_eq(announce.VERSION_SUFFIX, "-openUF-0.2", "the shipped value")
+			cfg.version_suffix = nil     -- pairs() cannot deliver a nil override
+			local pkt = announce.build_packet(cfg)
+			assert_true(find_tlv(pkt, 0x16):find(announce.VERSION_SUFFIX, 1, true) ~= nil,
+				"the default suffix is M.VERSION_SUFFIX")
 		end
 	},
 	{
-		name = "announce: a v1 discovery request is answered with a version 1 / command 0 packet carrying the same TLVs",
+		name = "announce: a v1 discovery request is answered with header 01 00 and the announce TLVs",
 		fn = function()
 			local cfg = sample_cfg()
-			local reply = announce.reply_for("\1\0\0\0", cfg)
-			assert_true(reply ~= nil, "a v1 request gets a reply")
-			assert_eq(string.byte(reply, 1), 0x01, "version 1")
-			assert_eq(string.byte(reply, 2), 0x00, "command 0, as a UCG Ultra answers it")
+			local reply = announce.reply_for(string.char(1, 0, 0, 0), cfg)
+			assert_true(reply ~= nil, "v1 request answered")
+			assert_eq(reply:byte(1), 1, "version")
+			assert_eq(reply:byte(2), 0, "command")
+			local plen = reply:byte(3) * 256 + reply:byte(4)
+			assert_eq(plen, #reply - 4, "length field covers the body")
 			assert_eq(find_tlv(reply, 0x0b), "openUF", "hostname TLV")
-			assert_eq(find_tlv(reply, 0x0c), "U6IW", "platform TLV")
-			assert_eq(find_tlv(reply, 0x16), "6.6.55-openUF-0.1", "short firmware TLV")
-			-- Same body as the broadcast: only the two header bytes differ.
-			assert_eq(reply:sub(3), announce.build_packet(cfg):sub(3), "identical TLVs and length")
+			assert_eq(find_tlv(reply, 0x01), string.char(0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad), "hw TLV")
+			-- Same body as the broadcast, only the header differs.
+			assert_eq(reply:sub(3), announce.build_packet(cfg):sub(3), "body equals the announce body")
 		end
 	},
 	{
-		name = "announce: a v2 discovery request is answered with version 2 / command 9",
+		name = "announce: a v2 discovery request is answered with header 02 09",
 		fn = function()
-			local reply = announce.reply_for("\2\8\0\0", sample_cfg())
-			assert_true(reply ~= nil, "a v2 request gets a reply")
-			assert_eq(string.byte(reply, 1), 0x02, "version 2")
-			assert_eq(string.byte(reply, 2), 0x09, "command 9 (0x08 was the request)")
-			assert_eq(find_tlv(reply, 0x01), string.char(0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad), "hardware address TLV")
+			local reply = announce.reply_for(string.char(2, 8, 0, 0), sample_cfg())
+			assert_true(reply ~= nil, "v2 request answered")
+			assert_eq(reply:byte(1), 2, "version")
+			assert_eq(reply:byte(2), 9, "command")
+		end
+	},
+	{
+		name = "announce: a targeted v1 request is answered only for our own MAC",
+		fn = function()
+			local cfg = sample_cfg()
+			local mine  = string.char(1, 4, 0, 6, 0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad)
+			local other = string.char(1, 4, 0, 6, 0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xae)
+			local reply = announce.reply_for(mine, cfg)
+			assert_true(reply ~= nil, "own MAC answered")
+			assert_eq(reply:byte(2), 4, "reply command 4")
+			assert_eq(announce.reply_for(other, cfg), nil, "another MAC is not ours")
+			assert_eq(announce.reply_for(string.char(1, 4, 0, 6, 0x24, 0xa4), cfg), nil, "truncated MAC")
 		end
 	},
 	{
 		name = "announce: anything that is not a request gets no reply",
 		fn = function()
 			local cfg = sample_cfg()
-			assert_nil(announce.reply_for(announce.build_packet(cfg), cfg), "our own broadcast, echoed back by the kernel")
-			assert_nil(announce.reply_for("\2\9\0\0", cfg), "another device's v2 reply")
-			assert_nil(announce.reply_for("\1\0\0\5abcde", cfg), "a v1 header with a body")
-			assert_nil(announce.reply_for("\1\0\0", cfg), "too short")
-			assert_nil(announce.reply_for(nil, cfg), "nothing received")
-			assert_nil(announce.reply_for("", cfg), "empty datagram")
+			assert_eq(announce.reply_for(announce.build_packet(cfg), cfg), nil, "our own broadcast echoed back")
+			assert_eq(announce.reply_for(string.char(2, 6, 0, 0), cfg), nil, "02 06 with no body")
+			assert_eq(announce.reply_for(string.char(1, 0, 0, 1, 0), cfg), nil, "v1 with a nonzero length")
+			assert_eq(announce.reply_for(string.char(1, 0, 1, 0), cfg), nil, "length high byte set")
+			assert_eq(announce.reply_for(string.char(3, 0, 0, 0), cfg), nil, "unknown version")
+			assert_eq(announce.reply_for(string.char(2, 9, 0, 0), cfg), nil, "a reply is not a request")
+			assert_eq(announce.reply_for("", cfg), nil, "empty")
+			assert_eq(announce.reply_for(nil, cfg), nil, "nil")
 		end
 	},
 	{
-		name = "announce: _serve_requests answers each request to its sender and falls back to a plain sleep without a listener",
+		name = "announce: _serve_requests replies to the asker's address and port, once per request type per gap",
 		fn = function()
-			local sent, slept = {}, {}
-			local queue = {{"\1\0\0\0", "192.168.1.150", 40001}, {"\2\6\0\5xxxxx", "192.168.1.147", 10001}, {"\2\8\0\0", "10.0.0.5", 5000}}
-			local now = 100
-			local fake_socket = {
-				gettime = function() return now end,
-				select = function(r, _, timeout)
-					if r == nil then slept[#slept + 1] = timeout; now = now + timeout; return nil end
-					if #queue == 0 then now = now + timeout; return {} end
-					return {r[1]}
-				end,
+			local now = 0
+			local queue = {
+				{string.char(1, 0, 0, 0), "192.0.2.50", 40001},
+				{string.char(1, 0, 0, 0), "192.0.2.50", 40002},   -- same asker, same request, too soon
+				{string.char(2, 8, 0, 0), "192.0.2.50", 40001},   -- same asker, the app's other probe: answered
+				{announce.build_packet(sample_cfg()), "192.0.2.9", 10001},   -- not a request
+				{string.char(2, 8, 0, 0), "192.0.2.51", 40003},
 			}
+			local sent = {}
 			local udpl = {
 				receivefrom = function() local q = table.remove(queue, 1); return q[1], q[2], q[3] end,
-				sendto = function(_, data, ip, port) sent[#sent + 1] = {data = data, ip = ip, port = port}; return 1 end,
+				sendto = function(_, data, ip, port) sent[#sent + 1] = {data, ip, port}; return 1 end,
 			}
-			announce._serve_requests(udpl, sample_cfg(), 10, fake_socket)
-			assert_eq(#sent, 2, "two requests answered, the stray announce ignored")
-			assert_eq(sent[1].ip .. ":" .. sent[1].port, "192.168.1.150:40001", "unicast back to the asker's own port")
-			assert_eq(string.byte(sent[1].data, 1), 0x01, "v1 reply for the v1 request")
-			assert_eq(sent[2].ip, "10.0.0.5", "second asker")
-			assert_eq(string.byte(sent[2].data, 2), 0x09, "v2 reply for the v2 request")
-			assert_eq(now, 110, "the interval was waited out")
-			announce._serve_requests(nil, sample_cfg(), 7, fake_socket)
-			assert_eq(slept[1], 7, "no listener: the old sleep")
+			local fake = {
+				gettime = function() now = now + 0.01; return now end,
+				select = function() if #queue > 0 then return {udpl} end; now = now + 100; return {} end,
+			}
+			local saved_refresh, saved_last = announce._refresh, announce._last_reply
+			announce._refresh = function(c) return c end
+			announce._last_reply = {}
+			announce._serve_requests(udpl, sample_cfg(), 10, fake)
+			announce._refresh, announce._last_reply = saved_refresh, saved_last
+			assert_eq(#sent, 3, "three replies: the repeat and the non-request are skipped")
+			assert_eq(sent[1][2], "192.0.2.50", "first asker")
+			assert_eq(sent[1][3], 40001, "to the asker's own port")
+			assert_eq(sent[1][1]:byte(2), 0, "v1 reply")
+			assert_eq(sent[2][2], "192.0.2.50", "the same asker's v2 probe is answered too")
+			assert_eq(sent[2][1]:byte(2), 9, "v2 reply")
+			assert_eq(sent[3][2], "192.0.2.51", "second asker")
+			assert_eq(sent[3][1]:byte(2), 9, "v2 reply")
+		end
+	},
+	{
+		name = "announce: the discovery multicast group is joined on the LAN address, once, and again when the address moves",
+		fn = function()
+			local calls = {}
+			local fail = false
+			local udpl = {setoption = function(_, opt, v)
+				calls[#calls + 1] = opt .. " " .. v.multiaddr .. " " .. v.interface
+				if fail and opt == "ip-add-membership" then return nil, "no such device" end
+				return 1
+			end}
+			local saved_j, saved_e = announce._joined, announce._join_err
+			announce._joined, announce._join_err = nil, nil
+			announce._join_multicast(udpl, {ip = {192, 0, 2, 7}})
+			announce._join_multicast(udpl, {ip = {192, 0, 2, 7}})
+			assert_eq(#calls, 1, "a second call with the same address does nothing")
+			assert_eq(calls[1], "ip-add-membership 233.89.188.1 192.0.2.7", "joined on the LAN address")
+			announce._join_multicast(udpl, {ip = {192, 0, 2, 8}})
+			assert_eq(calls[2], "ip-drop-membership 233.89.188.1 192.0.2.7", "the old membership is dropped")
+			assert_eq(calls[3], "ip-add-membership 233.89.188.1 192.0.2.8", "and the new address joined")
+			-- A failed join is retried on the next call, not remembered as done.
+			announce._joined, announce._join_err = nil, nil
+			calls = {}
+			fail = true
+			announce._join_multicast(udpl, {ip = {192, 0, 2, 9}})
+			announce._join_multicast(udpl, {ip = {192, 0, 2, 9}})
+			assert_eq(#calls, 2, "a failed join is attempted again")
+			assert_eq(announce._joined, nil, "and not recorded as joined")
+			fail = false
+			announce._join_multicast(udpl, {ip = {192, 0, 2, 9}})
+			assert_eq(announce._joined, "192.0.2.9", "recorded once it works")
+			announce._joined, announce._join_err = saved_j, saved_e
+		end
+	},
+	{
+		name = "announce: build_packet's default header is still 02 06",
+		fn = function()
+			local pkt = announce.build_packet(sample_cfg())
+			assert_eq(pkt:byte(1), 2, "version")
+			assert_eq(pkt:byte(2), 6, "command")
 		end
 	},
 }

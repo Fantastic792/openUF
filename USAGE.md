@@ -856,8 +856,14 @@ it never leaves a foreign regdomain programmed with nothing in the config explai
 > to whoever runs the AP, which is why the option is off unless deliberately set.
 
 `l2_announce` — on by default; sends the UDP discovery broadcasts that make the
-device appear in UniFi Discover with no `set-inform` at all. Set it to `false`
-to be adopted over L3 only, and restart the service (the init script reads this
+device appear in UniFi Discover with no `set-inform` at all. The same process
+listens on UDP 10001 for the whole of its life, adopted or not, and answers the
+discovery requests the UniFi app, WiFiman's Discovery tab and the Device Discovery
+Tool broadcast, so they list the AP with its model, name and firmware (one reply
+per asker and request type per half second). Requests sent to the discovery multicast
+group `233.89.188.1` are answered too; IPv6 (`ff02::1`) requests are not, because the
+listener is IPv4 only (see PROTOCOL-VALIDATION.md, "Discovery requests"). `false` turns the broadcast and the responder off together.
+Set it to `false` to be adopted over L3 only, and restart the service (the init script reads this
 and simply doesn't start the broadcaster). The reason to turn it off isn't
 noise: a controller that discovered a device via L2 adopts it *by SSHing in*,
 so on a device that can't accept that login, adoption fails while the inform
@@ -2349,7 +2355,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 
 | Symptom | Likely cause |
 |---|---|
-| Device doesn't appear in UniFi Discover | `announce.lua` not running, or UDP port 10001 blocked |
+| Device doesn't appear in UniFi Discover, or WiFiman's Discovery tab lists it without model or name | `announce.lua` not running (`l2_announce = false` turns it off, responder included), or UDP port 10001 blocked. A failed listener bind is logged once (`announce: cannot listen on udp/10001`) and the broadcast carries on |
 | Controller shows device as "Disconnected" | `inform.lua` not running, or wrong `inform_url` |
 | Controller shows the device's IP as `0.0.0.0` although it has one | A build before 2026-10-26 read the address once at startup; on a DHCP-managed AP the service can start before the lease arrives (seen on both lab APs after a fresh install). `/etc/init.d/openuf restart` re-reads it; current builds re-read it every heartbeat |
 | Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or reinstall with `--bootstrap-adopt` |

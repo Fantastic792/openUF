@@ -603,6 +603,64 @@ Two things real hardware does that the validation container had to be taught:
 alias for `inform_url`. Treating them as the same key makes the device overwrite its working
 inform endpoint on the first routine post-adopt `setparam` and disappear permanently.
 
+### Discovery requests (UDP 10001)
+
+Ubiquiti's own tools (the UniFi app, WiFiman's Discovery tab, the Device Discovery Tool)
+find devices by sending a bare request to UDP 10001 and listing whoever answers. Until
+2026-10-25 openUF only broadcast (`02 06`, from an ephemeral port) and never listened, so
+those tools saw a host with no model, name or firmware.
+
+**Captured 2026-10-25 from a real UCG Ultra (Network 10.6), requests from an ephemeral port,
+broadcast and unicast:**
+
+| Request | Reply |
+|---|---|
+| `01 00 00 00` | unicast from **UDP 10001** to the asker's port: `01 00 <len16> <TLVs>`, 504 bytes |
+| `02 08 00 00` | `02 09 <len16> <TLVs>`, the same 504-byte body; a broadcast request also drew a second 137-byte `02 09` datagram with announce-style TLVs (the UCG has two responders) |
+| `01 04 00 06 <mac>` (right or wrong MAC), `02 06 00 00`, `01 00 00 01 00` | nothing |
+
+The UCG body carries `0x01` hw, `0x02` (mac + ip) x4, `0x0a` uptime, `0x0b` hostname,
+`0x0c` platform, `0x03` / `0x16` firmware, `0x15`, `0x17`, `0x0e`, `0x0d`, `0x06`, `0x0f`,
+and gateway-only `0x2f`, `0x2b` (UUID), `0x32` (port JSON). An AP's reply is its announce TLVs
+under the reply header. The two openUF APs answered nothing before the change (no listener).
+
+**Firmware, `/bin/mcad` of UAP BZ2 4.0.15 (firmware-confirmed for 4.0.15 only):**
+`init_mcast_sock` binds UDP 10001 at daemon start and joins `233.89.188.1`, with no
+adoption check. `mcast_sock_process` drops any datagram whose source port is 10001 (other
+devices' announces) and hands version 1 to `handle_version1`: command 0 with length 0
+answers every asker, command 4 with length 6 answers only when the MAC equals the AP's own,
+the reply header being `01` plus the request's command byte. No version-2 request handler
+was found in this old build, so the AP side of `02 08` rests on the UCG capture alone.
+
+**openUF** (`announce.lua`, `reply_for` / `_serve_requests`): listens on IPv4 UDP 10001 for
+the daemon's whole life, under `l2_announce`; answers `01 00 00 00` with `01 00`, `02 08 00 00`
+with `02 09`, and `01 04 00 06 <own mac>` with `01 04` (the last firmware-only, not seen on a
+UCG); ignores everything else, including its own broadcast coming back. One reply per
+asker address and request type per 0.5 s, since the reply is ~100x the request.
+The UniFi app (WiFiman, captured on the home LAN 2026-10-25) sends `01 00 00 00` and
+`02 08 00 00` back to back from one address and port, every second, to the broadcast
+address and to `ff02::1`; a limit keyed on the address alone answered only one of the two,
+and one AP lost the app's "AP" badge Lab (Docker AP, luasocket
+3.0.0): replies arrive from port 10001, the body parses as the announce TLVs, and a second
+instance logs `cannot listen on udp/10001` once and keeps broadcasting.
+
+**Multicast (done 2026-10-25).** The UCG sends its own probes to `233.89.188.1:10001` and to
+the broadcast address in the same millisecond, and the firmware's `mcad` joins the group, so
+the AP joins it too (`ip-add-membership` on the LAN address, re-joined when the address moves,
+retried on failure, logged once per distinct error). Probes sent to the group from the Mac
+(unconnected socket) were answered by both home APs with `01 00` / `02 09`; the UCG answered
+`02 08` over multicast with `02 09` and ignored `01 00 00 00` sent there. A request that
+arrives as both a broadcast and a multicast copy is answered once (the limit above).
+
+**IPv6 (NOT done, gap).** WiFiman also sends both probes to `ff02::1` every second from a
+link-local address, and `mcad` opens an IPv6 socket on port 10001 (`init_mcast_sock`, family
+`AF_INET6`), so a real AP may answer there. openUF listens on IPv4 only. What we know: a v4
+broadcast of the same probe is sent alongside every v6 one, so the app is answered either
+way; a v6 probe to `ff02::1` from the Mac drew **no reply from any device on the LAN, the UCG
+included** (2026-10-25), so we have no reply format to copy; and LuaSocket 3.0 has no
+scope-id handling for sending to a `fe80::` asker. Revisit if a client shows up that probes
+IPv6 only, and capture a UAP's v6 reply before writing one.
+
 ### Response `_type`s
 
 The complete set, per `InformServlet`: `noop`, `setparam`, `cmd`, `upgrade`, `reboot`,
