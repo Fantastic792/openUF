@@ -58,6 +58,11 @@ if command -v apk >/dev/null 2>&1; then
 	pkg_add()       { apk add "$@"; }
 	pkg_del()       { apk del "$@"; }
 	pkg_update()    { apk update; }
+	# pkg_replace <old> <new>: one transaction. The `!old` world constraint
+	# makes apk drop the conflicting package as part of installing the new
+	# one, and a failed resolve or fetch (offline, stale index) changes
+	# nothing: the old build stays and the radios keep working.
+	pkg_replace()   { apk add "$2" "!$1"; }
 elif command -v opkg >/dev/null 2>&1; then
 	PKG_ADD="opkg install"
 	pkg_installed() { opkg list-installed "$1" 2>/dev/null | grep -q "^$1 "; }
@@ -65,6 +70,24 @@ elif command -v opkg >/dev/null 2>&1; then
 	pkg_add()       { opkg install "$@"; }
 	pkg_del()       { opkg remove "$@"; }
 	pkg_update()    { opkg update; }
+	# opkg has no atomic replace and refuses the new build while the old one
+	# is installed (they conflict). Download it first, as proof the index
+	# and the network work, before removing anything: `opkg download` exits
+	# 0 even for a package that does not exist, so the file is the check.
+	pkg_replace()   {
+		_dl=/tmp/openuf-wpad.$$
+		rm -rf "$_dl"; mkdir -p "$_dl"
+		(cd "$_dl" && opkg download "$2" >/dev/null 2>&1)
+		if ! ls "$_dl"/"$2"_*.ipk >/dev/null 2>&1; then
+			rm -rf "$_dl"
+			echo "could not download $2" >&2
+			return 1
+		fi
+		opkg remove "$1" >/dev/null 2>&1
+		opkg install "$_dl"/"$2"_*.ipk; _rc=$?
+		rm -rf "$_dl"
+		return $_rc
+	}
 else
 	PKG_ADD="(no package manager: neither apk nor opkg)"
 	pkg_installed() { return 1; }
@@ -380,15 +403,28 @@ install() {   # install <only-wpad 0|1> <library or empty> <theme 0|1>
 	else
 		cur=$(wpad_installed) || cur=""
 		want=$(full_for "$cur" "$lib")
+		swapped=0
 		if [ -n "$cur" ]; then
-			# Removed first because the two conflict. The radios are down
-			# from here until the new build is up.
+			# The two conflict, so the old build goes in the same step
+			# (pkg_replace): on apk one transaction, on opkg only once the
+			# new build is downloaded. The radios are down until it is up.
 			say "replacing $cur with $want (the radios are down until the new build is up)"
-			pkg_del "$cur" >/dev/null 2>&1 || warn "could not remove $cur; trying to install $want over it"
+			if out=$(pkg_replace "$cur" "$want" 2>&1); then
+				say "  $want installed"
+				swapped=1; changed=1
+			elif pkg_installed "$cur"; then
+				warn "could not replace $cur:"
+				printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /' >&2
+				die "$cur is unchanged, so the radios still work; openUF will not start until a full build is installed ($PKG_ADD $want)"
+			fi
+			# Otherwise opkg removed $cur and its install failed: retried
+			# below, and $cur is put back if that fails too.
 		else
 			say "installing $want (no hostapd/wpad package is installed)"
 		fi
-		if add_one "$want"; then
+		if [ "$swapped" = 1 ]; then
+			:
+		elif add_one "$want"; then
 			changed=1
 		else
 			# Never leave the device without a hostapd: put the basic one back.
