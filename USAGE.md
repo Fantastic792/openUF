@@ -982,6 +982,20 @@ The other new options default to off when absent.
 hand. Names the temporary SSH bootstrap account (see § SSH prerequisite below)
 that `inform.lua` should lock/unlock as the device's adopted state changes.
 
+### Plugins
+
+A plugin lets a recipe that openUF does not ship, typically one that needs extra software on the
+AP, edit the UCI options of the WLANs openUF provisions. It lives in its own project; openUF only
+offers the hook. **Third-party plugins are unsupported by openUF, and a plugin is Lua running as
+root**: list only code you have read.
+
+Off by default. A plugin is `/etc/openuf/plugins/<name>.lua`, loaded only when named in
+`config.plugins` (`conf.lua`) or on a line of `/etc/openuf/plugins.enabled` (the file an installer
+should edit). A changed plugin set or plugin file makes openUF ask the controller for a fresh push
+at the next start; Force Provision does the same at once. Failures are logged
+(`logread | grep "openuf: plugin"`) and skipped, and the push goes on. The contract, the `ctx`
+reference, uninstall order, versioning and testing are in [docs/PLUGINS.md](docs/PLUGINS.md).
+
 ---
 
 ## 4. Adoption flow

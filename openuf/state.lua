@@ -69,6 +69,8 @@ local TYPED = {
 	authkey                   = "string",
 	adopted                   = "boolean",
 	cfgversion                = "string",
+	-- plugins.fingerprint() of the plugins the last push was built with.
+	plugins_fp                = "string",
 	inform_url                = "string",
 	use_gcm                   = "boolean",
 	upgrade_requested_version = "string",

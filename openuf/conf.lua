@@ -83,6 +83,12 @@ config = {
 	-- towards them that can only fall back to a full reconnect.
 	unifi_ft_interop = true,
 
+	-- Third-party plugins to load from /etc/openuf/plugins/<name>.lua, by name.
+	-- A plugin edits the UCI options of each WLAN openUF provisions, so it runs
+	-- as root with the same trust as this file: list only code you have read.
+	-- Empty (the default) loads nothing. See USAGE.md, "Plugins".
+	plugins = {},
+
 	-- URL the inform loop posts to.  Overwritten at runtime when the controller
 	-- sends a new URL or when syswrapper.sh set-inform is called.
 	-- The value here is only used while state.json carries no URL of its own

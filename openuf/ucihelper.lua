@@ -126,6 +126,12 @@ end
 local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end
 local function get_minrssi()  return get_sibling("minrssi",  M._minrssi)  end
 local function get_ftinterop() return get_sibling("ftinterop", M._ftinterop) end
+local _plugins_mod
+local function get_plugins()
+	if M._plugins then return M._plugins end
+	_plugins_mod = _plugins_mod or get_sibling("plugins", nil)
+	return _plugins_mod
+end
 
 -- Map a UCI wifi-device's channel number to the controller's band identifier.
 -- The real controller's radio_table schema requires this "radio" field
@@ -1386,11 +1392,11 @@ local function mac_of(ifname)
 	return mac and mac:lower() or nil
 end
 
--- The BSSID a VAP has right now: its live netdev's address, resolved the
--- same way the per-VAP features resolve it (find_vap_iface). Asked during
--- apply_config, before the reload, so a VAP being rebuilt still answers
--- with the netdev it is about to get back. nil when the radio has no live
--- interface for it (a WLAN on its first push).
+-- The BSSID a VAP has right now: its live netdev's address, resolved the same
+-- way the per-VAP features resolve it (find_vap_iface). Asked during
+-- apply_config, before the reload, so a VAP being rebuilt still answers with
+-- the netdev it is about to get back. nil when the radio has no live
+-- interface for it. Handed to plugins as ctx.bssid.
 function M.vap_bssid(radio, ssid)
 	return mac_of(M.get_ifname_for_vap(radio, ssid))
 end
@@ -2942,6 +2948,20 @@ function M.apply_config(resp, cfg, opts)
 				-- No overrides on this WLAN any more: take the client addresses
 				-- off the flash rather than leaving a list nothing reads.
 				M._remove_file(M.mac_vlan_path(M.vap_section_name(vap.radio, vap.ssid)))
+			end
+
+			-- conf.lua config.plugins: third-party edits to this VAP's
+			-- options, after everything built in (plugins.lua). Never
+			-- raises, and does nothing unless a plugin is listed.
+			do
+				local plugins = get_plugins()
+				if plugins then
+					plugins.vap_options(extra, vap, cfg, {
+						DELETE = M.DELETE,
+						bssid  = M.vap_bssid,
+						cursor = function() return get_uci().cursor() end,
+					})
+				end
 			end
 
 			local section = M.wlan_add(vap.radio, vap.ssid, vap.security,

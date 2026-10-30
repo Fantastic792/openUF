@@ -78,6 +78,7 @@ M._crypto    = crypto
 M._state     = state
 M._sysinfo   = sysinfo
 M._ucihelper = ucihelper
+M._plugins   = _require_sibling("plugins")
 M._lldp      = lldp
 M._led       = led
 M._netconfig = netconfig
@@ -5099,6 +5100,22 @@ function M.handle_response(json_str, st, cfg)
 	return false
 end
 
+-- The WLAN options the controller last pushed were built with the plugins
+-- then enabled. When that set (or a plugin's source) has changed since, forget
+-- cfgversion so the controller pushes again, instead of waiting for a Force
+-- Provision. A device that has never been pushed to has nothing stale.
+function M._reconcile_plugins(st, cfg)
+	local plugins = M._plugins
+	if not plugins then return end
+	local ok, fp = pcall(plugins.fingerprint, cfg)
+	if not ok then return end
+	if fp ~= (st.plugins_fp or "") then
+		if st.adopted and st.cfgversion ~= "" then st.cfgversion = "" end
+		st.plugins_fp = fp
+		M._state.save(st)
+	end
+end
+
 -- Every hostapd BSS on the device, for a deauth that must find a station on
 -- whichever SSID it is on. One interface per radio missed every SSID after the
 -- first on that radio. A VLAN netdev folds into its BSS (hostapd has no
@@ -7809,6 +7826,7 @@ function M.run(cfg, ufhw)
 	end
 	M._warn_debug_overrides(cfg)
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
+	M._reconcile_plugins(st, cfg)
 	-- Blocked-client nft rules are live kernel state, not persisted UCI --
 	-- reapply from state.json on every fresh start (mirrors the bootstrap
 	-- account reconciliation just above).
