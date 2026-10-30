@@ -2108,7 +2108,7 @@ function M.build_json(st, cfg, ufhw)
 		-- device is permanently shown as needing an update. `fw.pre` (e.g.
 		-- "U6IW.") is a separate, correct field used only by announce.lua's
 		-- L2 discovery "firmware version verbose" TLV -- do not reuse it here.
-		version          = uap.fw and uap.fw.ver or "6.6.55",
+		version          = M.reported_version(uap, st, cfg),
 		required_version = uap.required_version or "6.0.0",
 		bootrom_version  = uap.bootver or "",
 		country_code     = st.country_code or derived_country or 840,
@@ -4481,6 +4481,23 @@ end
 -- cfg: device configuration (from conf.lua; optional -- nil in tests, LED
 --      control becomes a no-op without cfg.led)
 -- Returns true if config was applied (caller should send follow-up inform).
+-- The firmware version the inform reports. Normally the profile's
+-- uap.fw.ver. A controller "upgrade" is stored, never applied (see
+-- handle_response), so the controller keeps seeing the old version and
+-- re-offers the update on every rolling upgrade.
+-- DECISION(fake-upgrade): report the version the controller pushed instead?
+-- conf.lua report_upgraded_version (default false: today's behaviour). On,
+-- a stored bare version ("6.8.2.15592" form only) replaces the profile's,
+-- which ends the re-offer loop but claims firmware this host is not running.
+function M.reported_version(uap, st, cfg)
+	local v = st and st.upgrade_requested_version
+	if cfg and cfg.config and cfg.config.report_upgraded_version
+		and type(v) == "string" and v:match("^%d+%.%d+%.%d+%.%d+$") then
+		return v
+	end
+	return uap.fw and uap.fw.ver or "6.6.55"
+end
+
 function M.handle_response(json_str, st, cfg)
 	-- Tracks the config rather than latching on: a caller that stops passing
 	-- debug_dump_file stops getting dropped-key reports too.
