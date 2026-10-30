@@ -269,6 +269,9 @@ end
 
 local function parse_phy_caps(out, ciphers_by_phy)
 	local bands, cur, phy = {}, nil, nil
+	-- The phy's "valid interface combinations" block, one string per "*"
+	-- entry (an entry wraps onto continuation lines). nil outside the block.
+	local combos
 	for line in (tostring(out) .. "\n"):gmatch("([^\n]*)\n") do
 		-- Phy-level lines carry exactly one leading tab; a Band block's
 		-- contents are indented deeper. That is what marks the end of a band
@@ -280,7 +283,7 @@ local function parse_phy_caps(out, ciphers_by_phy)
 			-- not by band, can be attributed to the right radio.
 			phy = {beacon_rate = false, bands = {},
 				name = line:match("^%s*Wiphy%s+(%S+)")}
-			cur = nil
+			cur, combos = nil, nil
 		elseif line:match("^\tBand %d+:") then
 			cur = {ht40 = false, vht = false, he = false, eht = false,
 				w160 = false, w320 = false, freq = nil, txpower = nil,
@@ -289,6 +292,18 @@ local function parse_phy_caps(out, ciphers_by_phy)
 			if phy then phy.bands[#phy.bands + 1] = cur end
 		elseif line:match("^\t[^\t]") then
 			cur = nil
+			if phy and line:match("^\tvalid interface combinations") then
+				combos = {}
+				phy.combos = combos
+			else
+				combos = nil
+			end
+		elseif combos then
+			if line:match("^%s*%*") then
+				combos[#combos + 1] = line
+			elseif #combos > 0 then
+				combos[#combos] = combos[#combos] .. " " .. line
+			end
 		end
 		-- Driver support for setting the beacon frame rate, reported per phy.
 		-- hostapd treats a beacon_rate it cannot program as FATAL ("Failed to
@@ -340,6 +355,26 @@ local function parse_phy_caps(out, ciphers_by_phy)
 		end
 	end
 
+	-- How many APs the phy can run at once: per combination, the "#{ ... AP
+	-- ... } <= N" group bounded by "total <= T", and the best combination
+	-- wins. "#{ managed, AP, mesh point } <= 4, total <= 4" on an mt76x8;
+	-- "#{ AP, mesh point } <= 8" on an ath9k. nil when `iw` lists none.
+	local function max_bss(p)
+		local best
+		for _, combo in ipairs(p and p.combos or {}) do
+			local ap
+			for group, n in combo:gmatch("#{([^}]*)}%s*<=%s*(%d+)") do
+				for mode in group:gmatch("[^,]+") do
+					if mode:match("^%s*(.-)%s*$") == "AP" then ap = tonumber(n) end
+				end
+			end
+			local total = tonumber(combo:match("total%s*<=%s*(%d+)") or "")
+			if ap and total then ap = math.min(ap, total) end
+			if ap and (not best or ap > best) then best = ap end
+		end
+		return best
+	end
+
 	local caps = {}
 	for _, b in ipairs(bands) do
 		local key = b.freq and ((b.freq < 3000) and "ng" or "na") or nil
@@ -377,6 +412,8 @@ local function parse_phy_caps(out, ciphers_by_phy)
 				-- "no channels" from "unknown" and skip narrowing ACS rather
 				-- than narrowing it to nothing.
 				channels = (b.channels and #b.channels > 0) and b.channels or nil,
+				-- BSSes the radio can host; nil = unknown, caps nothing.
+				max_bss = max_bss(b.phy),
 			}
 			if prev then
 				caps[key].max_kind  = math.max(prev.max_kind, caps[key].max_kind)
@@ -384,6 +421,10 @@ local function parse_phy_caps(out, ciphers_by_phy)
 				caps[key].max_txpower = math.max(prev.max_txpower or 0,
 					caps[key].max_txpower or 0)
 				if caps[key].max_txpower == 0 then caps[key].max_txpower = nil end
+				-- Either phy may host the band's WLANs: the larger cap, and
+				-- unknown on either side stays unknown.
+				caps[key].max_bss = prev.max_bss and caps[key].max_bss
+					and math.max(prev.max_bss, caps[key].max_bss) or nil
 				caps[key].beacon_rate = prev.beacon_rate or caps[key].beacon_rate
 				-- Channels fold as a UNION: either phy could end up hosting
 				-- the band, and a channel the one that does cannot use is
@@ -2167,6 +2208,84 @@ local function reconcile_runtime(entries)
 	end
 end
 
+-- Security values whose BSS needs a passphrase (psk2, sae, sae-mixed).
+local PSK_SECURITY = {["wpa2"] = true, ["wpa3"] = true, ["wpa2/wpa3"] = true}
+
+-- The vap_table without the WLANs this AP cannot put on the air, each one
+-- logged by name. hostapd refuses a PSK or SAE BSS with no key, and a radio
+-- given more BSSes than its `iw phy` interface combinations allow fails the
+-- extra interfaces -- on some drivers the whole radio, taking the WLANs that
+-- did fit down with it. WLANs keep the controller's order, so the first ones
+-- stay up. Against the cap count what else sits on the radio: this push's
+-- backhaul sections, and the enabled hand-made sections set_wlan_exclusive
+-- leaves up. A disabled WLAN uses no BSS; an OWE transition WLAN uses two.
+-- An unknown cap (no `iw`, no combination line) caps nothing.
+-- Known gap: a single phy serving two radios shares one cap; counted per radio.
+function M.usable_vaps(vap_table, cfg, opts)
+	local conf = cfg and cfg.config or {}
+	local exclusive = conf.use_only_unifi_wlan == true
+	local kept = {}
+	for _, name in ipairs(type(conf.keep_wlan_sections) == "table"
+			and conf.keep_wlan_sections or {}) do
+		kept[tostring(name)] = true
+	end
+	local bh = opts and opts.backhaul or {}
+	local cursor, used, caps = nil, {}, {}
+	local function cap_of(radio)
+		if caps[radio] == nil then
+			cursor = cursor or get_uci().cursor()
+			local band = band_for_device({
+				band    = cursor:get("wireless", radio, "band"),
+				hwmode  = cursor:get("wireless", radio, "hwmode"),
+				channel = cursor:get("wireless", radio, "channel"),
+			})
+			local c = band and M.phy_caps()[band]
+			caps[radio] = c and c.max_bss or false
+			local n = 0
+			cursor:foreach("wireless", "wifi-iface", function(sec)
+				local name = sec[".name"] or ""
+				if sec.device == radio and sec.disabled ~= "1"
+						and name:sub(1, #OPENUF_PREFIX) ~= OPENUF_PREFIX
+						and (not exclusive or kept[name]
+							or (sec.mode ~= nil and sec.mode ~= "ap")) then
+					n = n + 1
+				end
+			end)
+			if type(bh.downlink) == "table" and bh.downlink.radio == radio then n = n + 1 end
+			if type(bh.uplink) == "table" and bh.uplink.radio == radio then n = n + 1 end
+			used[radio] = n
+		end
+		return caps[radio]
+	end
+	local out = {}
+	for _, vap in ipairs(vap_table) do
+		local keep = true
+		if vap.ssid and vap.radio then
+			if PSK_SECURITY[vap.security] and (vap.x_passphrase or "") == ""
+					and not vap.ppsk then
+				io.stderr:write(("openuf: WLAN %q (%s) arrived with no passphrase -- "
+					.. "left off the air; hostapd refuses a %s BSS without one\n")
+					:format(vap.ssid, tostring(vap.radio), vap.security))
+				keep = false
+			elseif not vap.disabled then
+				local cap = cap_of(vap.radio)
+				local need = vap.owe_transition and 2 or 1
+				if cap and used[vap.radio] + need > cap then
+					io.stderr:write(("openuf: WLAN %q left off the air -- %s supports "
+						.. "%d SSIDs at once and %d are in use; remove a WLAN from "
+						.. "this AP in the controller\n")
+						:format(vap.ssid, vap.radio, cap, used[vap.radio]))
+					keep = false
+				else
+					used[vap.radio] = used[vap.radio] + need
+				end
+			end
+		end
+		if keep then out[#out + 1] = vap end
+	end
+	return out
+end
+
 -- Apply a full config payload from the controller.
 -- resp: decoded JSON table from the controller's inform response.
 -- cfg:  device configuration (from conf.lua); used for dev.conf.net.lan_cpueth
@@ -2189,7 +2308,9 @@ end
 -- Handles vap_table and radio_table from the setparam/config response.
 function M.apply_config(resp, cfg, opts)
 	local radio_table   = resp.radio_table   or {}
-	local vap_table     = resp.vap_table     or {}
+	-- Only the WLANs this AP can run (usable_vaps), so every pass below --
+	-- rates, VLANs, bcfilter, shaper -- sees what actually goes on the air.
+	local vap_table     = M.usable_vaps(resp.vap_table or {}, cfg, opts)
 	local cpueth = cfg and cfg.net and cfg.net.lan_cpueth
 
 	-- "Minimum Data Rate" arrives per WLAN but OpenWrt's rate options are

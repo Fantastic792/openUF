@@ -7625,6 +7625,7 @@ return {
 			-- and no schedule_* key.
 			local ucihelper, db = new_apply_env()
 			local base = "aaa.1.ssid=net\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "aaa.1.wpa.psk=secret\n"
 				.. "wireless.1.ssid=net\nwireless.1.parent=radio0\n"
 			local on_blob = base .. "wireless.1.schedule_enabled=enabled\n"
 				.. "wireless.1.schedule_sun.0=0000-2359\n"
@@ -8097,6 +8098,7 @@ return {
 				.. "stamgr.1.minrssi.status=true\nstamgr.1.minrssi.rssi=15\n"
 				.. "stamgr.1.loadbalance.status=true\nstamgr.1.loadbalance.maxsta=3\n"
 				.. "aaa.1.ssid=IoT\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "aaa.1.wpa.psk=secret\n"
 				.. "aaa.1.br.devname=br0.20\n"
 				.. "wireless.1.ssid=IoT\nwireless.1.parent=radio0\n"
 				.. "wireless.1.minrate_data=12000\nwireless.1.minrate_cck_rates.status=false\n")

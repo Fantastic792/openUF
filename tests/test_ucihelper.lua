@@ -4586,7 +4586,8 @@ Wiphy phy2
 				ucihelper.apply_config({
 					radio_table = {},
 					vap_table = {{ssid = "net", radio = "radio0",
-						security = "wpa2", pairwise = "ccmp256"}},
+						security = "wpa2", x_passphrase = "hunter22",
+						pairwise = "ccmp256"}},
 				}, nil)
 				assert_eq(db.wireless.openuf_radio0_net.encryption, "psk2+ccmp256",
 					"unknown capabilities leave the controller's request alone")
@@ -4639,10 +4640,11 @@ Wiphy phy2
 					radio_table = {},
 					vap_table = {
 						{ssid = "corp", radio = "radio0", security = "wpa2",
-						 okc = true, tdls_prohibit = true},
+						 x_passphrase = "hunter22", okc = true, tdls_prohibit = true},
 						{ssid = "guest", radio = "radio0", security = "wpa2",
-						 okc = false, tdls_prohibit = false},
-						{ssid = "bare", radio = "radio0", security = "wpa2"},
+						 x_passphrase = "hunter22", okc = false, tdls_prohibit = false},
+						{ssid = "bare", radio = "radio0", security = "wpa2",
+						 x_passphrase = "hunter22"},
 					},
 				}, nil)
 				assert_eq(db.wireless.openuf_radio0_corp.okc, "1", "auth_cache on")
@@ -4676,20 +4678,21 @@ Wiphy phy2
 						-- The permissive fold wins -- the element is an
 						-- advertisement, not a restriction.
 						{ssid = "a", radio = "radio0", security = "wpa2",
-						 country_beacon = false},
+						 x_passphrase = "hunter22", country_beacon = false},
 						{ssid = "b", radio = "radio0", security = "wpa2",
-						 country_beacon = true},
+						 x_passphrase = "hunter22", country_beacon = true},
 						-- radio1 repeats radio0 in the opposite ORDER, which
 						-- is what distinguishes the permissive fold from a
 						-- plain last-one-wins assignment.
 						{ssid = "c", radio = "radio1", security = "wpa2",
-						 country_beacon = true},
+						 x_passphrase = "hunter22", country_beacon = true},
 						{ssid = "c2", radio = "radio1", security = "wpa2",
-						 country_beacon = false},
+						 x_passphrase = "hunter22", country_beacon = false},
 						{ssid = "e", radio = "radio3", security = "wpa2",
-						 country_beacon = false},
+						 x_passphrase = "hunter22", country_beacon = false},
 						-- radio2's WLAN carries the key not at all.
-						{ssid = "d", radio = "radio2", security = "wpa2"},
+						{ssid = "d", radio = "radio2", security = "wpa2",
+						 x_passphrase = "hunter22"},
 					},
 				}, nil)
 				assert_eq(db.wireless.radio0.ieee80211d, "1",
@@ -4731,15 +4734,15 @@ Wiphy phy2
 						{name = "radio2"}, {name = "radio3"}, {name = "radio4"}},
 					vap_table = {
 						{ssid = "a", radio = "radio0", security = "wpa2",
-						 country_beacon = false},
+						 x_passphrase = "hunter22", country_beacon = false},
 						{ssid = "b", radio = "radio1", security = "wpa2",
-						 country_beacon = false},
+						 x_passphrase = "hunter22", country_beacon = false},
 						{ssid = "c", radio = "radio2", security = "wpa2",
-						 country_beacon = false},
+						 x_passphrase = "hunter22", country_beacon = false},
 						{ssid = "d", radio = "radio3", security = "wpa2",
-						 country_beacon = false},
+						 x_passphrase = "hunter22", country_beacon = false},
 						{ssid = "e", radio = "radio4", security = "wpa2",
-						 country_beacon = false},
+						 x_passphrase = "hunter22", country_beacon = false},
 					},
 				}, nil)
 				assert_eq(db.wireless.radio0.ieee80211d, "1",
@@ -5737,6 +5740,101 @@ Wiphy phy2
 					assert_eq(s.ssid, ssid, "ssid stored verbatim")
 					assert_eq(s.key, psk, "passphrase stored verbatim")
 				end
+			end)
+		end
+	},
+	{
+		name = "ucihelper: phy_caps reads the BSS cap from iw's valid interface combinations",
+		fn = function()
+			with_ucihelper(function()
+				-- mt76x8-shaped: AP shares a group of 4 with managed and mesh.
+				-- A second combination with a bigger AP group is the one used.
+				local dump = [[
+Wiphy phy0
+	Band 1:
+		Capabilities: 0x1ff
+			HT20/HT40
+		Frequencies:
+			* 2412.0 MHz [1] (20.0 dBm)
+	valid interface combinations:
+		 * #{ IBSS } <= 1, #{ managed, AP, mesh point } <= 4,
+		   total <= 4, #channels <= 1, STA/AP BI must match
+	Supported extended features:
+		* [ BEACON_RATE_LEGACY ]: legacy beacon rate setting
+Wiphy phy1
+	Band 2:
+		Capabilities: 0x1ff
+			HT20/HT40
+		Frequencies:
+			* 5180.0 MHz [36] (23.0 dBm)
+	valid interface combinations:
+		 * #{ managed } <= 2048, #{ AP, mesh point } <= 8, #{ P2P-client, P2P-GO } <= 1,
+		   total <= 2048, #channels <= 1, STA/AP BI must match
+		 * #{ AP } <= 16, total <= 12, #channels <= 1
+]]
+				ucihelper._popen = function(cmd) return cmd == "iw phy" and dump or "" end
+				local caps = ucihelper.phy_caps()
+				assert_eq(caps.ng.max_bss, 4, "total and the AP group both say 4")
+				assert_eq(caps.na.max_bss, 12, "best combination, bounded by its total")
+				assert_true(caps.ng.beacon_rate, "the block ends at the next phy-level line")
+
+				ucihelper._phy_caps_cache = nil
+				ucihelper._popen = function(c) return c == "iw phy" and JIDU6101_IW_PHY or "" end
+				assert_nil(ucihelper.phy_caps().na.max_bss, "no combination block -> unknown")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: WLANs beyond the radio's BSS cap are left off, in controller order",
+		fn = function()
+			with_ucihelper(function(db)
+				local dump = "Wiphy phy0\n\tBand 1:\n\t\tFrequencies:\n"
+					.. "\t\t\t* 2412.0 MHz [1] (20.0 dBm)\n"
+					.. "\tvalid interface combinations:\n"
+					.. "\t\t * #{ managed, AP, mesh point } <= 4, total <= 4\n"
+				ucihelper._popen = function(cmd) return cmd == "iw phy" and dump or "" end
+				seed_radios({"radio0"})
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio0", "band", "2g")
+				-- The admin's own mesh link on the same radio takes a slot.
+				c:set("wireless", "mesh0", "wifi-iface")
+				c:set("wireless", "mesh0", "device", "radio0")
+				c:set("wireless", "mesh0", "mode", "mesh")
+				local vaps = {}
+				for _, n in ipairs({"one", "two", "off", "three", "four", "five"}) do
+					vaps[#vaps + 1] = {ssid = n, radio = "radio0", security = "open",
+						disabled = (n == "off") or nil}
+				end
+				ucihelper.apply_config({radio_table = {}, vap_table = vaps},
+					{config = {use_only_unifi_wlan = true}})
+				local function has(n)
+					return db.wireless[ucihelper.vap_section_name("radio0", n)] ~= nil
+				end
+				assert_true(has("one") and has("two") and has("three"), "first three fit")
+				assert_true(has("off"), "a disabled WLAN uses no BSS and is kept")
+				assert_false(has("four"), "fourth would be the fifth interface")
+				assert_false(has("five"), "and so would the fifth")
+				assert_not_nil(db.wireless.mesh0, "the mesh link is never touched")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: a PSK or SAE WLAN with no passphrase is left off; open, EAP, PPSK stay",
+		fn = function()
+			with_ucihelper(function(db)
+				local vaps = {
+					{ssid = "nokey2", radio = "radio0", security = "wpa2"},
+					{ssid = "nokey3", radio = "radio0", security = "wpa3", x_passphrase = ""},
+					{ssid = "open", radio = "radio0", security = "open"},
+					{ssid = "corp", radio = "radio0", security = "wpa2-enterprise"},
+					{ssid = "ppsk", radio = "radio0", security = "wpa2",
+					 ppsk = {{key = "hunter22"}}},
+					{ssid = "home", radio = "radio0", security = "wpa2", x_passphrase = "hunter22"},
+				}
+				local kept = ucihelper.usable_vaps(vaps, nil, nil)
+				local names = {}
+				for _, v in ipairs(kept) do names[#names + 1] = v.ssid end
+				assert_eq(table.concat(names, ","), "open,corp,ppsk,home", "keyless dropped")
 			end)
 		end
 	},
