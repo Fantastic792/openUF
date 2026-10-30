@@ -77,5 +77,11 @@ Landmines moved from CLAUDE.md; they load when a matching file is touched.
   without a mode-0 report before benching it for `RRM_BENCH_SECONDS`; the operating class
   follows the band the station is on (81 for 2.4 GHz, 115 for 5 GHz), because a 2.4-only
   client cannot measure a 5 GHz class at all.
-- **WPA-Enterprise is unsupported and skipped**, not mis-provisioned: the wire protocol
-  carries no RADIUS server, port or secret.
+- **WPA-Enterprise is supported** (`c8081ea`, from jonasevcik 9400e68; RADIUS MAC auth and
+  DAS in `3b9fa28`). The wire DOES carry the RADIUS servers as `aaa.<n>.radius.*`:
+  `inform.lua` `_wire_radius` reads them and `ucihelper.lua` `apply_config` writes them --
+  through UCI on an `EAP_ENC` BSS, as raw `auth_server_*` lines on any other (ap.uc calls
+  `iface_authentication_server()` only from its EAP branch). A basic wpad has no RADIUS
+  client: Enterprise only warns (`sysinfo.eap_supported`), RADIUS MAC auth fails closed and
+  drops the WLAN. `radius.dad.*`, `radius.macacl.{format,emptypassword}` and RadSec servers
+  are deliberately not read (see the comment above `_wire_radius`).
