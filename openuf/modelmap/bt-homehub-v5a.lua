@@ -21,6 +21,9 @@
 ]]--
 
 local dev = {}
+-- `ubus call system board` board_name; the compatible of OpenWrt's
+-- target/linux/lantiq/files/arch/mips/boot/dts/lantiq/vr9_bt_homehub-v5a.dts.
+dev.openwrt_boards = {"bt,homehub-v5a"}
 dev.conf = {}
 
 dev.conf.net = {
