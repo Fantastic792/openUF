@@ -192,12 +192,13 @@ config = {
 	-- crowds everything else out of logread.
 	rrm_request_interval = 600,
 
-	-- DECISION(fake-upgrade): report a controller-pushed firmware version as
-	-- the running one. openUF never downloads or flashes UniFi firmware, so a
-	-- rolling upgrade otherwise leaves this AP "needs upgrade" forever. true
-	-- reports the pushed version (bare "a.b.c.d" only) from the next inform;
-	-- false (or absent) keeps the profile's version, as before.
-	report_upgraded_version = false,
+	-- Report a controller-pushed firmware version as the running one. openUF
+	-- never downloads or flashes UniFi firmware, so a rolling upgrade would
+	-- otherwise leave this AP "needs upgrade" forever. true reports the pushed
+	-- version (bare "a.b.c.d" only) from the next inform; false keeps the
+	-- profile's version. An absent key means on, so a conf.lua kept across an
+	-- upgrade picks this up.
+	report_upgraded_version = true,
 
 	-- WiFi Connectivity (controller: Insights -> AirView -> Connectivity): report
 	-- each client connection's Association / Authentication / DHCP / DNS stages,

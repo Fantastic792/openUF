@@ -9266,17 +9266,19 @@ return {
 		end
 	},
 	{
-		-- DECISION(fake-upgrade): off by default, the profile's version is
-		-- reported whatever the controller pushed; on, the pushed bare version.
-		name = "inform: a stored upgrade changes the reported version only when switched on",
+		-- fake-upgrade (owner, 2026-10-31): on by default (absent key = on);
+		-- false keeps the profile's version whatever the controller pushed.
+		name = "inform: a stored upgrade changes the reported version unless switched off",
 		fn = function()
 			local uap = {fw = {ver = "6.8.2.15592"}}
 			local st = sample_state()
 			inform.handle_response('{"_type":"upgrade","version":"6.8.4.15610",'
 				.. '"url":"http://unifi/fw.bin"}', st)
 			assert_eq(inform.reported_version(uap, st, nil), "6.8.2.15592", "no cfg")
-			assert_eq(inform.reported_version(uap, st, {config = {}}), "6.8.2.15592",
-				"default: the profile's version")
+			assert_eq(inform.reported_version(uap, st, {config = {}}), "6.8.4.15610",
+				"default (absent): the pushed one")
+			assert_eq(inform.reported_version(uap, st, {config = {report_upgraded_version = false}}),
+				"6.8.2.15592", "off: the profile's version")
 			local on = {config = {report_upgraded_version = true}}
 			assert_eq(inform.reported_version(uap, st, on), "6.8.4.15610", "on: the pushed one")
 			st.upgrade_requested_version = "U6IW.6.8.4.15610"

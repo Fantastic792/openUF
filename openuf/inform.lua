@@ -4485,13 +4485,14 @@ end
 -- uap.fw.ver. A controller "upgrade" is stored, never applied (see
 -- handle_response), so the controller keeps seeing the old version and
 -- re-offers the update on every rolling upgrade.
--- DECISION(fake-upgrade): report the version the controller pushed instead?
--- conf.lua report_upgraded_version (default false: today's behaviour). On,
--- a stored bare version ("6.8.2.15592" form only) replaces the profile's,
--- which ends the re-offer loop but claims firmware this host is not running.
+-- conf.lua report_upgraded_version (owner, 2026-10-31: on; absent means on)
+-- reports the version the controller pushed instead: a stored bare version
+-- ("6.8.2.15592" form only) replaces the profile's, which ends the re-offer
+-- loop but claims firmware this host is not running. false restores the
+-- profile's version.
 function M.reported_version(uap, st, cfg)
 	local v = st and st.upgrade_requested_version
-	if cfg and cfg.config and cfg.config.report_upgraded_version
+	if cfg and cfg.config and cfg.config.report_upgraded_version ~= false
 		and type(v) == "string" and v:match("^%d+%.%d+%.%d+%.%d+$") then
 		return v
 	end

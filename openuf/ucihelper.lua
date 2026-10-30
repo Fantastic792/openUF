@@ -2213,14 +2213,14 @@ end
 -- RADIUS NAS-ID arrives as nas_identifier; under unifi_ft_interop ftinterop
 -- writes nasid = this BSS's BSSID, UniFi's R0KH-ID. They are one hostapd
 -- field, and OpenWrt 25.12 lets nasid win in either order (checked on a VM,
--- 2026-10-31), so today an FT-EAP WLAN with a NAS-ID sends the BSSID to
--- RADIUS -- and on the first push, before the BSSID is known, the shared
--- NAS-ID becomes every AP's R0KH-ID until the next push.
--- DECISION(ft-nasid): which one wins on an FT interop WLAN with a NAS-ID?
--- "keep" leaves both options as written (today's behaviour); "ft" drops the
--- controller's NAS-ID so the R0KH-ID is always the BSSID; "radius" drops
--- nasid so RADIUS sees the controller's NAS-ID and UniFi FT pulls fail.
-M.FT_NASID_POLICY = "keep"
+-- 2026-10-31). A NAS-ID shared by every AP cannot be an R0KH-ID, so FT wins:
+-- the controller's NAS-ID is dropped on these WLANs, and on the first push,
+-- before the BSSID is known, hostapd's own default (the BSSID) applies
+-- instead of the shared NAS-ID. RADIUS sees the BSSID as NAS-Identifier.
+-- "keep" (both written, nasid wins once known) and "radius" (nasid dropped,
+-- UniFi FT pulls fail) remain for a deployment that needs the NAS-ID.
+-- Decided by the owner 2026-10-31 (ft-nasid, option B).
+M.FT_NASID_POLICY = "ft"
 
 function M.resolve_nas_id(extra, interop, policy)
 	policy = policy or M.FT_NASID_POLICY

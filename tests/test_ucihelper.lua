@@ -5839,16 +5839,20 @@ Wiphy phy1
 		end
 	},
 	{
-		-- DECISION(ft-nasid): today's behaviour is the default; the two
-		-- other answers are pinned too so either can be switched on as is.
-		name = "ucihelper: an FT interop WLAN keeps both NAS-ID options by default",
+		-- ft-nasid (owner, 2026-10-31): FT wins by default; "keep" and
+		-- "radius" stay pinned for a deployment that switches back.
+		name = "ucihelper: an FT interop WLAN drops the controller NAS-ID by default",
 		fn = function()
 			local function extra()
 				return {ieee80211r = "1", nasid = "00005e00532b", nas_identifier = "ap-office"}
 			end
-			assert_eq(ucihelper.FT_NASID_POLICY, "keep", "default policy")
+			assert_eq(ucihelper.FT_NASID_POLICY, "ft", "default policy")
 			local e = extra()
 			ucihelper.resolve_nas_id(e, true)
+			assert_eq(e.nasid, "00005e00532b", "default: the BSSID is the R0KH-ID")
+			assert_nil(e.nas_identifier, "default: the controller's NAS-ID is dropped")
+			e = extra()
+			ucihelper.resolve_nas_id(e, true, "keep")
 			assert_eq(e.nasid, "00005e00532b", "keep: nasid stays")
 			assert_eq(e.nas_identifier, "ap-office", "keep: NAS-ID stays")
 			e = extra()
