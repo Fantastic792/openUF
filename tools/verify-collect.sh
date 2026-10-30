@@ -32,7 +32,7 @@ fi
 
 echo "### install"
 # The headless install lives in /opt/openuf, the released package in
-# /usr/lib/openuf; "never both" (CLAUDE.local.md section 5).
+# /usr/lib/openuf; "never both" (.claude/rules/install-prefixes.md).
 for d in /opt/openuf /usr/lib/openuf; do
 	[ -f "$d/inform.lua" ] && echo "prefix=$d"
 done

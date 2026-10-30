@@ -35,7 +35,7 @@ M.CONFIRM        = 2
 M.REPAIR_GAP     = 6 * 3600
 M.NIGHT_HOUR     = 4
 -- `wifi up` after the restart: the wpad init script restarts the daemons,
--- but netifd has to hand them their BSSes again (CLAUDE.local.md).
+-- but netifd has to hand them their BSSes again (.claude/rules/install-prefixes.md).
 M.REPAIR_CMD     = "/etc/init.d/wpad restart; sleep 6; wifi up"
 M.STA_COUNT_CMD  = "for i in $(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2}'); do "
 	.. "iw dev \"$i\" station dump 2>/dev/null; done | grep -c '^Station'"
