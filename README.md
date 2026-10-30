@@ -388,7 +388,7 @@ moves up into [Tested on real hardware](#tested-on-real-hardware) with your name
 | **Mesh** on a TP-Link Deco M4R v1, adopted and meshed by a user | `mesh-one-hop`, `board-profile` |
 | **TP-Link Archer C5 v1** confirmed end to end, the reference device | `board-profile` |
 | **TP-Link TL-WDR3500 v1** confirmed, with a custom image | `board-profile` |
-| **BT Home Hub 5 Type A** (lantiq xrx200, DSA): adoption, the WiFi push and live clients on OpenWrt 25.12.6 against a UCG Ultra; `install.sh`, radio settings and Locate not confirmed | `board-profile` |
+| **BT Home Hub 5 Type A** (lantiq xrx200, DSA): adoption, the WiFi push and live clients on OpenWrt 25.12.6 against a UCG Ultra; `install.sh`, radio settings and Locate not confirmed; VLAN-tagged SSIDs build on `lan1`, so they assume the uplink cable is in `lan1` | `board-profile` |
 | **JioRouter AX6000 JIDU6101**, the original lab APs | `board-profile` |
 | **Xiaomi Mi Router AX3000T** confirmed, WiFi 6 | `board-profile` |
 | **OpenWrt 24.10** with `opkg` | `openwrt-24.10` |
