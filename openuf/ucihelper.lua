@@ -2209,6 +2209,31 @@ local function reconcile_runtime(entries)
 end
 
 -- Security values whose BSS needs a passphrase (psk2, sae, sae-mixed).
+-- One BSS's NAS-Identifier when two producers want it. The controller's
+-- RADIUS NAS-ID arrives as nas_identifier; under unifi_ft_interop ftinterop
+-- writes nasid = this BSS's BSSID, UniFi's R0KH-ID. They are one hostapd
+-- field, and OpenWrt 25.12 lets nasid win in either order (checked on a VM,
+-- 2026-10-31), so today an FT-EAP WLAN with a NAS-ID sends the BSSID to
+-- RADIUS -- and on the first push, before the BSSID is known, the shared
+-- NAS-ID becomes every AP's R0KH-ID until the next push.
+-- DECISION(ft-nasid): which one wins on an FT interop WLAN with a NAS-ID?
+-- "keep" leaves both options as written (today's behaviour); "ft" drops the
+-- controller's NAS-ID so the R0KH-ID is always the BSSID; "radius" drops
+-- nasid so RADIUS sees the controller's NAS-ID and UniFi FT pulls fail.
+M.FT_NASID_POLICY = "keep"
+
+function M.resolve_nas_id(extra, interop, policy)
+	policy = policy or M.FT_NASID_POLICY
+	if not (interop and extra.ieee80211r == "1" and extra.nas_identifier) then
+		return
+	end
+	if policy == "ft" then
+		extra.nas_identifier = nil
+	elseif policy == "radius" then
+		extra.nasid = nil
+	end
+end
+
 local PSK_SECURITY = {["wpa2"] = true, ["wpa3"] = true, ["wpa2/wpa3"] = true}
 
 -- The vap_table without the WLANs this AP cannot put on the air, each one
@@ -2707,6 +2732,7 @@ function M.apply_config(resp, cfg, opts)
 					extra.radius_acct_interim_interval = vap.radius.interim_interval
 				end
 				if vap.radius.nas_id then extra.nas_identifier = vap.radius.nas_id end
+				M.resolve_nas_id(extra, cfg and cfg.config and cfg.config.unifi_ft_interop)
 				-- RADIUS Dynamic Authorization (CoA / Disconnect-Request). Both
 				-- options are real wifi-iface options, appended by ap.uc for
 				-- EVERY auth type -- but the one place it joins the secret onto

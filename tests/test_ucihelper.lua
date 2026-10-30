@@ -5838,4 +5838,38 @@ Wiphy phy1
 			end)
 		end
 	},
+	{
+		-- DECISION(ft-nasid): today's behaviour is the default; the two
+		-- other answers are pinned too so either can be switched on as is.
+		name = "ucihelper: an FT interop WLAN keeps both NAS-ID options by default",
+		fn = function()
+			local function extra()
+				return {ieee80211r = "1", nasid = "00005e00532b", nas_identifier = "ap-office"}
+			end
+			assert_eq(ucihelper.FT_NASID_POLICY, "keep", "default policy")
+			local e = extra()
+			ucihelper.resolve_nas_id(e, true)
+			assert_eq(e.nasid, "00005e00532b", "keep: nasid stays")
+			assert_eq(e.nas_identifier, "ap-office", "keep: NAS-ID stays")
+			e = extra()
+			ucihelper.resolve_nas_id(e, true, "ft")
+			assert_eq(e.nasid, "00005e00532b", "ft: the BSSID is the R0KH-ID")
+			assert_nil(e.nas_identifier, "ft: the controller's NAS-ID is dropped")
+			e = extra()
+			ucihelper.resolve_nas_id(e, true, "radius")
+			assert_nil(e.nasid, "radius: nasid dropped")
+			assert_eq(e.nas_identifier, "ap-office", "radius: RADIUS sees the NAS-ID")
+			-- outside interop, or without FT, neither policy touches anything
+			for _, args in ipairs({{false, "ft"}, {false, "radius"}}) do
+				e = extra()
+				ucihelper.resolve_nas_id(e, args[1], args[2])
+				assert_eq(e.nasid, "00005e00532b", "no interop: nasid as is")
+				assert_eq(e.nas_identifier, "ap-office", "no interop: NAS-ID as is")
+			end
+			e = extra()
+			e.ieee80211r = nil
+			ucihelper.resolve_nas_id(e, true, "ft")
+			assert_eq(e.nas_identifier, "ap-office", "no FT: NAS-ID as is")
+		end
+	},
 }
