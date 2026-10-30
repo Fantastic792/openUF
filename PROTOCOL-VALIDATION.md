@@ -3109,6 +3109,18 @@ has `hs20=1` without WPA2-Enterprise/CCMP ("HS 2.0: WPA2-Enterprise/CCMP configu
 required for Hotspot 2.0 functionality"), so openUF accepts an `hs20` block only on a
 WPA-Enterprise WLAN and logs the drop otherwise.
 
+**This project's VM lab, 2026-10-30: ANQP answered over the air.** With the probe passing,
+the controller saw `fw_caps -2138042096` (0x80901110) and `fw2_caps 524288` and accepted a
+Passpoint WLAN. On 10.6.106 the Hotspot 2.0 settings must be **embedded in the WLAN**
+(`wlanconf.hotspot2 = {...}` plus `hotspot2conf_enabled`): a separate profile referenced by id
+is not stored and the push then carries no `hs20` keys. A realm's `eap_method` must be one of
+13/21/18/23/50. With that, the AP's live hostapd carried `interworking=1`, `hs20=1`,
+`access_network_type`, `internet`, `venue_group/type`, `venue_name`, `domain_name`,
+`nai_realm=0,lab.example,21`, `roaming_consortium` and `ipaddr_type_availability`, with no
+config errors, and a client (`wpa_cli anqp_get`) received the venue name, the roaming
+consortium, the NAI realm (EAP 21) and the domain name back as ANQP elements. No Passpoint
+credential has been used to associate.
+
 ### RADIUS MAC authentication and Dynamic Authorization (jonasevcik bd2e29b, 2026-10-27)
 
 Their evidence, as they wrote it; this project's lab run follows it.
