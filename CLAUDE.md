@@ -62,6 +62,15 @@ A new test file must be added to the hardcoded `test_files` list in
 than silent. CI also runs `tools/dist.sh --verify` on every push, not only on a release
 tag.
 
+`lua tests/run_tests.lua` from the project root is not the only way the suite runs:
+`tools/dist.sh --verify` re-runs it in a scratch tree holding only `openuf/` (stripped),
+`tests/` and `tools/`, and the Release workflow builds with `--verify`, so a test that
+reads any other path passes locally and fails only on the tag. A test that `dofile()`s or
+opens something outside those three needs that path copied into the verify tree in the
+same commit. Run `sh tools/dist.sh --verify` whenever a test gains a new file dependency
+(`tools/cfg-coverage.lua` broke it: a whole test FILE errored out, so the total dropped by
+one file, not one test).
+
 ---
 
 ## Hard constraints
@@ -124,6 +133,15 @@ The load-bearing discipline: **refuse rather than guess.** Where a fact cannot b
 determined (which socket the uplink is in, which physical port is which), report nothing
 rather than a plausible wrong answer. A wrong answer here means the AP tells the
 controller the whole LAN is plugged into it, or a VLAN push strands the device.
+
+**Design a new feature for weak hardware as you write it**, not in a later audit pass.
+Users run openUF on 9.6 MB-overlay ath79 boards. Hold new code against the ruleset before
+calling it done: one lookup/walk pass per tick, derived facts computed once per push, caches
+keyed on what can change them, an interval gate plus a cheap change detector, sysfs over
+forks, one `nft -f` transaction per rebuild, shared helpers in `util.lua` over copies,
+read-and-compare before a flash write, `table.concat` over `..`, one line → one pattern,
+`find` over `gsub`. Never put a blocking `io.popen` on the `handle_response` path without a
+guard and a `timeout`. State the measured cost in the commit body.
 
 ---
 
