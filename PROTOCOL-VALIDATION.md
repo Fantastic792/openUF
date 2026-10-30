@@ -2796,6 +2796,18 @@ through the real UI with the resulting wire payload captured or the effect verif
 
 ---
 
+## Newer firmware audit (4.3.28, 6.8.2)
+
+Builds read (plaintext MIPS/QCA956x, `tools/fw-extract.sh`): BZ2 3.9.27, 4.0.15 (2019), BZ2 4.3.28 (2021), U7LR 6.8.2 (2026).
+ARM64 U6/U7 (incl. U6-IW) stays opaque; nothing below is claimed for it. Method: `strings` over `ubntbox`, `mcad`, `libubnt`,
+`syswrapper.sh`; the `aaa.%d.*` key table in `ubntbox` is the firmware's controller-key → hostapd-line map.
+
+- 4.0.15 has no WPA3/OWE/PPSK template; 4.3.28 adds more `aaa.*` keys; **6.8.2 `ubntbox` holds the full hostapd generator**:
+  `sae.{pwe,confirm_immediate,anti_clogging,sync,groups,psk.<n>.{mac,vlan,id}}`, `owe_ptk_workaround`, `fils.*`,
+  `ft_r0_key_lifetime`/`r1_max_key_lifetime`/`rkh_pos_timeout`/`ft_over_ds`/`rsn_preauth`, `wpa.{strict_rekey,gmk_rekey,group_update_count}`,
+  `wpa3.enhanced_192`, `btm_disassoc.{status,threshold}`, `disable_na_mcast_to_ucast`. 6.8.2 also ships its own `wpad`, `scan-rrm`, `airtime-scan`.
+- Per-feature results are in the feature matrix rows (27 = SAE tuning).
+
 ## Open questions
 
 - **`setdefault` is never dispatched.** Clicking Remove deletes the device server-side and
@@ -3910,6 +3922,14 @@ A notif inform with a *minimal* identity (mac/model/version only) is refused wit
 The one-shot controls above had to repeat what `build_json` puts in `_notif_identity` —
 serial, platform, hostname, ip, inform_url, cfgversion, required_version, state, uptime.
 Worth knowing before writing another notif test by hand.
+
+### SAE tuning: anti-clogging, sync, groups (jonasevcik a64bcfc, 2026-10-26)
+
+**In this tree** the two raw lines are appended with `add_bss_option`, beside any other raw
+line on the WLAN (their first version assigned the list and would have dropped them).
+Their feature-matrix row:
+
+| 27 | SAE tuning | `aaa.<n>.sae.anti_clogging` / `.sae.sync` / `.sae.has_groups` + `.sae.groups.<k>.group` | ✅ Hardware-confirmed 2026-10-26. Firmware 6.8.2 `ubntbox` writes `sae_anti_clogging_threshold=%d`, `sae_sync=%d`, `sae_groups=` (absent from 4.0.15, so the old "cannot be applied" verdict rested on the schema alone). They are no wifi-iface option; the per-BSS raw-line list is `hostapd_bss_options` (`ap.uc:612`), while `hostapd_options` is radio-level (`hostapd.uc:548`) and is silently ignored: a first attempt with it left hostapd without the lines. Temp WPA3-only WLAN (REST `sae_anti_clogging=7`, `sae_sync=9`) → both lines in every BSS on both APs; home WPA2/WPA3 WLAN got 5/5. Sent only for `sae`/`sae-mixed`. |
 
 ### Per-BSS keys: OKC, TDLS, Country IE, pairwise cipher (jonasevcik 36e830d, 2026-10-26)
 

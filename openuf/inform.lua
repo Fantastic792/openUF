@@ -2589,6 +2589,25 @@ local function _wire_mac_vlans(a)
 	return #out > 0 and out or nil
 end
 
+-- aaa.<n>.sae.groups.<k>.group, in index order, as hostapd's space-separated
+-- sae_groups; nil unless sae.has_groups is on and every entry is a number.
+local function _wire_sae_groups(a)
+	if not _wire_bool(a["sae.has_groups"]) then return nil end
+	local idxs = {}
+	for k in pairs(a) do
+		local i = k:match("^sae%.groups%.(%d+)%.group$")
+		if i then idxs[#idxs + 1] = tonumber(i) end
+	end
+	table.sort(idxs)
+	local out = {}
+	for _, i in ipairs(idxs) do
+		local g = a["sae.groups." .. i .. ".group"]
+		if not g:match("^%d+$") or #g > 3 then return nil end
+		out[#out + 1] = g
+	end
+	return #out > 0 and table.concat(out, " ") or nil
+end
+
 -- aaa.<n>.radius.* -- the 802.1X / WPA-Enterprise RADIUS configuration.
 --
 -- The controller DOES send this, contrary to what openUF assumed until
@@ -3641,6 +3660,12 @@ function M._parse_wifi_system_cfg(sys_raw)
 				-- eWivisHeQsnaqDtx). UniFi firmware writes it to hostapd as
 				-- wpa_group_rekey= (firmware-confirmed for 4.0.15). 0 = off.
 				group_rekey           = _wire_group_rekey(a["wpa.group_rekey"]),
+				-- aaa.<n>.sae.{anti_clogging,sync,groups}: SAE tuning. The firmware
+				-- writes them to hostapd as sae_anti_clogging_threshold=, sae_sync=
+				-- and sae_groups= (firmware-confirmed for 6.8.2 ubntbox).
+				sae_anti_clogging     = _wire_posint(a["sae.anti_clogging"]),
+				sae_sync              = _wire_posint(a["sae.sync"]),
+				sae_groups            = _wire_sae_groups(a),
 				-- aaa.<n>.11k.status: the wlanconf's rrm_enabled (default
 				-- false; REST-only, the 10.6 UI has no control), "enabled" or
 				-- "disabled" on every WLAN (10.x generator eWivisHeQsnaqDtx).
