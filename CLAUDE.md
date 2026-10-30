@@ -143,6 +143,16 @@ read-and-compare before a flash write, `table.concat` over `..`, one line → on
 `find` over `gsub`. Never put a blocking `io.popen` on the `handle_response` path without a
 guard and a `timeout`. State the measured cost in the commit body.
 
+### Lab data and fixtures
+
+- **Fixtures** in both trees use RFC 7042 MACs (`00:00:5e:00:53:xx`) and RFC 5737 addresses
+  (`192.0.2.x`). Pre-commit scan: `git diff --cached -U0 | grep "^+" | grep -nE
+  "192\.168\.|([0-9a-f]{2}:){5}[0-9a-f]{2}"` -- `192.168.1.100` "testap" and `11:22:33`-style
+  MACs are long-standing test placeholders, not lab values.
+- **Nothing from the lab goes into the repository (code, fixtures, docs, rules)**: no
+  device passwords, no API keys, no controller credentials. REVERSE-ENGINEERING.md's lab
+  table carries the addresses and roles; secrets are asked for each session.
+
 ---
 
 ## Landmines that apply anywhere

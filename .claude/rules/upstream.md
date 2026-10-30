@@ -15,10 +15,10 @@ upstream's commits no longer appear as shared history on GitHub. Do not write "t
 in the docs any more. Upstream stays reachable as a plain git remote:
 
 ```sh
-git remote -v                                    # expect `upstream` -> jonasevcik/openUF
-git remote add upstream https://github.com/jonasevcik/openUF.git   # if a fresh clone lacks it
-git fetch upstream                               # ALWAYS first -- nothing else refreshes it
-git log --oneline 08d0003..upstream/main         # what has not been reviewed yet
+git remote -v                                    # expect `jonas` -> jonasevcik/openUF
+git remote add jonas https://github.com/jonasevcik/openUF.git      # if a fresh clone lacks it
+git fetch jonas                                  # ALWAYS first -- nothing else refreshes it
+git log --oneline 5f521bf..jonas/main            # what has not been reviewed yet
 ```
 
 **The sync is a selective re-implementation, never a merge.** Keep ours where ours is
@@ -28,10 +28,12 @@ C5; this tree's lab is a JioRouter AX6000, DSA, `lan_cpueth = "br-lan"`). Upstre
 work from here (their 2026-09-25 commits were our 09-15 sysconf/l2guard/interval work,
 credited to this repo), so diff before assuming a commit is new.
 
-- **Last review point: `2f263f3` (upstream v0.11.0), sync 4 on 2026-10-18.** Earlier: the
-  fork point `677f732`; sync 1 (2026-09-06) to `d7d7e21`; sync 2 (2026-09-13) to `12b4db0`;
-  sync 3 (2026-09-28) to `08d0003` (v0.9.3). Not adopted from sync 4 and still waiting:
-  the guest portal (REVERSE-ENGINEERING.md backlog row 24).
+- **Last review point: `5f521bf` (2026-10-28), tied in by the content-only merge `8fe6e55`**:
+  every jonasevcik commit up to it is in this tree or deliberately left out (each `port:`
+  commit's message says which), and later upstream work merges from there. The guest
+  portal's walled garden came in that round (`348fccb`, `94aa2ed`). Earlier: the fork point
+  `677f732`; sync 1 (2026-09-06) to `d7d7e21`; sync 2 (2026-09-13) to `12b4db0`; sync 3
+  (2026-09-28) to `08d0003` (v0.9.3); sync 4 (2026-10-18) to `2f263f3` (v0.11.0).
   Each sync is a row in REVERSE-ENGINEERING.md's session log and an "Adopted from upstream,
   <date>" section in PROTOCOL-VALIDATION.md -- update both, and move this line.
 - **A third fork is a remote too: `dmalinowski` → d-malinowski/openUF.** Its
@@ -40,8 +42,9 @@ credited to this repo), so diff before assuming a commit is new.
   not merged there, so a later upstream sync may bring the same change back under
   `openuf/ftinterop.lua` -- diff before re-applying. Their `pr/hh5a-modelmap` (a BT Home Hub 5A
   map, lantiq/xrx200) was merged by jonasevcik on 2026-10-25 (`d6745b8`, the first upstream
-  commits past `2f263f3`) and is not yet reviewed here. Their hardware is a HH5A and a U7 Lite;
-  label it. **The translator has an upstream of its own**: `openuf/rrb/rrb-unifi.uc` is
+  commits past `2f263f3`) and is ported here (`cbc4c5b`, `cff4204`, `d72ec9d`). Their
+  hardware is a HH5A and a U7 Lite; label it. **The translator has an upstream of its own**:
+  `openuf/rrb/rrb-unifi.uc` is
   https://github.com/d-malinowski/unifi-openwrt-roaming at 1.3 (`767a28c`), vendored
   2026-10-25 with the changes marked `// openUF:`; take fixes from there (the local clone
   `../unifi-openwrt-roaming` has it as `upstream`), re-apply the marked changes, and update
@@ -59,10 +62,3 @@ credited to this repo), so diff before assuming a commit is new.
   path --local)` before both the suite and `sh tools/dist.sh --verify`; use `sh -c` for
   word-split loops (zsh does not split an unquoted variable). A compile check on AP2 is
   `lua -e 'assert(loadfile("<f>"))'` per file -- `lua -e ... <f>` runs `<f>` as a script.
-- **Fixtures** in both trees use RFC 7042 MACs (`00:00:5e:00:53:xx`) and RFC 5737 addresses
-  (`192.0.2.x`). Pre-commit scan: `git diff --cached -U0 | grep "^+" | grep -nE
-  "192\.168\.|([0-9a-f]{2}:){5}[0-9a-f]{2}"` -- `192.168.1.100` "testap" and `11:22:33`-style
-  MACs are long-standing test placeholders, not lab values.
-- **Nothing from the lab goes into this file or the docs**: no device passwords, no API keys,
-  no controller credentials. REVERSE-ENGINEERING.md's lab table carries the addresses and
-  roles; secrets are asked for each session.
