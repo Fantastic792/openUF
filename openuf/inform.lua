@@ -7744,7 +7744,15 @@ end
 -- the default cadence". A failed POST puts the rest back for next cycle.
 -- (_post_notif, above, is the other notif path: a device event such as a
 -- finished RF sweep, sent once with the whole heartbeat payload.)
+--
+-- A payload the controller itself refuses (an HTTP 4xx, or one that cannot
+-- be built) is tried NOTIF_MAX_TRIES times and then dropped and logged, so
+-- one permanent refusal cannot hold every later event back. A transport
+-- failure (no answer at all) is not counted: that is the link, not the event.
+M.NOTIF_MAX_TRIES = 3
+M._notif_tries = setmetatable({}, {__mode = "k"})
 local function post_notifs(st, batch, requeue)
+	local sent = 0
 	for i, p in ipairs(batch) do
 		local body = {}
 		for k, v in pairs(M._notif_identity) do body[k] = v end
@@ -7753,15 +7761,29 @@ local function post_notifs(st, batch, requeue)
 		body.notif_reason    = "event"
 		body.notif_payload   = p
 		local ok_p, pkt = pcall(M.build_packet, cjson.encode(body), st)
-		local resp = ok_p and M.http_post(st.inform_url, pkt) or nil
-		if not resp then
-			local rest = {}
-			for j = i, #batch do rest[#rest + 1] = batch[j] end
-			requeue(rest)
-			return i - 1, false
+		local resp, err
+		if ok_p then resp, err = M.http_post(st.inform_url, pkt) else err = tostring(pkt) end
+		if resp then
+			M._notif_tries[p] = nil
+			sent = sent + 1
+		else
+			local refused = not ok_p or tostring(err):match("^HTTP 4%d%d") ~= nil
+			local tries = refused and (M._notif_tries[p] or 0) + 1 or 0
+			if refused and tries >= M.NOTIF_MAX_TRIES then
+				M._notif_tries[p] = nil
+				io.stderr:write(("inform: notif %s refused %d times (%s) -- dropped\n")
+					:format(tostring(type(p) == "table" and p.event_string or "station event"),
+						tries, tostring(err)))
+			else
+				if refused then M._notif_tries[p] = tries end
+				local rest = {}
+				for j = i, #batch do rest[#rest + 1] = batch[j] end
+				requeue(rest)
+				return sent, false
+			end
 		end
 	end
-	return #batch, true
+	return sent, true
 end
 
 -- Device events, as opposed to the per-station notifs above: same envelope

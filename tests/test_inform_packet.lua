@@ -7490,6 +7490,39 @@ return {
 		end
 	},
 	{
+		name = "inform: an event the controller refuses (HTTP 400) is dropped after NOTIF_MAX_TRIES, not retried forever",
+		fn = function()
+			local o_post, o_build, o_ident = inform.http_post, inform.build_packet,
+				inform._notif_identity
+			local bad = {event_string = "EVT_AP_Bad", channel = "100", freq = 5500}
+			local good = {event_string = "EVT_AP_RadarDetected", channel = "104", freq = 5520}
+			local delivered = {}
+			inform.build_packet = function(json) return json end
+			inform.http_post = function(_, pkt)
+				if pkt:find("EVT_AP_Bad", 1, true) then return nil, "HTTP 400" end
+				delivered[#delivered + 1] = pkt
+				return "noop"
+			end
+			inform._notif_identity = {mac = "00:00:5e:00:53:20"}
+			inform._event_queue = {bad, good}
+			local st = {adopted = true, inform_url = "http://x/inform"}
+			local out = with_stderr(function()
+				for _ = 1, inform.NOTIF_MAX_TRIES - 1 do
+					assert_eq(inform._send_events(st), 0, "refused: still queued, in order")
+				end
+				assert_eq(inform._send_events(st), 1, "last try: dropped, and the next event goes out")
+			end)
+			inform.http_post, inform.build_packet = o_post, o_build
+			inform._notif_identity = o_ident
+			local left = #inform._event_queue
+			inform._event_queue, inform._event_seen = {}, {}
+			assert_eq(left, 0, "nothing left behind")
+			assert_eq(#delivered, 1, "the good event was delivered")
+			assert_contains(out, "EVT_AP_Bad refused 3 times", "the drop is logged")
+			assert_nil(inform._notif_tries[bad], "its counter is gone")
+		end
+	},
+	{
 		-- A roam report spoils with delay; a funnel event does not. Roams go
 		-- first, and a failed roam POST stops the funnel too (the controller
 		-- is not answering).
