@@ -84,6 +84,11 @@ M.DOWN_SECS = 10
 -- hold, a cable flapping (a loose plug, a switch port renegotiating) took the
 -- radio's SSIDs down and up on every flap.
 M.UP_SECS = 10
+-- Seconds with no wired socket learnt at all before that counts as no
+-- carrier. Longer than DOWN_SECS: right after boot the bridge may not have
+-- seen the gateway yet, and enabling the station on a wired AP loops it.
+M.NO_SOCKET_SECS = 60
+M._no_socket_since = nil
 -- While a switch is pending or has just happened, the inform loop waits at
 -- most this long between heartbeats (wait_cap()), for SWITCH_FAST_S after
 -- the switch: the station needs a few seconds to join, and the inform that
@@ -291,7 +296,13 @@ function M.plan(mesh, entries, cfg, st)
 			M._log(("no mesh uplink in the push -- the station is built from the mesh block on %s, "
 				.. "so this AP can still fail over"):format(implied.radio))
 		else
-			M._log("no mesh uplink in the push and no 5 GHz radio -- this AP cannot fail over to the mesh")
+			-- Once per run, not once per push: a single-band 2.4 GHz board
+			-- is always in this state, and UniFi meshes on 5 GHz only.
+			if not M._no_mesh_radio_logged then
+				M._no_mesh_radio_logged = true
+				M._log("no mesh uplink in the push and no 5 GHz radio -- this AP cannot fail over "
+					.. "to the mesh (UniFi meshes on 5 GHz only)")
+			end
 		end
 	end
 	entries = list
@@ -658,15 +669,23 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		-- left a wired root's downlink with the version 1 element alone (found
 		-- on a QEMU test VM, 2026-10-26), so a child below it never learnt the
 		-- first link of the chain.
+		-- No station to be on, so not "wireless" either: a persisted
+		-- wireless mode would have the next push's plan() write the station
+		-- enabled on a wired AP the moment meshing is switched back on.
+		if st.backhaul_mode == "wireless" then
+			st.backhaul_mode = "wired"
+			M._dirty = true
+		end
+		M._down_since, M._watch = nil, nil
 		if ufuci.backhaul_downlink_sections and #ufuci.backhaul_downlink_sections() > 0 then
 			pcall(M.multihop_tick, st, ufuci, sysinfo, "wired", nil)
 			if not (cfg and cfg.vlan and cfg.vlan.ports) then
 				pcall(M.heal_wds_moves, cfg, sysinfo, nil)
 			end
-			if M._dirty and state_mod and state_mod.save then
-				pcall(state_mod.save, st)
-				M._dirty = false
-			end
+		end
+		if M._dirty and state_mod and state_mod.save then
+			pcall(state_mod.save, st)
+			M._dirty = false
 		end
 		return nil
 	end
@@ -718,16 +737,31 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 	local phys = swconfig and tonumber(st.backhaul_wired_phys) or nil
 	local wired_port = st.backhaul_wired_port
 	if type(wired_port) ~= "string" or wired_port == "" then wired_port = nil end
+	local now = M._time()
 	if phys then
 		wired_desc = "switch port " .. phys
 		if sw and type(sw.ports[phys]) == "table" then carrier = (sw.ports[phys].up == true) end
 	elseif wired_port then
 		wired_desc = wired_port
 		carrier = carrier_of(wired_port)
+	else
+		-- No wired socket learnt at all (a boot without the cable): no
+		-- carrier to read, and holding "wired" on that stranded the AP.
+		-- Once this board's lookup has found no socket for NO_SOCKET_SECS,
+		-- that is the answer. An unreadable switch says nothing.
+		local looked = swconfig and sw ~= nil
+			or (not swconfig and sysinfo ~= nil and sysinfo.uplink_bridge_port ~= nil)
+		if looked then
+			M._no_socket_since = M._no_socket_since or now
+			if now - M._no_socket_since >= M.NO_SOCKET_SECS then
+				carrier, wired_desc = false, "no wired socket"
+			end
+		end
 	end
+	if phys or wired_port then M._no_socket_since = nil end
 	local mode = (st.backhaul_mode == "wireless") and "wireless" or "wired"
-	local now = M._time()
-	local new_mode, since = M.decide(carrier, mode, M._down_since, now)
+	local pending = M._down_since
+	local new_mode, since = M.decide(carrier, mode, pending, now)
 	M._down_since = since
 	-- The idle loop reads a DSA socket's link between heartbeats; a swconfig
 	-- port's needs `swconfig dev <sw> show`, too heavy for once a second.
@@ -737,20 +771,31 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		M._watch = nil
 	end
 	if new_mode ~= mode then
-		M._switched_at = now
 		M._log(("wired uplink %s on %s -- %s the WDS station"):format(
 			new_mode == "wireless" and "lost" or "back", tostring(wired_desc or "?"),
 			new_mode == "wireless" and "enabling" or "disabling"))
-		M._unjoined = 0
+		local switched
 		if new_mode == "wireless" then
 			-- Enabled with the parent pin and the descendants' blacklist in
 			-- the same reload: unpinned, its first pick could be one of its
 			-- own children, still beaconing for a few seconds.
-			write_lists(st, ufuci, M.station_lists(st), true)
+			switched = write_lists(st, ufuci, M.station_lists(st), true)
 		else
 			local ok, err = pcall(ufuci.backhaul_set_uplink_enabled, false)
 			if not ok then M._log("could not switch the station: " .. tostring(err)) end
+			switched = ok
 		end
+		if not switched then
+			-- The station is as it was, so the mode must be too: recorded
+			-- anyway, the next push's plan() wrote the station from a mode
+			-- that never happened. Still due, so the next tick retries.
+			M._down_since = pending
+			new_mode = mode
+		end
+	end
+	if new_mode ~= mode then
+		M._switched_at = now
+		M._unjoined = 0
 		st.backhaul_mode = new_mode
 		M._dirty = true
 		M._arl_heal = (new_mode == "wired") and M.ARL_HEAL_TICKS or 0
@@ -827,6 +872,11 @@ function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
 				write_lists(st, ufuci, M.station_lists(st, true))
 				parent_rec = nil
 				joined = nil
+			else
+				-- Joined and no loop, but the lists may still be stale: the
+				-- controller can name a new parent (mesh.serial1), or a new
+				-- descendant can show up. Written only when they differ.
+				write_lists(st, ufuci, M.station_lists(st))
 			end
 		else
 			M._unjoined = M._unjoined + 1
@@ -841,9 +891,17 @@ function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
 	if ufuci.backhaul_set_downlink_ie and sysinfo and sysinfo.peer_ie_hex then
 		local ie = M.own_ie(st, sysinfo, mode, joined ~= nil, parent_rec, sta_mac, parent_id)
 		if ie and ie ~= st.backhaul_ie then
-			st.backhaul_ie = ie
-			M._dirty = true
-			pcall(ufuci.backhaul_set_downlink_ie, (sysinfo.peer_ie_hex(st.mac) or "") .. ie)
+			-- Recorded only once the write went through: recorded first, a
+			-- raising write was never retried (ie == st.backhaul_ie from then
+			-- on). No downlink section (false) is fine: plan() hands the
+			-- recorded element to the next push's downlink.
+			local ok, err = pcall(ufuci.backhaul_set_downlink_ie, (sysinfo.peer_ie_hex(st.mac) or "") .. ie)
+			if ok then
+				st.backhaul_ie = ie
+				M._dirty = true
+			else
+				M._log("could not update the downlink's element: " .. tostring(err))
+			end
 		end
 	end
 end

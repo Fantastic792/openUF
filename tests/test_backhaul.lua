@@ -32,6 +32,7 @@ local now = 1000
 
 local function reset_policy()
 	backhaul._down_since, backhaul._switched_at, backhaul._watch = nil, nil, nil
+	backhaul._no_socket_since = nil
 	backhaul._dirty = false
 end
 
@@ -356,6 +357,7 @@ return {
 			-- No 5 GHz radio and nothing remembered: none, and a log line.
 			backhaul._popen = function() return "wireless.radio0.band='2g'\n" end
 			logs = {}
+			backhaul._no_mesh_radio_logged = nil   -- said once per run
 			assert_nil(backhaul.plan(MESH, {}, {}, {}), "no station possible")
 			assert_true(logs[1]:find("cannot fail over", 1, true) ~= nil, "logged")
 			-- hwmode-only radios (older OpenWrt) count too.
@@ -970,6 +972,150 @@ return {
 			assert_eq(#writes, 1, "then rewritten once")
 			assert_eq(writes[1].bssid, nil, "without the pin")
 			assert_eq(st.backhaul_pin, nil, "and remembered so")
+		end
+	},
+	{
+		name = "backhaul: a station switch that fails keeps the mode and is retried on the next tick",
+		fn = function()
+			local carrier = {wan = true}
+			with_seams(carrier, "", function()
+				local st = {backhaul_mode = "", backhaul_wired_port = ""}
+				local secs = {{name = "openuf_bh_ul_radio1", radio = "radio1", ssid = MESH.essid, disabled = true}}
+				local uf = fake_ufuci(secs, "phy1-sta0")
+				local tries = 0
+				uf.backhaul_set_uplink_enabled = function() tries = tries + 1; error("uci: boom") end
+				backhaul.tick(st, {}, uf, fake_sysinfo("wan"), nil)
+				carrier.wan = false
+				local si = fake_sysinfo(nil)
+				backhaul.tick(st, {}, uf, si, nil)
+				now = now + backhaul.DOWN_SECS
+				assert_eq(backhaul.tick(st, {}, uf, si, nil), "wired", "the switch failed: still wired")
+				assert_eq(tries, 1, "it was tried")
+				assert_neq(st.backhaul_mode, "wireless", "and no wireless mode recorded for plan() to act on")
+				now = now + 1
+				backhaul.tick(st, {}, uf, si, nil)
+				assert_eq(tries, 2, "retried at once, not after another DOWN_SECS")
+			end)
+		end
+	},
+	{
+		name = "backhaul: with no wired socket ever learnt, the station still comes up after NO_SOCKET_SECS",
+		fn = function()
+			with_seams({}, "", function()
+				-- Booted without the cable: the bridge has the gateway behind no port.
+				local st = {backhaul_mode = ""}
+				local secs = {{name = "openuf_bh_ul_radio1", radio = "radio1", ssid = MESH.essid, disabled = true}}
+				local uf = fake_ufuci(secs, "phy1-sta0")
+				local si = fake_sysinfo(nil)
+				assert_eq(backhaul.tick(st, {}, uf, si, nil), "wired", "patience after boot")
+				now = now + backhaul.NO_SOCKET_SECS - 1
+				assert_eq(backhaul.tick(st, {}, uf, si, nil), "wired", "still nothing concluded")
+				assert_eq(#uf.calls, 0, "station untouched")
+				now = now + 1
+				backhaul.tick(st, {}, uf, si, nil)
+				now = now + backhaul.DOWN_SECS
+				assert_eq(backhaul.tick(st, {}, uf, si, nil), "wireless", "then the usual DOWN_SECS")
+				assert_eq(uf.calls[1], true, "station enabled")
+				-- A board whose lookup cannot run says nothing: hold.
+				reset_policy()
+				local st2 = {backhaul_mode = ""}
+				local uf2 = fake_ufuci({{name = "openuf_bh_ul_radio1", radio = "radio1", disabled = true}}, "phy1-sta0")
+				backhaul.tick(st2, {}, uf2, {lan_bridge = function() return "br-lan" end}, nil)
+				now = now + backhaul.NO_SOCKET_SECS + backhaul.DOWN_SECS
+				assert_eq(backhaul.tick(st2, {}, uf2, {lan_bridge = function() return "br-lan" end}, nil),
+					"wired", "no lookup: hold")
+			end)
+		end
+	},
+	{
+		name = "backhaul: a board with no 5 GHz radio says it cannot fail over once, not on every push",
+		fn = function()
+			local orig_popen, orig_log = backhaul._popen, backhaul._log
+			local logs = {}
+			backhaul._log = function(m) logs[#logs + 1] = m end
+			backhaul._popen = function() return "wireless.radio0.band='2g'\n" end
+			backhaul._no_mesh_radio_logged = nil
+			local dl_only = {{role = "downlink"}}   -- no radio: nothing to imply the station from
+			local ok, err = pcall(function()
+				backhaul.plan(MESH, dl_only, {}, {})
+				backhaul.plan(MESH, dl_only, {}, {})
+			end)
+			backhaul._popen, backhaul._log = orig_popen, orig_log
+			backhaul._no_mesh_radio_logged = nil
+			assert_true(ok, tostring(err))
+			local n = 0
+			for _, m in ipairs(logs) do if m:find("no 5 GHz radio", 1, true) then n = n + 1 end end
+			assert_eq(n, 1, "one line for two pushes")
+		end
+	},
+	{
+		name = "backhaul: meshing switched off resets a persisted wireless mode",
+		fn = function()
+			with_seams({}, "", function()
+				local st = {backhaul_mode = "wireless"}
+				local saved = 0
+				backhaul.tick(st, {}, fake_ufuci({}, nil), fake_sysinfo(nil),
+					{save = function() saved = saved + 1 end})
+				assert_eq(st.backhaul_mode, "wired", "no station: not on it either")
+				assert_eq(saved, 1, "and persisted, so the next push's plan() writes it disabled")
+				local plan = backhaul.plan(MESH, ENTRIES, {}, st)
+				assert_false(plan.uplink.enabled, "plan(): station disabled")
+			end)
+		end
+	},
+	{
+		name = "backhaul: multihop_tick() re-pins while joined when the controller names a new parent",
+		fn = function()
+			local orig_popen, orig_log = backhaul._popen, backhaul._log
+			backhaul._log = function() end
+			backhaul._popen = function(cmd)
+				if cmd:find(" info$") then return "\taddr 02:00:00:00:0b:99\n" end
+				if cmd:find(" link$") then return "Connected to 02:00:00:00:0a:01 (on phy1-sta0)\n" end
+				return ""
+			end
+			-- Joined to A; the controller's latest push names D as the parent.
+			local st = {mac = "aa:00:00:00:00:0b", backhaul_parent = "aa:00:00:00:00:0d",
+				backhaul_pin = "02:00:00:00:0a:01",
+				backhaul_seen = {
+					["02:00:00:00:0a:01"] = {id = "aa:00:00:00:00:0a", t = os.time()},
+					["02:00:00:00:0d:01"] = {id = "aa:00:00:00:00:0d", t = os.time()}}}
+			local writes = {}
+			local uf = {backhaul_set_uplink_lists = function(l) writes[#writes + 1] = l; return true end}
+			local si = {scan_table = function() return {
+				{bssid = "02:00:00:00:0a:01", peer_mac = "aa:00:00:00:00:0a",
+					peer_mesh = {rooted = true, ancestors = {}}},
+				{bssid = "02:00:00:00:0d:01", peer_mac = "aa:00:00:00:00:0d",
+					peer_mesh = {rooted = true, ancestors = {}}}} end}
+			local ok, err = pcall(backhaul.multihop_tick, st, uf, si, "wireless", "phy1-sta0")
+			local again = ok and pcall(backhaul.multihop_tick, st, uf, si, "wireless", "phy1-sta0")
+			backhaul._popen, backhaul._log = orig_popen, orig_log
+			assert_true(ok and again, tostring(err))
+			assert_eq(#writes, 1, "the station's lists rewritten once")
+			assert_eq(writes[1].bssid, "02:00:00:00:0d:01", "pinned to the controller's parent")
+			assert_eq(st.backhaul_pin, "02:00:00:00:0d:01", "and remembered")
+		end
+	},
+	{
+		name = "backhaul: multihop_tick() records the downlink's element only once its write went through",
+		fn = function()
+			local orig_log = backhaul._log
+			backhaul._log = function() end
+			local sysinfo = dofile("openuf/sysinfo.lua")
+			local si = {peer_ie_hex = sysinfo.peer_ie_hex, peer_path_ie_hex = sysinfo.peer_path_ie_hex}
+			local tries = 0
+			local uf = {backhaul_set_downlink_ie = function()
+				tries = tries + 1
+				if tries == 1 then error("hostapd_cli: boom") end
+				return true
+			end}
+			local st = {mac = "aa:00:00:00:00:0b"}
+			backhaul.multihop_tick(st, uf, si, "wired", nil)
+			local after_fail = st.backhaul_ie
+			backhaul.multihop_tick(st, uf, si, "wired", nil)
+			backhaul._log = orig_log
+			assert_nil(after_fail, "not recorded after the failed write")
+			assert_eq(tries, 2, "so the next tick tries again")
+			assert_not_nil(st.backhaul_ie, "and records it once it went through")
 		end
 	},
 	{
