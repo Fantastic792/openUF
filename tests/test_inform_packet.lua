@@ -624,22 +624,22 @@ return {
 			-- Real captured shape (PROTOCOL-VALIDATION.md): system_cfg is a
 			-- flat OpenWrt-UCI-style blob, separate from mgmt_cfg. Static is
 			-- signalled by the ABSENCE of dhcpc.1.* keys, not an explicit flag.
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.50\\n'
-				.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=172.19.0.1\\n"}'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n'
+				.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=198.51.100.1\\n"}'
 			inform.handle_response(resp, st, cfg)
 			inform._netconfig._exec = orig
 			assert_eq(st.ip_mode, "static", "ip_mode recorded as static")
-			assert_eq(st.static_ip, "172.19.0.50", "static_ip recorded")
-			assert_eq(st.static_gateway, "172.19.0.1", "static_gateway recorded")
-			assert_eq(st.ip, "172.19.0.50", "st.ip synced to the new static address")
+			assert_eq(st.static_ip, "198.51.100.50", "static_ip recorded")
+			assert_eq(st.static_gateway, "198.51.100.1", "static_gateway recorded")
+			assert_eq(st.ip, "198.51.100.50", "st.ip synced to the new static address")
 			assert_eq(#cmds, 3, "three shell commands (flush, add, route)")
-			assert_contains(cmds[2], "172.19.0.50/24 dev eth0", "correct interface and address")
+			assert_contains(cmds[2], "198.51.100.50/24 dev eth0", "correct interface and address")
 		end
 	},
 	{
 		name = "inform packet: handle_response setparam applies dhcp from system_cfg",
 		fn = function()
-			local st = sample_state({ip_mode = "static", static_ip = "172.19.0.50"})
+			local st = sample_state({ip_mode = "static", static_ip = "198.51.100.50"})
 			local cmds = {}
 			local orig = inform._netconfig._exec
 			inform._netconfig._exec = function(cmd)
@@ -647,7 +647,7 @@ return {
 				return true
 			end
 			local cfg = {net = {lan_cpueth = "eth0"}}
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.2\\n'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.2\\n'
 				.. 'dhcpc.1.status=enabled\\ndhcpc.1.devname=br0\\n"}'
 			inform.handle_response(resp, st, cfg)
 			inform._netconfig._exec = orig
@@ -673,13 +673,13 @@ return {
 				return true
 			end
 			local cfg = {net = {lan_cpueth = "eth0"}}
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.50\\n'
-				.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=172.19.0.1\\n'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n'
+				.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=198.51.100.1\\n'
 				.. 'dhcpc.1.status=disabled\\ndhcpc.1.devname=br0\\n"}'
 			inform.handle_response(resp, st, cfg)
 			inform._netconfig._exec = orig
 			assert_eq(st.ip_mode, "static", "explicitly disabled dhcpc -> static path")
-			assert_eq(st.static_ip, "172.19.0.50", "static address applied")
+			assert_eq(st.static_ip, "198.51.100.50", "static address applied")
 		end
 	},
 	{
@@ -699,7 +699,7 @@ return {
 				return true
 			end
 			local cfg = {net = {lan_cpueth = "eth0"}}
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.2\\n'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.2\\n'
 				.. 'dhcpc.1.status=enabled\\ndhcpc.1.devname=br0\\n"}'
 			inform.handle_response(resp, st, cfg)
 			inform._netconfig._exec = orig
@@ -1299,7 +1299,7 @@ return {
 			-- End-to-end through the real RECOGNIZED_* lists. qos.if.* is a
 			-- genuine never-consumed block (the interface inventory that
 			-- accompanies qos.vap.*), so it is the honest probe.
-			local sys_cfg = "netconf.1.ip=172.19.0.50\\nqos.if.1.devname=eth0\\n"
+			local sys_cfg = "netconf.1.ip=198.51.100.50\\nqos.if.1.devname=eth0\\n"
 			local resp = ('{"_type":"setparam","system_cfg":"%s"}'):format(sys_cfg)
 
 			-- The blob's netconf key reaches the real static-IP apply path
@@ -1779,8 +1779,8 @@ return {
 				return true
 			end
 			local cfg = {net = {lan_cpueth = "eth0"}}
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.50\\n'
-				.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=172.19.0.1\\n'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n'
+				.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=198.51.100.1\\n'
 				.. 'resolv.nameserver.2.ip=8.8.8.8\\nresolv.nameserver.1.ip=192.168.1.1\\n"}'
 			inform.handle_response(resp, st, cfg)
 			inform._netconfig._exec = orig
@@ -1804,7 +1804,7 @@ return {
 				cmds[#cmds + 1] = cmd
 				return true
 			end
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.2\\n'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.2\\n'
 				.. 'dhcpc.1.status=enabled\\nresolv.nameserver.1.ip=192.168.1.1\\n"}'
 			inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}})
 			inform._netconfig._exec = orig
@@ -1827,12 +1827,12 @@ return {
 			local cmds = {}
 			local orig = inform._netconfig._exec
 			inform._netconfig._exec = function(cmd) cmds[#cmds + 1] = cmd; return true end
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.50\\n"}'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n"}'
 			local ok = pcall(inform.handle_response, resp, st, nil)
 			inform._netconfig._exec = orig
 			assert_true(ok, "no error without cfg")
 			assert_eq(st.ip_mode, "static", "static intent still recorded in state")
-			assert_eq(st.static_ip, "172.19.0.50", "static address recorded")
+			assert_eq(st.static_ip, "198.51.100.50", "static address recorded")
 			assert_eq(#cmds, 0, "no interface command issued without cfg.net")
 			assert_eq(st.ip, "192.168.1.100", "live st.ip untouched")
 		end
@@ -3545,8 +3545,8 @@ return {
 				.. "wireless.1.ssid=user-wlan\nwireless.1.parent=radio0\n"
 				.. "wireless.1.mode=master\nwireless.1.usage=user\n"
 				-- the uplink station (fxkr's 2015 capture and the 2026 one agree on vport-)
-				.. "aaa.2.ssid=vport-ac10076fc670\naaa.2.status=disabled\n"
-				.. "wireless.2.ssid=vport-ac10076fc670\nwireless.2.parent=radio1\n"
+				.. "aaa.2.ssid=vport-00005e005320\naaa.2.status=disabled\n"
+				.. "wireless.2.ssid=vport-00005e005320\nwireless.2.parent=radio1\n"
 				.. "wireless.2.mode=managed\nwireless.2.usage=uplink\nwireless.2.wds=enabled\n"
 				.. "wireless.2.vport=enabled\nwireless.2.hide_ssid=true\n"
 				-- the downlink AP
@@ -3563,7 +3563,7 @@ return {
 			local by_role = {}
 			for _, e in ipairs(bh) do by_role[e.role] = e end
 			assert_eq(by_role.uplink.radio, "radio1", "uplink on the 5 GHz radio")
-			assert_eq(by_role.uplink.ssid, "vport-ac10076fc670", "the station's own vport name")
+			assert_eq(by_role.uplink.ssid, "vport-00005e005320", "the station's own vport name")
 			assert_eq(by_role.downlink.ssid, "vwire-5f3369181f7fbab5", "the downlink beacons the mesh essid")
 			assert_eq(by_role.downlink.psk, "backhaulsecret", "with the site PSK from its aaa block")
 			assert_true(by_role.downlink.hidden, "hidden")
@@ -3606,7 +3606,7 @@ return {
 		name = "inform packet: the mesh and connectivity blocks are parsed (captured 2026-10-03)",
 		fn = function()
 			local raw = "# mesh\nmesh.status=enabled\nmesh.version=3\nmesh.essid=vwire-5f3369181f7fbab5\n"
-				.. "mesh.psk=0123456789abcdef0123456789abcdef\nmesh.serial1=78:bb:c1:fe:3f:c9\n"
+				.. "mesh.psk=0123456789abcdef0123456789abcdef\nmesh.serial1=00:00:5e:00:53:01\n"
 				.. "# connectivity\nconnectivity.status=enabled\nconnectivity.uplink_wds=ath4\n"
 				.. "connectivity.uplink_eth=eth0\nconnectivity.uplink_bridge=br0\n"
 			local m = inform._parse_mesh_system_cfg(raw)
@@ -3614,7 +3614,7 @@ return {
 			assert_eq(m.version, 3, "version 3")
 			assert_eq(m.essid, "vwire-5f3369181f7fbab5", "essid")
 			assert_eq(m.psk, "0123456789abcdef0123456789abcdef", "psk")
-			assert_eq(m.serial1, "78:bb:c1:fe:3f:c9", "priority-1 parent")
+			assert_eq(m.serial1, "00:00:5e:00:53:01", "priority-1 parent")
 			assert_true(m.connectivity.status, "connectivity on")
 			assert_eq(m.connectivity.uplink_wds, "ath4", "the wireless uplink devname")
 			assert_eq(m.connectivity.uplink_eth, "eth0", "the wired one")
@@ -3780,7 +3780,7 @@ return {
 				apply_config = function() called = true end,
 			}
 			local cfg = {net = {lan_cpueth = "eth0"}}
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.2\\ndhcpc.1.status=enabled\\n"}'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.2\\ndhcpc.1.status=enabled\\n"}'
 			inform.handle_response(resp, st, cfg)
 			inform._ucihelper = nil
 			assert_false(called, "apply_config not called without any aaa./wireless./radio. keys")
@@ -5542,7 +5542,7 @@ return {
 				harvest          = function() return {} end,
 				hostapd_objects  = function() return {"hostapd.phy0-ap0", "hostapd.phy1-ap0"} end,
 				capable_stations = function(ifname)
-					if ifname == "phy0-ap0" then return {"d2:cf:3e:f3:52:f5"} end
+					if ifname == "phy0-ap0" then return {"02:00:5e:00:53:16"} end
 					return {"aa:bb:cc:dd:ee:55"}
 				end,
 				request          = function(ifname, sta, opts)
@@ -5562,7 +5562,7 @@ return {
 				inform._rrm_tick(cfg)
 				t = t + 100
 				inform._rrm_tick(cfg)
-				assert_eq(reqs[1], "phy0-ap0 d2:cf:3e:f3:52:f5 81", "2.4 GHz station: class 81")
+				assert_eq(reqs[1], "phy0-ap0 02:00:5e:00:53:16 81", "2.4 GHz station: class 81")
 				assert_eq(reqs[2], "phy1-ap0 aa:bb:cc:dd:ee:55 115", "5 GHz station: class 115")
 				t = t + 50
 				inform._rrm_tick(cfg)
@@ -5587,7 +5587,7 @@ return {
 				collector_ensure = function() end,
 				harvest          = function() local r = reporters; reporters = {}; return {}, r end,
 				hostapd_objects  = function() return {"hostapd.phy0-ap0"} end,
-				capable_stations = function() return {"d2:cf:3e:f3:52:f5", "aa:bb:cc:dd:ee:55"} end,
+				capable_stations = function() return {"02:00:5e:00:53:16", "aa:bb:cc:dd:ee:55"} end,
 				request          = function(_, sta) reqs[#reqs + 1] = sta end,
 			}
 			inform._sysinfo = {radio_caps = function() return {channel = 1} end}
@@ -5599,7 +5599,7 @@ return {
 				-- Round-robin: A, B, A, B -- after which each has two unanswered asks.
 				for _ = 1, 4 do inform._rrm_tick(cfg); t = t + 100 end
 				assert_eq(table.concat(reqs, ","),
-					"d2:cf:3e:f3:52:f5,aa:bb:cc:dd:ee:55,d2:cf:3e:f3:52:f5,aa:bb:cc:dd:ee:55",
+					"02:00:5e:00:53:16,aa:bb:cc:dd:ee:55,02:00:5e:00:53:16,aa:bb:cc:dd:ee:55",
 					"both asked twice, in turn")
 				-- Both benched: intervals pass, nobody is asked.
 				for _ = 1, 3 do inform._rrm_tick(cfg); t = t + 100 end
@@ -5616,7 +5616,7 @@ return {
 				inform._rrm_tick(cfg); t = t + 100
 				inform._rrm_tick(cfg); t = t + 100
 				local saw_a = false
-				for i = #reqs - 1, #reqs do if reqs[i] == "d2:cf:3e:f3:52:f5" then saw_a = true end end
+				for i = #reqs - 1, #reqs do if reqs[i] == "02:00:5e:00:53:16" then saw_a = true end end
 				assert_true(saw_a, "after the bench the silent station is tried again")
 			end)
 			inform._rrmscan, inform._sysinfo, inform._time = o_rrm, o_sys, o_time
@@ -5944,9 +5944,9 @@ return {
 		fn = function()
 			local st = sample_state({
 				ip_mode        = "static",
-				static_ip      = "172.19.0.50",
+				static_ip      = "198.51.100.50",
 				static_netmask = "255.255.255.0",
-				static_gateway = "172.19.0.1",
+				static_gateway = "198.51.100.1",
 			})
 			local cmds = {}
 			local orig = inform._netconfig._exec
@@ -5959,8 +5959,8 @@ return {
 			assert_true(ok, "reapply reports success")
 			assert_eq(#cmds, 3, "three shell commands (flush, add, route)")
 			assert_contains(cmds[1], "ip addr flush dev eth0", "flushes the right interface")
-			assert_contains(cmds[2], "172.19.0.50/24 dev eth0", "restores address and prefix")
-			assert_contains(cmds[3], "172.19.0.1", "restores the default route")
+			assert_contains(cmds[2], "198.51.100.50/24 dev eth0", "restores address and prefix")
+			assert_contains(cmds[3], "198.51.100.1", "restores the default route")
 		end
 	},
 	{
@@ -5968,7 +5968,7 @@ return {
 		fn = function()
 			local st = sample_state({
 				ip_mode    = "static",
-				static_ip  = "172.19.0.50",
+				static_ip  = "198.51.100.50",
 				static_dns = {"1.1.1.1", "9.9.9.9"},
 			})
 			local cmds = {}
@@ -6034,8 +6034,8 @@ return {
 			}, {__index = orig_uci})
 
 			local cfg = {net = {lan_cpueth = "eth0"}, config = {}}
-			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=172.19.0.50\\n'
-				.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=172.19.0.1\\n'
+			local resp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n'
+				.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=198.51.100.1\\n'
 				.. 'aaa.1.ssid=x\\nwireless.1.ssid=x\\nwireless.1.parent=radio0\\n"}'
 			local ok = pcall(inform.handle_response, resp, st, cfg)
 
@@ -6045,8 +6045,8 @@ return {
 			assert_false(ok, "the downstream failure really did raise")
 			assert_true(saved ~= nil, "state was saved anyway, before the raise")
 			assert_eq(saved.ip_mode, "static", "ip_mode reached disk")
-			assert_eq(saved.static_ip, "172.19.0.50", "static_ip reached disk")
-			assert_eq(saved.static_gateway, "172.19.0.1", "static_gateway reached disk")
+			assert_eq(saved.static_ip, "198.51.100.50", "static_ip reached disk")
+			assert_eq(saved.static_gateway, "198.51.100.1", "static_gateway reached disk")
 		end
 	},
 	{
@@ -6767,7 +6767,7 @@ return {
 			local ok, err = pcall(function()
 				inform._pending_notif = {event_string = "EVT_AP_QuickScanEvent", radio = "na", radio_name = "radio1",
 					channel = 36, width = 80, center_freq = 5210, utilization = 30, interference = 15}
-				local heartbeat = '{"mac":"ac:10:07:6f:c6:70","model":"U6IW","vap_table":[],"radio_table":[{"name":"radio1"}]}'
+				local heartbeat = '{"mac":"00:00:5e:00:53:20","model":"U6IW","vap_table":[],"radio_table":[{"name":"radio1"}]}'
 				assert_true(inform._post_notif(st, nil, heartbeat), "delivered")
 				assert_eq(#posted, 1, "one POST")
 				assert_eq(posted[1].url, st.inform_url, "to the inform URL")
@@ -6776,7 +6776,7 @@ return {
 				assert_eq(sent.notif_reason, "event", "reason: a device event (devmgr.l's enum)")
 				assert_eq(sent.notif_payload.event_string, "EVT_AP_QuickScanEvent", "the handler's name in the payload")
 				assert_eq(sent.notif_payload.channel, 36, "the row")
-				assert_eq(sent.mac, "ac:10:07:6f:c6:70", "the heartbeat's identity fields ride along")
+				assert_eq(sent.mac, "00:00:5e:00:53:20", "the heartbeat's identity fields ride along")
 				assert_contains(posted[1].body, '"vap_table":[]', "empty lists stay lists")
 				assert_nil(inform._pending_notif, "consumed")
 				assert_eq(inform._post_notif(st, nil, heartbeat), false, "nothing pending: nothing sent")
@@ -8508,7 +8508,7 @@ return {
 				assert_eq(table.concat(calls[1].rec.vids, ","), "20", "the tagged SSID's VLAN")
 				assert_nil(calls[1].prev, "nothing before")
 				assert_eq(st.meshvlan, calls[1].rec, "recorded for the startup rebuild")
-				push("netconf.1.ip=172.19.0.2\n")
+				push("netconf.1.ip=198.51.100.2\n")
 				assert_eq(#calls, 1, "a push without the WiFi config leaves it alone")
 				push(wifi .. "mesh.status=disabled\n")
 				assert_eq(#calls, 2, "mesh off: reconciled again")
