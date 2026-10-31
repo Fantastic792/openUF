@@ -4336,7 +4336,7 @@ one apk transaction, with the basic hostapd on the air through the ~25 s fetch.
 |---|---|---|---|
 | 1 | Adoption + inform (GCM) | PASS | both APs Connected, `x_aes_gcm=true`; a CBC inform is rejected, so GCM is what runs |
 | 2 | WPA2 WLAN on both bands | PASS | the client joined on 5 GHz, got a lease, pinged over the Wi-Fi leg |
-| 3 | Writes per push | PASS (note) | 5 commits per push, not ≤ 4: the 4 measured in `b145dd0` plus `backhaul_apply`'s own commit, which did not exist then |
+| 3 | Writes per push | PASS | 4 commits per push on vm1 and vm2 (a LabTest U-APSD toggle, on and back off). The run first counted 5: the 4 measured in `b145dd0` plus `backhaul_apply`'s own commit. Since `4e3b899` the backhaul sections are staged on the VAP loop's cursor and land in its commit; mesh failover and the downlink BSS re-checked after |
 | 4 | Multicast Suppression | PASS | off 2500/2500 probes through, conservative 549 (100/s limit), aggressive 0, with ARP/ND/DHCP still passing in every mode |
 | 5 | Per-BSS keys | PASS | `rsn_pairwise=GCMP` and `tdls_prohibit=1` on that BSS only; the client joined with pairwise GCMP |
 | 6 | DFS Country IE + radar | PASS | site US, ch 100/80: CAC done, simulated radar moved the radio to ch 149, one `AP_DETECTED_RADAR_V2` in the controller's log |
