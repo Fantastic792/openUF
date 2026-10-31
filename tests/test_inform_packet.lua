@@ -414,6 +414,36 @@ return {
 		end
 	},
 	{
+		name = "inform packet: adoption by a setparam authkey locks the bootstrap account at once",
+		fn = function()
+			-- No set-adopt, so no reload to lock it: it stayed unlocked until
+			-- a restart (two JIDU6401s, 2026-10-29).
+			local calls = {}
+			local orig = {run = inform._run_cmd, locked = inform._account_locked}
+			inform._run_cmd = function(cmd) calls[#calls + 1] = cmd; return "" end
+			inform._account_locked = function() return false end
+			local st = sample_state({adopted = false})
+			local resp = '{"_type":"setparam","mgmt_cfg":"mgmt_url=http://x:8080/inform\\nauthkey=deadbeefdeadbeefdeadbeefdeadbeef\\n"}'
+			local ok, err = pcall(inform.handle_response, resp, st,
+				{config = {bootstrap_adopt_user = "ubnt"}})
+			local again = {}
+			if ok then
+				calls, again = {}, calls
+				inform.handle_response(resp, st, {config = {bootstrap_adopt_user = "ubnt"}})
+			end
+			inform._run_cmd, inform._account_locked = orig.run, orig.locked
+			if not ok then error(err, 0) end
+			local locks = 0
+			for _, c in ipairs(again) do
+				if c:find("passwd -l 'ubnt'", 1, true) then locks = locks + 1 end
+			end
+			assert_eq(locks, 1, "locked once, on the adopting answer")
+			for _, c in ipairs(calls) do
+				assert_true(not c:find("passwd", 1, true), "an already-adopted answer runs no passwd")
+			end
+		end
+	},
+	{
 		name = "inform packet: handle_response setparam ignores authkey once already adopted",
 		fn = function()
 			-- Once adopted, only SSH set-adopt may rotate the key -- matches
@@ -7595,6 +7625,68 @@ return {
 				orig.tick, orig.idle, orig.gc, orig.cap
 			if not ok then error(err, 0) end
 			assert_eq(table.concat(waits, ","), "40,3,40", "only ever shortened")
+		end
+	},
+	{
+		name = "inform: _idle reads state.json every STATE_POLL_S and wakes when another process wrote it",
+		fn = function()
+			local t = 0
+			local selects = {}
+			local sock = {
+				gettime = function() return t end,
+				select = function(_, _, timeout)
+					selects[#selects + 1] = timeout
+					t = t + timeout
+					return {}
+				end,
+			}
+			local bh = inform._backhaul
+			local o = bh.watching
+			bh.watching = function() return false end
+			inform._guest_server, inform._stun_c, inform._roam_fast = nil, nil, false
+			local looks = 0
+			local ok, res = pcall(inform._idle, sock, 60,
+				function() looks = looks + 1; return looks == 3 end)
+			bh.watching = o
+			if not ok then error(res, 0) end
+			assert_eq(table.concat(selects, ","), "2,2,2", "2 s steps, ended at the change")
+			assert_true(res, "says it woke for the state file")
+		end
+	},
+	{
+		name = "inform: a state.json written by another process wakes the cycle and starts the backoff over",
+		fn = function()
+			-- A reset-inform waited out a failed inform's backoff (55 s on a
+			-- JIDU6401, 2026-10-29) before the daemon applied it.
+			local orig = {tick = inform._tick, idle = inform._idle, gc = inform._collectgarbage,
+				mtime = inform._state_mtime, lw = inform._state.last_written}
+			local token = "own"
+			local seen = {}
+			inform._tick = function() return 60 end
+			inform._collectgarbage = function() end
+			inform._state_mtime = function() return token end
+			inform._state.last_written = "own"
+			inform._idle = function(_, _, changed)
+				seen[#seen + 1] = changed()
+				return seen[#seen] or nil
+			end
+			local ctx = {interval = 10, backoff = 60, last_mtime = "before"}
+			local ok, err = pcall(function()
+				inform._cycle({}, nil, nil, ctx, {})
+				assert_eq(ctx.backoff, 60, "own write: no wake, the backoff stands")
+				token = "before"
+				inform._cycle({}, nil, nil, ctx, {})
+				assert_eq(ctx.backoff, 60, "unchanged file: the backoff stands")
+				token = "reset"
+				inform._cycle({}, nil, nil, ctx, {})
+				assert_eq(ctx.backoff, 10, "another process wrote it: the backoff starts over")
+			end)
+			inform._tick, inform._idle, inform._collectgarbage, inform._state_mtime =
+				orig.tick, orig.idle, orig.gc, orig.mtime
+			inform._state.last_written = orig.lw
+			if not ok then error(err, 0) end
+			assert_eq(tostring(seen[1]) .. tostring(seen[2]) .. tostring(seen[3]),
+				"falsefalsetrue", "only the foreign write counts")
 		end
 	},
 	{

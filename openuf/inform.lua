@@ -158,6 +158,11 @@ M.ROAM_POLL_S        = 0.25
 -- How often _idle reads the mesh child's wired socket between heartbeats
 -- (backhaul.carrier_changed), so a pulled cable is acted on within a second.
 M.CARRIER_POLL_S     = 1
+-- How often _idle reads state.json between heartbeats, so a set-inform,
+-- set-adopt or reset-inform is acted on within seconds and not after a
+-- failed inform's backoff of up to a minute (the reset took 55 s on a
+-- JIDU6401, 2026-10-29).
+M.STATE_POLL_S       = 2
 M._roam_fast         = false
 M._roam_keep         = false
 M._roam_st           = nil
@@ -4931,6 +4936,12 @@ function M.handle_response(json_str, st, cfg)
 		end
 
 		M._state.save(st)
+		-- Adopted by this answer's authkey, not by a set-adopt the reload
+		-- would have seen: lock the bootstrap account now. It used to wait
+		-- for the next restart (two JIDU6401s, 2026-10-29).
+		if newly_adopted then
+			M._sync_bootstrap_account(true, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
+		end
 		return newly_adopted  -- re-inform immediately with the new key if adopted
 	end
 
@@ -7110,7 +7121,7 @@ end
 -- spin.
 -- While a mesh child's wired socket is watched (backhaul.watching), it wakes
 -- every CARRIER_POLL_S and ends the wait when that link has changed.
-function M._idle(socket, wait)
+function M._idle(socket, wait, state_changed)
 	local deadline = socket.gettime() + wait
 	local fast = M._roam_fast
 	local bh = M._backhaul
@@ -7121,11 +7132,12 @@ function M._idle(socket, wait)
 		if left <= 0 then return end
 		local step = fast and math.min(left, M.ROAM_POLL_S) or left
 		if watch then step = math.min(step, M.CARRIER_POLL_S) end
+		if state_changed then step = math.min(step, M.STATE_POLL_S) end
 		local stun_sock = M._stun_c and M._stun_c.sock
 		local server = guests and M._guest_server or nil
 		if not stun_sock and not server then
 			socket.select(nil, nil, step)
-			if not fast and not watch then return end
+			if not fast and not watch and not state_changed then return end
 		else
 			local want = {}
 			if stun_sock then want[#want + 1] = stun_sock end
@@ -7143,6 +7155,10 @@ function M._idle(socket, wait)
 		if watch then
 			local ok, changed = pcall(bh.carrier_changed)
 			if ok and changed then return end
+		end
+		if state_changed then
+			local ok, changed = pcall(state_changed)
+			if ok and changed then return true end
 		end
 	end
 end
@@ -8089,7 +8105,15 @@ function M._cycle(st, cfg, ufhw, ctx, socket)
 		end
 	end
 	M._collectgarbage("collect")
-	if wait > 0 then M._idle(socket, wait) end
+	-- Another process wrote state.json (syswrapper over SSH): wake, and start
+	-- the backoff over, so the next heartbeat reloads it and goes out at once.
+	local function state_changed()
+		local token = M._state_mtime(M._state._state_file)
+		return token ~= nil and token ~= ctx.last_mtime and token ~= M._state.last_written
+	end
+	if wait > 0 and M._idle(socket, wait, state_changed) == true then
+		ctx.backoff = ctx.interval
+	end
 end
 
 -- ─── Script entry point ───────────────────────────────────────────────────────

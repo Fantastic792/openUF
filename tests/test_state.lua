@@ -421,4 +421,47 @@ return {
 			end)
 		end
 	},
+	{
+		name = "state: save leaves a file another process wrote since the last read alone",
+		fn = function()
+			-- The daemon's in-memory table, reloaded from a reset-inform's
+			-- defaults, must not overwrite the set-inform that followed it.
+			with_tmp(function()
+				state.save({adopted = false, inform_url = "http://unifi:8080/inform"})
+				local daemon = state.load()
+				local f = io.open(TMP, "w")
+				f:write('{"adopted":false,"inform_url":"http://10.0.0.5:8080/inform"}')
+				f:close()
+				local real_stderr = io.stderr
+				local logged = {}
+				io.stderr = {write = function(_, s) logged[#logged + 1] = s end}
+				local ok, res = pcall(state.save, daemon)
+				io.stderr = real_stderr
+				assert_true(ok, "no raise")
+				assert_false(res, "save refused")
+				assert_contains(table.concat(logged), "another process", "logged once")
+				assert_eq(state.load().inform_url, "http://10.0.0.5:8080/inform",
+					"the set-inform stands")
+				-- Once read back, this process may write again.
+				assert_true(state.save(state.load()), "save after the reload")
+			end)
+		end
+	},
+	{
+		name = "state: a file created by another process after a missing-file load is kept",
+		fn = function()
+			with_tmp(function()
+				local daemon = state.load()
+				local f = io.open(TMP, "w")
+				f:write('{"adopted":false,"inform_url":"http://10.0.0.5:8080/inform"}')
+				f:close()
+				local real_stderr = io.stderr
+				io.stderr = {write = function() end}
+				local res = state.save(daemon)
+				io.stderr = real_stderr
+				assert_false(res, "save refused")
+				assert_eq(state.load().inform_url, "http://10.0.0.5:8080/inform", "kept")
+			end)
+		end
+	},
 }

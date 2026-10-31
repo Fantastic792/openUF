@@ -177,15 +177,27 @@ local TYPED = {
 -- names the same table FIELDS).
 M.FIELDS = TYPED
 
+-- The bytes this process last read from or wrote to each state file (false
+-- for a file that was missing), so save() can tell when another process --
+-- syswrapper's set-inform, set-adopt or reset-inform -- wrote it in between.
+M._seen = {}
+
+local function read_raw(path)
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local raw = f:read("*a")
+	f:close()
+	return raw
+end
+
 -- Load state from disk. Missing file returns defaults. Applies security
 -- invariant: resets authkey if adopted == false.
 function M.load()
-	local f = io.open(M._state_file, "r")
-	if not f then
+	local raw = read_raw(M._state_file)
+	M._seen[M._state_file] = raw or false
+	if not raw then
 		return defaults()
 	end
-	local raw = f:read("*a")
-	f:close()
 
 	local ok, tbl = pcall(cjson.decode, raw)
 	if not ok or type(tbl) ~= "table" then
@@ -255,8 +267,25 @@ end
 -- this process's own write from syswrapper's: without it every save was read
 -- back on the next heartbeat as an out-of-process change, and the full reload
 -- rebuilt the firewall's nft table each time.
+--
+-- A file another process wrote since this one last read or wrote it is left
+-- alone, and save returns false. The daemon saves its in-memory table many
+-- times a heartbeat, and that table predates such a write until the next
+-- heartbeat reloads it: a `set-inform` just after a `reset-inform` was
+-- overwritten with the default URL the daemon had reloaded a moment before
+-- (two JIDU6401s, 2026-10-29). Skipping the save loses nothing the daemon
+-- cannot rebuild, and the next reload takes the newer file.
 M.last_written = nil
 function M.save(st)
+	local seen = M._seen[M._state_file]
+	if seen ~= nil then
+		local now = read_raw(M._state_file)
+		if now and now ~= seen then
+			io.stderr:write("state: " .. M._state_file .. " was changed by another "
+				.. "process -- not overwriting it\n")
+			return false
+		end
+	end
 	local tmp = M._state_file .. ".tmp"
 	local f = io.open(tmp, "w")
 	if not f then
@@ -284,6 +313,8 @@ function M.save(st)
 		error("state.save: cannot replace " .. M._state_file .. ": " .. tostring(err))
 	end
 	M.last_written = body
+	M._seen[M._state_file] = body
+	return true
 end
 
 -- Reset state to defaults and persist immediately.
