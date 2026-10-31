@@ -661,4 +661,42 @@ return {
 			assert_true(table.concat(c.sent):find("302", 1, true) ~= nil, "still answers")
 		end
 	},
+	{
+		-- inform.lua's ledger (st.guest_authorized), the set serve_one's
+		-- guests are let through by.
+		name = "guest ledger: over the cap a departed guest goes, never one still on the air",
+		fn = function()
+			dofile("openuf/lib/lib.lua")
+			local inform = dofile("openuf/inform.lua")
+			local A, B, C, N = "00:00:5e:00:53:0a", "00:00:5e:00:53:0b", "00:00:5e:00:53:0c",
+				"00:00:5e:00:53:0d"
+			local function run(where)
+				local st = {guest_authorized = {[A] = 100, [B] = 200, [C] = 300}}
+				inform._shape_obs = {complete = true, where = where, conn = {}}
+				local said = {}
+				local real = io.stderr
+				io.stderr = {write = function(_, s) said[#said + 1] = s end}
+				local ok, err = pcall(inform._guest_authorize, st, N, true)
+				io.stderr = real
+				if not ok then error(err, 0) end
+				return st.guest_authorized, table.concat(said)
+			end
+			inform.GUEST_LEDGER_MAX = 3
+			local ok, err = pcall(function()
+				-- B has left; A is the oldest but still associated.
+				local l, said = run({[A] = "wlan0", [C] = "wlan0", [N] = "wlan0"})
+				assert_not_nil(l[A], "the oldest guest, still associated, keeps access")
+				assert_nil(l[B], "the departed guest is the one dropped")
+				assert_not_nil(l[N], "the new authorization is recorded")
+				assert_eq(said, "", "nothing to report")
+				-- Everyone is on the air: forced, oldest other than N, logged.
+				l, said = run({[A] = "wlan0", [B] = "wlan0", [C] = "wlan0", [N] = "wlan0"})
+				assert_nil(l[A], "forced: the oldest goes")
+				assert_not_nil(l[N], "never the MAC just authorized")
+				assert_contains(said, "guest ledger full", "a forced drop is logged")
+			end)
+			inform.GUEST_LEDGER_MAX, inform._shape_obs = 512, nil
+			if not ok then error(err, 0) end
+		end
+	},
 }

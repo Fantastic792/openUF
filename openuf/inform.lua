@@ -5203,9 +5203,9 @@ end
 -- so before this every station on such a WLAN drew an unauthorize-guest per
 -- inform and authorize-guest was never sent at all.
 
--- Cap on st.guest_authorized. Past it the oldest authorization goes first;
--- the controller re-sends authorize-guest for any guest it still has a
--- record for, so a dropped entry costs one inform, not access.
+-- Cap on st.guest_authorized. Past it a departed guest goes first (see
+-- _guest_authorize); the controller re-sends authorize-guest for any guest
+-- it still has a record for, so a dropped entry costs at most one inform.
 M.GUEST_LEDGER_MAX = 512
 
 -- Set of wlanconf ids (vap.wlanconf_id) on which stations must pass the
@@ -5234,13 +5234,29 @@ function M._guest_authorize(st, mac, authorized)
 		return
 	end
 	st.guest_authorized[mac] = os.time()
-	local n, oldest, oldest_t = 0, nil, nil
+	-- Over the cap, a guest that has left (no netdev listed it at the last
+	-- complete heartbeat, M._shape_obs) goes first, oldest of those: it
+	-- uses no access now and the controller re-authorizes it on return.
+	-- Only when every entry is a guest still on the air is the oldest of
+	-- them dropped, and that is logged, since it cuts a guest off until the
+	-- next inform. The MAC just authorized is never the one dropped.
+	local obs = M._shape_obs
+	local seen = obs and obs.complete and obs.where or nil
+	local n, oldest, oldest_t, left, left_t = 0, nil, nil, nil, nil
 	for m, t in pairs(st.guest_authorized) do
 		n = n + 1
-		if not oldest_t or t < oldest_t then oldest, oldest_t = m, t end
+		if m ~= mac then
+			if not oldest_t or t < oldest_t then oldest, oldest_t = m, t end
+			if seen and not seen[m] and (not left_t or t < left_t) then left, left_t = m, t end
+		end
 	end
 	if n > M.GUEST_LEDGER_MAX then
-		st.guest_authorized[oldest] = nil
+		if not left and oldest then
+			io.stderr:write(("openuf: guest ledger full (%d): dropping %s, still associated; "
+				.. "it is blocked until the controller re-authorizes it\n")
+				:format(M.GUEST_LEDGER_MAX, oldest))
+		end
+		st.guest_authorized[left or oldest] = nil
 	end
 end
 
