@@ -4323,6 +4323,46 @@ first push produced `sae_groups=19 20 21` with UCI saying `19 20`. Fixed in `22a
 rides `hostapd_bss_options`, which the generator appends after its own lines, and the live
 config reads `sae_groups=19 20 21` then `sae_groups=19 20` (hostapd keeps the last).
 
+### The feature table in this project's VM lab (2026-10-31)
+
+Two openUF APs (QEMU, `mac80211_hwsim` radios sharing the air through a relay) and one plain
+OpenWrt client, adopted by UniFi Network 10.6.106 in Docker, on the `jonas-merge` tip `1882b57`.
+Every row was switched on through the controller's REST API, checked on the AP (UCI, live
+hostapd, `logread`, `tc`/`nft`) and from the client, then put back. 19 PASS, 0 FAIL, 1 N/A.
+A fresh flash with `wpad-basic-mbedtls` passed first: `install.sh` swapped in `wpad-mbedtls` in
+one apk transaction, with the basic hostapd on the air through the ~25 s fetch.
+
+| # | Feature | Result | What was seen |
+|---|---|---|---|
+| 1 | Adoption + inform (GCM) | PASS | both APs Connected, `x_aes_gcm=true`; a CBC inform is rejected, so GCM is what runs |
+| 2 | WPA2 WLAN on both bands | PASS | the client joined on 5 GHz, got a lease, pinged over the Wi-Fi leg |
+| 3 | Writes per push | PASS (note) | 5 commits per push, not ≤ 4: the 4 measured in `b145dd0` plus `backhaul_apply`'s own commit, which did not exist then |
+| 4 | Multicast Suppression | PASS | off 2500/2500 probes through, conservative 549 (100/s limit), aggressive 0, with ARP/ND/DHCP still passing in every mode |
+| 5 | Per-BSS keys | PASS | `rsn_pairwise=GCMP` and `tdls_prohibit=1` on that BSS only; the client joined with pairwise GCMP |
+| 6 | DFS Country IE + radar | PASS | site US, ch 100/80: CAC done, simulated radar moved the radio to ch 149, one `AP_DETECTED_RADAR_V2` in the controller's log |
+| 7 | Nightly dfs-reset | PASS | the cron line arrives with the push; a manual run right after radar waits out the non-occupancy period |
+| 8 | Auto-channel blacklist | PASS | 2.4 GHz `chanlist=1 6 11` from the site, `acs_exclude_dfs=1` on 5 GHz; the dfs-reset line leaves with the pinned channel |
+| 9 | WPA-Enterprise (PEAP) | PASS | PEAP/MSCHAPv2 against the lab FreeRADIUS: Access-Accept, lease, traffic |
+| 10 | RADIUS MAC auth + DAS | PASS | `macaddr_acl=2`, the client's MAC accepted; a Disconnect-Request got Disconnect-ACK and kicked it, a wrong secret was dropped. DAS needs an accounting server on the profile (`das.client` is the first one) |
+| 11 | Passpoint | PASS | `[HS20]` in the beacon; ANQP answered capability list, venue name, roaming consortium and NAI realm as configured |
+| 12 | Walled garden + portal | PASS | over Wi-Fi the garden hosts answer, a restricted subnet is dropped, other HTTP gets 302 to the controller's `/guest/s/default/` |
+| 13 | SAE tuning + station key | PASS | joined with the MAC-bound key (SAE, group 19, PMF required); the WLAN passphrase is refused for that MAC, as it should be |
+| 14 | Discovery reply | PASS | a v1 probe on UDP 10001 got a 15-TLV answer from each AP |
+| 15 | Plugins | PASS | a sample plugin in `/etc/openuf/plugins/` + `plugins.enabled` set an option on both bands; removed, the next push dropped it |
+| 16 | Mesh failover | PASS | guest carrier cut: the WDS station came up in ~10 s, the AP kept informing through its peer; carrier back, station off |
+| 17 | Uplink monitor | PASS | wire and mesh both cut: the 4 user BSSes went off within one heartbeat (no route at all skips the 5-check count), the mesh BSS stayed; back within 20 s of the link |
+| 18 | 802.11r | PASS | 6 roams in both directions, each `auth_alg=ft` with no 4-way handshake after the first join |
+| 19 | Speed limit, schedule, blocker, band steering, min RSSI, load balance | PASS | `tc` HTB 2 Mbit on every VAP; schedule took the WLAN's BSSes down and back; `block-sta` kicked and refused the client; `usteerd` started and stopped; `rssi_reject_assoc_rssi=-72` for -75 (the firmware's +3 dB); `loadbalance_maxsta=5`. All cleared on reset |
+| 20 | MAC-based VLANs | N/A | needs a UniFi OS gateway; see the hardware run below |
+
+Lab notes from the run, none of them openUF bugs: the lab's `cable` command downs only the
+host tap, so a carrier cut needs QEMU's `set_link`; the client's wired leg must be bypassed
+(`ping -I`) for the guest rows; `wpa_cli roam` answers FAIL once the target's scan entry has
+aged out; a device `radio_table` PUT merges per radio, so a key is cleared by sending `false`,
+not by leaving it out. Open questions it left: the controller labels a meshed uplink as type
+"wire" when the site has no mesh uplink in the push, and the BSS carries the default
+`sae_groups` line before the controller's (above).
+
 ### WPA3 station keys: `aaa.<n>.sae.psk.*` (jonasevcik 8d0f5ed, 2026-10-26)
 
 Their feature-matrix row:
