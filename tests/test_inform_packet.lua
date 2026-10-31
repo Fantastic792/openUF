@@ -7556,6 +7556,19 @@ return {
 		end
 	},
 	{
+		name = "inform: _station_on refuses an ifname or MAC that is not one, opening no shell",
+		fn = function()
+			local o_popen, cmds = io.popen, {}
+			io.popen = function(c) cmds[#cmds + 1] = c; return nil end
+			local r1 = inform._station_on("wlan0;reboot", "00:00:5e:00:53:01")
+			local r2 = inform._station_on("wlan0", "00:00:5e:00:53:01 ; reboot")
+			io.popen = o_popen
+			assert_false(r1, "bad ifname")
+			assert_false(r2, "bad mac")
+			assert_eq(#cmds, 0, "no shell")
+		end
+	},
+	{
 		name = "inform: http_post stops reading a response past HTTP_MAX_RESPONSE",
 		fn = function()
 			local o_sock, o_max, o_hp = package.loaded.socket, inform.HTTP_MAX_RESPONSE, inform._http_post

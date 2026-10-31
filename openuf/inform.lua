@@ -5659,6 +5659,8 @@ end
 -- The guest's SSID for the portal's ssid=: the only one, or the VAP that
 -- has the station.
 M._station_on = function(ifname, mac)
+	-- A shell command line: a netdev name and a MAC only.
+	if not (util.valid_ifname(ifname) and is_mac(mac)) then return false end
 	local p = io.popen("iw dev " .. ifname .. " station get " .. mac .. " 2>/dev/null")
 	if not p then return false end
 	local out = p:read("*a") or ""
