@@ -43,6 +43,8 @@ M.MAX_VALUE_CHARS   = 200
 M.FLUSH_INTERVAL    = 300
 -- Injectable clock, as in inform.lua.
 M._time             = os.time
+-- Injectable opener for the ledger's temp file.
+M._open             = io.open
 
 M._entries         = {}
 M._dirty           = false
@@ -189,6 +191,17 @@ function M.load()
 	return M._entries
 end
 
+-- A failed flush, said on stderr once until a flush succeeds again: the
+-- only caller (inform's heartbeat) pcalls flush and drops what it returns,
+-- and a failing one is retried every heartbeat.
+local function flush_failed(msg)
+	if M._flush_err ~= msg then
+		M._flush_err = msg
+		io.stderr:write(msg .. "\n")
+	end
+	return false, msg
+end
+
 -- Write if there is anything to write and it is time to: at once for a new
 -- entry, every FLUSH_INTERVAL for repeat counts, always with force. Returns
 -- true when the file was written.
@@ -205,21 +218,28 @@ function M.flush(force)
 	end
 	local doc = {version = 1, updated = iso(now), entries = M._entries}
 	local tmp = M._file .. ".tmp"
-	local f = io.open(tmp, "w")
+	local f = M._open(tmp, "w")
 	if not f then
 		local dir = M._file:match("^(.*)/[^/]+$")
 		if dir then os.execute("mkdir -p '" .. dir .. "'") end
-		f = io.open(tmp, "w")
-		if not f then return false, "unhandled: cannot write " .. tmp end
+		f = M._open(tmp, "w")
+		if not f then return flush_failed("unhandled: cannot write " .. tmp) end
 	end
-	f:write(cjson.encode(doc))
-	f:close()
+	-- A short write (a full overlay) must not be renamed over the last
+	-- good ledger. close() is where a buffered write's error shows up.
+	local wok, werr = f:write(cjson.encode(doc))
+	local cok, cerr = f:close()
+	if not (wok and cok) then
+		os.remove(tmp)
+		return flush_failed("unhandled: cannot write " .. tmp .. ": " .. tostring(werr or cerr))
+	end
 	local ok, err = os.rename(tmp, M._file)
 	if not ok then
 		os.remove(tmp)
-		return false, "unhandled: cannot replace " .. M._file .. ": " .. tostring(err)
+		return flush_failed("unhandled: cannot replace " .. M._file .. ": " .. tostring(err))
 	end
 	M._dirty, M._new_since_flush, M._last_flush = false, false, now
+	M._flush_err = nil
 	return true
 end
 

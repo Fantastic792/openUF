@@ -98,6 +98,42 @@ return {
 		end
 	},
 	{
+		name = "unhandled: a failed write never replaces the ledger and is said once",
+		fn = function()
+			fresh(1700000000)
+			unhandled.record("mgmt_cfg", "a", {})
+			assert_true(unhandled.flush(), "a good ledger on disk")
+			local good = read_file()
+			-- A full overlay: open works, the write (or the flush at close) fails.
+			local said = {}
+			local o_open, o_err = unhandled._open, io.stderr
+			unhandled._open = function(path, mode)
+				local f = {}
+				function f:write() return nil, "No space left on device" end
+				function f:close() return true end
+				assert_eq(path, FILE .. ".tmp", "only the temp file is opened")
+				local real = io.open(path, mode)  -- so the test can see it removed
+				if real then real:close() end
+				return f
+			end
+			io.stderr = {write = function(_, m) said[#said + 1] = m end}
+			local ok, err = pcall(function()
+				unhandled.record("mgmt_cfg", "b", {})
+				local w, why = unhandled.flush()
+				assert_false(w, "not written")
+				assert_contains(why, "No space left", "says why")
+				unhandled.flush(true)
+				assert_eq(#said, 1, "said once, not every heartbeat")
+				assert_eq(read_file(), good, "the last good ledger is untouched")
+				assert_nil(io.open(FILE .. ".tmp", "r"), "no partial temp file left")
+			end)
+			unhandled._open, io.stderr = o_open, o_err
+			if not ok then error(err, 0) end
+			assert_true(unhandled.flush(), "space again: written")
+			assert_not_nil(unhandled.load()["mgmt_cfg/b"], "with the entry it held back")
+		end
+	},
+	{
 		name = "unhandled: a new entry is flushed at once and reads back after load",
 		fn = function()
 			fresh(1700000000)
