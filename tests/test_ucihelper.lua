@@ -1262,6 +1262,32 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: derive_rates picks the lowest rate at the floor, not list order",
+		fn = function()
+			-- CCK listed before OFDM put 11 Mbps ahead of 6 Mbps.
+			local r = ucihelper.derive_rates(6000, true, true, "ng")
+			assert_eq(r.basic_rate[1], 6000, "6 Mbps floor -> 6 Mbps basic")
+			assert_eq(r.supported_rates[1], 6000, "advertised set starts at 6")
+			assert_eq(r.supported_rates[2], 9000, "and stays ascending")
+			assert_eq(r.supported_rates[3], 11000, "CCK 11 kept on 2.4 GHz")
+		end
+	},
+	{
+		name = "ucihelper: derive_rates never puts a CCK rate on a 5 GHz radio",
+		fn = function()
+			-- VM lab: 5 GHz floor 6000 with CCK allowed gave basic_rate 11000,
+			-- hostapd found no usable basic rate and the radio stayed down.
+			local r = ucihelper.derive_rates(6000, true, true, "na")
+			assert_eq(r.basic_rate[1], 6000, "OFDM basic rate on 5 GHz")
+			for _, rate in ipairs(r.supported_rates) do
+				assert_true(rate ~= 1000 and rate ~= 2000 and rate ~= 5500
+					and rate ~= 11000, "no CCK rate advertised on 5 GHz")
+			end
+			r = ucihelper.derive_rates(1000, true, false, "na")
+			assert_eq(r.basic_rate[1], 6000, "a CCK floor rounds up to 6 Mbps")
+		end
+	},
+	{
 		name = "ucihelper: derive_rates returns nil rather than an empty rate list",
 		fn = function()
 			-- A floor above every rate on the ladder would otherwise produce an
@@ -1290,6 +1316,26 @@ return {
 				assert_eq(r.legacy_rates, "0", "CCK off")
 				-- beacon_rate is the one option OpenWrt does NOT divide by 100.
 				assert_eq(r.beacon_rate, "120", "12000 kb/s -> 120 (100-kbps units)")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: apply_config keeps CCK off a 5 GHz radio's basic rate",
+		fn = function()
+			with_ucihelper(function(db)
+				seed_radios()
+				ucihelper._uci.cursor():set("wireless", "radio1", "band", "5g")
+				local resp = {
+					radio_table = {{name = "radio1"}},
+					vap_table = {
+						{ssid = "corp", radio = "radio1", security = "wpa2",
+						 x_passphrase = "hunter22", minrate_data = 6000,
+						 minrate_cck = true, beacon_rate = 6000},
+					},
+				}
+				ucihelper.apply_config(resp, nil)
+				local r = db.wireless.radio1
+				assert_eq(r.basic_rate[1], "6000", "OFDM 6 Mbps, not CCK 11 Mbps")
 			end)
 		end
 	},

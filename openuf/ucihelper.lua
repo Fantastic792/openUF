@@ -1116,6 +1116,12 @@ local OFDM_RATES = {6000, 9000, 12000, 18000, 24000, 36000, 48000, 54000}
 -- drop_below:    whether rates under the floor are also removed from the
 --                advertised set, not merely made non-basic
 --                (wireless.<n>.minrate_below_disable)
+-- band:          "ng" or "na" (band_for_device). CCK exists only on 2.4 GHz,
+--                so a 5 GHz ladder is OFDM only whatever allow_cck says:
+--                a CCK basic rate there leaves hostapd with no basic rate it
+--                can use ("No rates remaining in supported/basic rate sets")
+--                and the whole radio stays down. Seen in the VM lab with a
+--                6 Mbps floor on 5 GHz.
 --
 -- basic_rate is what actually enforces a *minimum*: a station must support
 -- every basic rate to associate at all, so making the floor basic excludes
@@ -1124,13 +1130,17 @@ local OFDM_RATES = {6000, 9000, 12000, 18000, 24000, 36000, 48000, 54000}
 --
 -- Returns nil when the floor excludes every rate in the band, rather than
 -- emitting an empty list that would leave hostapd unable to bring the BSS up.
-function M.derive_rates(floor_kbps, allow_cck, drop_below)
+function M.derive_rates(floor_kbps, allow_cck, drop_below, band)
 	if not floor_kbps then return nil end
 	local ladder = {}
-	if allow_cck ~= false then
+	if allow_cck ~= false and band ~= "na" then
 		for _, r in ipairs(CCK_RATES) do ladder[#ladder + 1] = r end
 	end
 	for _, r in ipairs(OFDM_RATES) do ladder[#ladder + 1] = r end
+	-- Ascending, so at_or_above[1] really is the lowest rate at the floor:
+	-- unsorted, a 6 Mbps floor with CCK on picked 11 Mbps (11000 sat before
+	-- 6000 in the list).
+	table.sort(ladder)
 
 	local at_or_above = {}
 	for _, r in ipairs(ladder) do
@@ -2415,7 +2425,18 @@ function M.apply_config(resp, cfg, opts)
 			local rates
 			local agg = rates_by_radio[radio.name]
 			if agg then
-				rates = M.derive_rates(agg.floor, agg.allow_cck, agg.drop_below)
+				-- Band only when the section says so: band_for_channel calls an
+				-- unknown channel 5 GHz, which would strip CCK from a 2.4 GHz
+				-- radio that just has channel=auto and no band option.
+				local rc = get_uci().cursor()
+				local sec = {
+					band    = rc:get("wireless", radio.name, "band"),
+					hwmode  = rc:get("wireless", radio.name, "hwmode"),
+					channel = rc:get("wireless", radio.name, "channel"),
+				}
+				local band = (sec.band or sec.hwmode or tonumber(sec.channel))
+					and band_for_device(sec) or nil
+				rates = M.derive_rates(agg.floor, agg.allow_cck, agg.drop_below, band)
 				if rates then rates.beacon_rate = agg.beacon_rate end
 			end
 			M.rf_config(radio.name, radio.htmode, radio.channel, radio.tx_power,
