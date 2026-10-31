@@ -4968,6 +4968,12 @@ function M.handle_response(json_str, st, cfg)
 			M._sync_blocked_stas(st, resp.blocked_sta)
 		end
 
+		-- A top-level cfgversion counts too when mgmt_cfg had none: this
+		-- branch returns before the generic cfgversion check at the end of
+		-- handle_response, so without this it was read nowhere.
+		if not pending_cfgversion and type(resp.cfgversion) == "string" and resp.cfgversion ~= "" then
+			pending_cfgversion = resp.cfgversion
+		end
 		if pending_cfgversion and wifi_applied then st.cfgversion = pending_cfgversion end
 		M._state.save(st)
 		-- Adopted by this answer's authkey, not by a set-adopt the reload

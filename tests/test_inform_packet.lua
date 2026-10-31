@@ -1120,6 +1120,16 @@ return {
 		end
 	},
 	{
+		name = "inform packet: a setparam's top-level cfgversion is recorded when mgmt_cfg has none",
+		fn = function()
+			local st = sample_state({adopted = true, cfgversion = "v1"})
+			inform.handle_response('{"_type":"setparam","cfgversion":"v2"}', st)
+			assert_eq(st.cfgversion, "v2", "top-level cfgversion recorded")
+			inform.handle_response('{"_type":"setparam","cfgversion":"v4","mgmt_cfg":"cfgversion=v3\\n"}', st)
+			assert_eq(st.cfgversion, "v3", "mgmt_cfg's copy wins when both are present")
+		end
+	},
+	{
 		name = "inform packet: handle_response restores stock switch VLANs on an explicit Port VLAN disable",
 		fn = function()
 			-- Unticking the device-level "Port VLAN" box keeps the switch.*
