@@ -769,6 +769,25 @@ return {
 		end
 	},
 	{
+		name = "switchvlan: the VLAN table size is read once per push, not once per VLAN",
+		fn = function()
+			local orig, helps = switchvlan._popen, 0
+			switchvlan._popen = function(c)
+				if c:find("^swconfig dev %S+ help") then helps = helps + 1 end
+				return "vlans: 4096\n"
+			end
+			local ok, err = pcall(with_capture, function()
+				local u = swconfig_board()
+				switchvlan._uci = u.mock
+				assert_true(switchvlan.apply(nil, CFG, {}, {20, 30, 40}, 4), "three trunks")
+				assert_not_nil(u.db.network.openuf_swvlan40, "all written")
+			end)
+			switchvlan._popen = orig
+			if not ok then error(err, 0) end
+			assert_eq(helps, 1, "one swconfig fork for three VLANs")
+		end
+	},
+	{
 		name = "switchvlan: a dynamic-uplink board strips the moved port from stock VLAN 1",
 		fn = function()
 			-- No static uplink: the stock-strip pass must use the runtime

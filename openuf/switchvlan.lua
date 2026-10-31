@@ -540,9 +540,10 @@ function M.apply(sw, cfg, st, wireless_vlans, uplink_phys, uplink_ifname)
 			changed = true
 		end
 
+		-- One `swconfig dev help` fork per push, not one per VLAN.
+		local cap = next(desired) and M.vlan_table_size(cursor, cfg.vlan.device)
 		for vlan_id, ports in pairs(desired) do
 			local section = OPENUF_VLAN_PREFIX .. tostring(vlan_id)
-			local cap = M.vlan_table_size(cursor, cfg.vlan.device)
 			if cap and vlan_id >= cap then
 				-- Not necessarily fatal: whether it matters depends on the
 				-- ASIC. Confirmed live on both validated boards -- the
