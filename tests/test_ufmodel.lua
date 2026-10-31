@@ -46,11 +46,10 @@ return {
 					assert_true(type(uap.fw[k]) == "string" and uap.fw[k] ~= "",
 						name .. ": fw." .. k .. " is a non-empty string (announce catstr's it)")
 				end
-				-- inform.lua: model / bootrom_version / required_version. The
-				-- older identities predate `model` and `required_version`;
-				-- build_json defaults them, so they are optional -- but a
-				-- present one has to be a string, not a number someone
-				-- typed without quotes.
+				-- inform.lua: model / bootrom_version / required_version. A
+				-- present one has to be a string, not a number someone typed
+				-- without quotes (that every identity sets model is the next
+				-- test's job).
 				if uap.model ~= nil then
 					assert_true(type(uap.model) == "string" and uap.model ~= "",
 						name .. ": model is a non-empty string when set")
@@ -61,6 +60,23 @@ return {
 					assert_true(type(uap.required_version) == "string",
 						name .. ": required_version is a string when set")
 				end
+			end)
+		end
+	},
+	{
+		name = "ufmodel: every identity names its own model and a bare catalog version",
+		fn = function()
+			-- inform.lua sends `model = uap.model or "U6IW"`: an identity
+			-- without model reported U6IW next to its own platform (uapg1-lr
+			-- said U6IW / BZ2LR). And `version` is string-compared to the
+			-- firmware catalog, so a placeholder like "3.7.x" can never match.
+			each_ufmodel(function(name, uap)
+				assert_eq(uap.model, uap.platform, name .. ": model is set and matches platform")
+				assert_true(uap.fw.ver:match("^%d+%.%d+%.%d+%.%d+$") ~= nil,
+					name .. ": fw.ver is bare M.m.p.build, got " .. tostring(uap.fw.ver))
+				assert_true(uap.fw.buildtime:match("^%d%d%d%d%d%d%.%d%d%d%d$") ~= nil,
+					name .. ": fw.buildtime is YYMMDD.HHMM, got " .. tostring(uap.fw.buildtime))
+				assert_eq(type(uap.required_version), "string", name .. ": required_version is set")
 			end)
 		end
 	},
