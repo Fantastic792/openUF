@@ -5395,6 +5395,59 @@ Wiphy phy2
 		end
 	},
 	{
+		name = "ucihelper: the mesh backhaul sections ride the VAP loop's commit, not a commit of their own",
+		fn = function()
+			-- backhaul_apply opened and committed its own cursor after the VAP
+			-- loop's, so a push carrying the mesh downlink or uplink rewrote
+			-- /etc/config/wireless one time more than the "one commit per push"
+			-- batching allows (the VM lab counted 5 per push on 2026-10-31).
+			local ow, orm = ucihelper._write_file, ucihelper._remove_file
+			ucihelper._write_file = function() return true end
+			ucihelper._remove_file = function() end
+			local ok, err = pcall(function()
+				with_ucihelper(function(db, cmds, commits)
+					ucihelper.apply_config({
+						radio_table = {},
+						vap_table = {
+							{ssid = "home", radio = "radio1", security = "wpa2",
+							 x_passphrase = "basepass123"},
+						},
+					}, {net = {lan_cpueth = "eth1"}}, {
+						backhaul = {
+							downlink = {radio = "radio1", ssid = "vwire-x", key = "0123456789abcdef"},
+							uplink = {radio = "radio1", ssid = "vwire-x", key = "0123456789abcdef",
+							          enabled = false},
+						},
+						peer_ie = "dd0d026f556f554601aabbccddeeff",
+					})
+					assert_eq(commits.wireless, 2,
+						"wlan_clear, then the VAP loop and the backhaul in a single commit")
+					local dl = db.wireless[ucihelper.BACKHAUL_DL_PREFIX .. "radio1"]
+					local ul = db.wireless[ucihelper.BACKHAUL_UL_PREFIX .. "radio1"]
+					assert_not_nil(dl, "the downlink AP still landed")
+					assert_eq(dl.wds, "1", "as a WDS AP")
+					assert_eq(dl.vendor_elements, "dd0d026f556f554601aabbccddeeff",
+						"carrying the sibling element")
+					assert_not_nil(ul, "the uplink station still landed")
+					assert_eq(ul.disabled, "1", "disabled, as the uplink policy asked")
+				end)
+			end)
+			ucihelper._write_file, ucihelper._remove_file = ow, orm
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "ucihelper: backhaul_apply called on its own still commits",
+		fn = function()
+			-- Every caller outside apply_config passes no cursor and relies on
+			-- the write being committed.
+			with_ucihelper(function(db, cmds, commits)
+				ucihelper.backhaul_apply({downlink = {radio = "radio1", ssid = "vwire-x", key = "0123456789abcdef"}})
+				assert_eq(commits.wireless, 1, "its own cursor, committed")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: the plugin list is read once for the VAP loop, not once per WLAN",
 		fn = function()
 			-- plugins.vap_options walks the enabled list before its

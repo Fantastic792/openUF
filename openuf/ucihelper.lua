@@ -3149,6 +3149,25 @@ function M.apply_config(resp, cfg, opts)
 			end
 		end
 	end
+	-- The mesh backhaul (backhaul.lua): the hidden WDS downlink AP and/or the
+	-- 4-address uplink station the push described. wlan_clear() above removed
+	-- the previous copies (openuf_ prefix), so this is a rewrite every push;
+	-- the station's disabled flag follows the uplink policy's persisted mode.
+	-- Staged on the loop's cursor so it lands in the same commit: with its
+	-- own, every push wrote the file a fifth time (lab, 2026-10-31).
+	if opts and opts.backhaul then
+		if opts.backhaul.downlink and opts.peer_ie then
+			-- Version 1 for sibling recognition, then the version 2 element
+			-- multi-hop parent choice reads (backhaul.lua).
+			opts.backhaul.downlink.vendor_elements = opts.peer_ie
+				.. (opts.backhaul.downlink.path_ie or "")
+		end
+		local ok_bh, err_bh = pcall(M.backhaul_apply, opts.backhaul, wcursor)
+		if not ok_bh then
+			io.stderr:write("ucihelper: backhaul sections not written: " .. tostring(err_bh) .. "\n")
+		end
+	end
+
 	-- Everything the loop staged, in one rewrite of /etc/config/wireless.
 	wcursor:commit("wireless")
 	do
@@ -3177,23 +3196,6 @@ function M.apply_config(resp, cfg, opts)
 	-- the running config stop matching what the controller asked for.
 	-- switchvlan.lua already reconciles its own switch_vlan sections this way.
 	M.prune_vlan_networks(wanted_vlans)
-
-	-- The mesh backhaul (backhaul.lua): the hidden WDS downlink AP and/or the
-	-- 4-address uplink station the push described. wlan_clear() above removed
-	-- the previous copies (openuf_ prefix), so this is a rewrite every push;
-	-- the station's disabled flag follows the uplink policy's persisted mode.
-	if opts and opts.backhaul then
-		if opts.backhaul.downlink and opts.peer_ie then
-			-- Version 1 for sibling recognition, then the version 2 element
-			-- multi-hop parent choice reads (backhaul.lua).
-			opts.backhaul.downlink.vendor_elements = opts.peer_ie
-				.. (opts.backhaul.downlink.path_ie or "")
-		end
-		local ok_bh, err_bh = pcall(M.backhaul_apply, opts.backhaul)
-		if not ok_bh then
-			io.stderr:write("ucihelper: backhaul sections not written: " .. tostring(err_bh) .. "\n")
-		end
-	end
 
 	-- Hand-configured (non-openuf_) SSIDs: disable or restore them per
 	-- conf.lua's use_only_unifi_wlan. Runs after the vap loop so it sees the
@@ -3802,11 +3804,11 @@ end
 
 -- bh = {downlink = {radio, ssid, key, network?} | nil,
 --       uplink   = {radio, ssid, key, bssid?, enabled, network?} | nil}
--- Returns the list of section names written.
-function M.backhaul_apply(bh)
+-- Returns the list of section names written. With a cursor (apply_config's),
+-- it stages on that one and leaves the commit to its owner.
+function M.backhaul_apply(bh, cursor_in)
 	if type(bh) ~= "table" then return {} end
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor, owned = borrow_cursor(cursor_in)
 	local written = {}
 	local dl = bh.downlink
 	if type(dl) == "table" and dl.radio and dl.ssid and type(dl.key) == "string" and #dl.key >= 8 then
@@ -3863,7 +3865,7 @@ function M.backhaul_apply(bh)
 		cursor:set("wireless", s, "openuf_backhaul", "uplink")
 		written[#written + 1] = s
 	end
-	cursor:commit("wireless")
+	release_cursor(cursor, owned, "wireless")
 	return written
 end
 
