@@ -4253,7 +4253,10 @@ local KNOWN_TOP_FIELDS = {
 	noop     = {_type = true, interval = true, include_blocks = true,
 	            server_time_in_utc = true},
 	setparam = {_type = true, mgmt_cfg = true, system_cfg = true,
-	            server_time_in_utc = true, include_blocks = true, cfgversion = true},
+	            server_time_in_utc = true, include_blocks = true, cfgversion = true,
+	            -- read by M._sync_blocked_stas; listing it keeps client MACs
+	            -- out of unhandled.json.
+	            blocked_sta = true},
 }
 
 -- pcall'd: the ledger is a diagnostic and must never cost a heartbeat.
@@ -5082,11 +5085,14 @@ function M.handle_response(json_str, st, cfg)
 					:format(cmd, mac))
 			end
 			if is_mac(mac) then
+				-- Lowercase like M._sync_blocked_stas, so a block sent in
+				-- upper case is lifted by an unblock in lower case.
+				mac = mac:lower()
 				st.blocked_stas = st.blocked_stas or {}
 				if cmd == "block-sta" then
 					local already = false
 					for _, m in ipairs(st.blocked_stas) do
-						if m == mac then already = true break end
+						if tostring(m):lower() == mac then already = true break end
 					end
 					if not already then
 						st.blocked_stas[#st.blocked_stas + 1] = mac
@@ -5094,7 +5100,7 @@ function M.handle_response(json_str, st, cfg)
 				else
 					local kept = {}
 					for _, m in ipairs(st.blocked_stas) do
-						if m ~= mac then kept[#kept + 1] = m end
+						if tostring(m):lower() ~= mac then kept[#kept + 1] = m end
 					end
 					st.blocked_stas = kept
 				end

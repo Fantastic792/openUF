@@ -6458,6 +6458,41 @@ return {
 		end
 	},
 	{
+		name = "inform: setparam blocked_sta is a known field, so client MACs stay out of the ledger",
+		fn = function()
+			local led = inform._unhandled
+			led._reset("/tmp/openuf_test_unhandled_inform.json")
+			local st = sample_state({adopted = true})
+			local o_fw = inform._firewall
+			inform._firewall = { reconcile = function() end, deauth = function() end,
+				hostapd_sockets = function() return "" end, deny_sync = function() return true end }
+			with_stderr(function()
+				inform.handle_response('{"_type":"setparam","blocked_sta":"00:00:5e:00:53:01"}', st)
+			end)
+			inform._firewall = o_fw
+			inform._deny_pending = false
+			assert_nil(led.entry("field", "setparam.blocked_sta"), "blocked_sta is not recorded")
+			led._reset()
+		end
+	},
+	{
+		name = "inform: block-sta in upper case is lifted by unblock-sta in lower case",
+		fn = function()
+			local st = sample_state({blocked_stas = {}})
+			local o_fw = inform._firewall
+			inform._firewall = { reconcile = function() end, deauth = function() end,
+				hostapd_sockets = function() return "" end, deny_sync = function() return true end }
+			inform.handle_response('{"_type":"cmd","cmd":"block-sta","mac":"00:00:5E:00:53:0A"}', st)
+			assert_eq(table.concat(st.blocked_stas, ","), "00:00:5e:00:53:0a", "stored lower case")
+			inform.handle_response('{"_type":"cmd","cmd":"block-sta","mac":"00:00:5e:00:53:0a"}', st)
+			assert_eq(#st.blocked_stas, 1, "same MAC in the other case is not added twice")
+			inform.handle_response('{"_type":"cmd","cmd":"unblock-sta","mac":"00:00:5e:00:53:0a"}', st)
+			inform._firewall = o_fw
+			inform._deny_pending = false
+			assert_eq(#st.blocked_stas, 0, "the unblock lifts it")
+		end
+	},
+	{
 		name = "inform: unknown mgmt_cfg keys reach the ledger with their value; recognized ones do not",
 		fn = function()
 			local led = inform._unhandled
