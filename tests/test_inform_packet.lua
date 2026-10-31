@@ -3867,12 +3867,14 @@ return {
 		fn = function()
 			-- state.save() legitimately calls os.execute("mkdir -p ...") --
 			-- what must NEVER happen is a sysupgrade/reboot/download command.
+			-- Recorded only, never run: if the guard broke, this test must not
+			-- be the thing that flashes or reboots the machine running it.
 			local st = sample_state()
 			local orig_execute = os.execute
 			local commands = {}
-			os.execute = function(cmd, ...)
+			os.execute = function(cmd)
 				commands[#commands + 1] = cmd
-				return orig_execute(cmd, ...)
+				return 0
 			end
 			local ok = pcall(inform.handle_response,
 				'{"_type":"upgrade","version":"6.6.99","url":"http://unifi/fw.bin"}', st)
