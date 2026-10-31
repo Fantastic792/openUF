@@ -182,5 +182,22 @@ check "it moves onto the package's shell" has ":$R/usr/lib/openuf/hook/adopt-she
 check "the package's shell is registered" has "^$R/usr/lib/openuf/hook/adopt-shell.sh$" "$R/etc/shells"
 check "the old shell line is gone" hasnt "/opt/openuf/hook" "$R/etc/shells"
 
+# ── B4: install.sh's strip keeps the same files' comments as dist.sh ───────
+newroot strip
+D=$R/opt/openuf
+mkdir -p "$D/lib" "$D/modelmap" "$D/ufmodel"
+for f in conf.lua lib/x.lua modelmap/m.lua ufmodel/u.lua; do
+	printf -- '-- title %s\nreturn 1\n' "$f" > "$D/$f"
+done
+awk '/^\t\tif \[ -f tools\/strip.lua \]/ { f = 1 } f { print } f && /^\t\tfi$/ { exit }' install.sh \
+	> "$R/strip.sh"
+( INSTALL_DIR=$D; . "$R/strip.sh" ) >/dev/null 2>&1
+check "install.sh strips an ordinary module" hasnt title "$D/lib/x.lua"
+check "install.sh keeps conf.lua's comments" has title "$D/conf.lua"
+check "install.sh keeps a modelmap's comments" has title "$D/modelmap/m.lua"
+check "install.sh keeps an identity's title (probe.lua reads it)" has title "$D/ufmodel/u.lua"
+# Every file dist.sh keeps, install.sh keeps: same three patterns.
+check "dist.sh keep_comments still lists ufmodel" grep -q 'openuf/ufmodel/\*' tools/dist.sh
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

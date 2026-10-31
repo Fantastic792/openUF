@@ -161,11 +161,14 @@ case "$ACTION" in
 		# When installing from a git clone, strip on the way in using the same
 		# tool so the device gets the same lean tree -- roughly half the bytes,
 		# and flash is scarce. conf.lua and the modelmaps keep their comments:
-		# they are the files meant to be hand-edited on the device.
+		# they are the files meant to be hand-edited on the device. The
+		# identities (ufmodel/*) keep theirs too, as in dist.sh's keep_comments:
+		# the web UI lists them by their header title, which hook/probe.lua
+		# reads off the installed file.
 		if [ -f tools/strip.lua ] && command -v lua >/dev/null 2>&1; then
 			echo "Stripping comments from installed Lua ..."
-			for f in $(find "$INSTALL_DIR" -name '*.lua' \
-				! -name conf.lua ! -path "$INSTALL_DIR/modelmap/*"); do
+			for f in $(find "$INSTALL_DIR" -name '*.lua' ! -name conf.lua \
+				! -path "$INSTALL_DIR/modelmap/*" ! -path "$INSTALL_DIR/ufmodel/*"); do
 				lua tools/strip.lua "$f" > "$f.stripped" \
 					&& mv "$f.stripped" "$f"
 			done
