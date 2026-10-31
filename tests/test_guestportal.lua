@@ -625,11 +625,40 @@ return {
 			local read = 0
 			local recv = c.receive
 			c.receive = function(self) read = read + 1; return recv(self) end
+			-- A frozen clock: only the line cap may end this read.
+			local orig = gp._clock
+			gp._clock = function() return 0 end
 			gp.serve_one({accept = function() return c end}, {url = "http://" .. CTL .. "/", ap = "",
 				arp = function() return ARP end, now = function() return 1 end})
+			gp._clock = orig
 			assert_eq(read, 32, "stops after 32 lines")
 			assert_true(table.concat(c.sent):find("302", 1, true) ~= nil, "still answers")
 			assert_eq(table.concat(c.sent):find("url=", 1, true), nil, "no Host: no url=")
+		end
+	},
+	{
+		name = "guestportal: serve_one gives the whole request one deadline, not one per line",
+		fn = function()
+			-- A guest trickling a header every 0.3 s: each line is inside a
+			-- per-line timeout, so only a whole-request deadline stops it.
+			local lines = {"GET / HTTP/1.1"}
+			for i = 1, 100 do lines[#lines + 1] = "X-Pad-" .. i .. ": y" end
+			local c = fake_client(lines, "198.51.100.50")
+			local t, read, waits = 1000, 0, {}
+			local recv = c.receive
+			c.receive = function(self) read = read + 1; t = t + 0.3; return recv(self) end
+			c.settimeout = function(self, s) waits[#waits + 1] = s end
+			local orig = gp._clock
+			gp._clock = function() return t end
+			local ok, err = pcall(gp.serve_one, {accept = function() return c end},
+				{url = "http://" .. CTL .. "/", ap = "", arp = function() return ARP end,
+				 now = function() return 1 end})
+			gp._clock = orig
+			if not ok then error(err, 0) end
+			assert_eq(read, 4, "reading stops once 1 s is spent")
+			for _, s in ipairs(waits) do assert_true(s <= 1, "no wait beyond the budget") end
+			assert_true(t - 1000 <= 1.3,"the loop was held about 1 s, not ~32 s")
+			assert_true(table.concat(c.sent):find("302", 1, true) ~= nil, "still answers")
 		end
 	},
 }
