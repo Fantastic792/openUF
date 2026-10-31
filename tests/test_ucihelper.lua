@@ -2012,7 +2012,9 @@ return {
 		end
 	},
 	{
-		name = "ucihelper: apply_config names the beacon 'openUF' without opts.device_name",
+		-- A device never renamed gets no name pushed; the beacon showed
+		-- "openUF" rather than its model (hardware finding (f), 2026-10-29).
+		name = "ucihelper: apply_config names the beacon after the model, then 'openUF', without opts.device_name",
 		fn = function()
 			with_ucihelper(function(db)
 				local resp = {
@@ -2022,9 +2024,13 @@ return {
 						 x_passphrase = "hunter22", advertise_ap_name = true},
 					},
 				}
-				ucihelper.apply_config(resp, nil)
+				ucihelper.apply_config(resp, nil, {model_name = "U6IW"})
 				local s = db.wireless.openuf_radio0_corp
-				assert_eq(s.vendor_elements, ucihelper.ap_name_ie_hex("openUF"), "falls back to 'openUF'")
+				assert_eq(s.vendor_elements, ucihelper.ap_name_ie_hex("U6IW"), "the model name")
+				ucihelper.apply_config(resp, nil, {device_name = "Hall", model_name = "U6IW"})
+				assert_eq(db.wireless.openuf_radio0_corp.vendor_elements, ucihelper.ap_name_ie_hex("Hall"), "a pushed name wins")
+				ucihelper.apply_config(resp, nil)
+				assert_eq(db.wireless.openuf_radio0_corp.vendor_elements, ucihelper.ap_name_ie_hex("openUF"), "falls back to 'openUF'")
 			end)
 		end
 	},

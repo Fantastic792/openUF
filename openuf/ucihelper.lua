@@ -2337,7 +2337,9 @@ end
 --       (boolean) forces the same, for Roaming Assistant. opts.device_name is the
 --       controller-assigned device name, beaconed as a WSC Device Name
 --       (M.ap_name_ie_hex) when a vap has advertise_ap_name enabled ("Show Access Point Name in
---       Beacon"); defaults to "openUF" if nil. opts.peer_ie is the
+--       Beacon"); a device never renamed gets no name pushed, so it falls
+--       back to opts.model_name (the board's model, e.g. "U6IW"), then
+--       "openUF". opts.peer_ie is the
 --       vendor_elements hex every VAP beacons so sibling openUF APs can tell
 --       it is not a rogue (sysinfo.peer_ie_hex); nil removes it.
 -- Handles vap_table and radio_table from the setparam/config response.
@@ -2981,7 +2983,8 @@ function M.apply_config(resp, cfg, opts)
 			-- element carrying only the name (see M.ap_name_ie_hex).
 			local ies = (opts and opts.peer_ie) or ""
 			if vap.advertise_ap_name then
-				ies = ies .. (M.ap_name_ie_hex((opts and opts.device_name) or "openUF") or "")
+				local name = opts and (opts.device_name or opts.model_name) or "openUF"
+				ies = ies .. (M.ap_name_ie_hex(name) or "")
 			end
 			extra.vendor_elements = ies ~= "" and ies or M.DELETE
 			if vap.hide_ssid ~= nil then

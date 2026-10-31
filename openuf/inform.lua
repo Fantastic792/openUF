@@ -4316,12 +4316,12 @@ function M._parse_net_system_cfg(sys_raw)
 				-- captured yet.
 				dhcp = _wire_bool(v) == true
 			elseif k == "resolv.host.1.name" then
-				-- The controller's own idea of this device's name (its local
-				-- network hostname) -- already present in every capture (e.g.
-				-- "U6IW" when never renamed). Reused as the WPS Device Name
-				-- value when advertise_ap_name is on, since it's the only
-				-- controller-assigned "AP name" string available on this wire
-				-- protocol.
+				-- The device's name in the controller. A device never renamed
+				-- gets no resolv.host.1.name at all (hardware test,
+				-- 2026-10-29), and the beacon falls back to the model name.
+				-- Reused as the WPS Device Name value when advertise_ap_name
+				-- is on, since it's the only controller-assigned "AP name"
+				-- string available on this wire protocol.
 				if v ~= "" then device_name = v end
 			end
 		end
@@ -4771,7 +4771,8 @@ function M.handle_response(json_str, st, cfg)
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,
 							roam_assist_active = roam_assist_active,
-							device_name = device_name, keep_vlans = port_vlans,
+							device_name = device_name, model_name = M._model,
+							keep_vlans = port_vlans,
 							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac),
 							backhaul = backhaul_plan,
 							rrb_peers = st and st.rrb_peers})
@@ -7977,6 +7978,9 @@ function M.run(cfg, ufhw)
 				.. tostring(err_u) .. "\n")
 		end
 	end
+	-- The model name ("U6IW"), for the beacon's AP name when the controller
+	-- pushes no device name (handle_response gets no ufhw).
+	M._model = ufhw and ufhw.uap and ufhw.uap.model or M._model
 	-- The MAC persisted by the previous run (state.save writes the whole
 	-- table and state.load now reads it all back), before _populate_net_info
 	-- overwrites it with the live one read off dev.conf.net.lan_cpueth.
