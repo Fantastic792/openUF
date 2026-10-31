@@ -397,5 +397,36 @@ PYEOF
 check "verify.py redact_text hides secret values, keeps the rest" python3 "$T/rt.py"
 check "verify.py writes router.txt through redact_text" grep -q 'f.write(redact_text(raw))' tools/verify.py
 
+# ── B16: field_report.py also refuses MACs, LAN IPs, SSIDs and hostnames ───
+_fr() { # a report whose first result's evidence is $1 -> checker exit status
+	sed "s|^evidence = .*|evidence = \"$1\"|;" "$T/fr-base.toml" > "$T/fr.toml"
+	python3 tools/field_report.py check "$T/fr.toml" >/dev/null
+}
+cat > "$T/fr-base.toml" <<'TOMLEOF'
+format = 1
+date = 2026-10-29
+reporter = "x"
+board = "b"
+openwrt = "24.10"
+openuf = "0.1"
+controller = "c"
+[[result]]
+feature = "install"
+outcome = "pass"
+how = "installed"
+evidence = "ok"
+TOMLEOF
+check "field_report accepts plain evidence" _fr "installed, joined"
+check "field_report accepts the documentation masks" _fr "AP 192.0.2.7 00:00:5e:00:53:1a"
+check "field_report refuses a LAN address" eval '! _fr "AP at 192.168.1.20"'
+check "field_report refuses a 10/8 address" eval '! _fr "AP at 10.4.5.6"'
+check "field_report refuses a MAC" eval '! _fr "client 3c:22:fb:12:34:56"'
+check "field_report refuses a dashed MAC" eval '! _fr "client 3C-22-FB-12-34-56"'
+check "field_report refuses an SSID" eval '! _fr "joined SSID = HomeNet"'
+check "field_report refuses a quoted SSID" eval '! _fr "on SSID '"'"'HomeNet'"'"'"'
+check "field_report refuses a hostname" eval '! _fr "hostname: myrouter"'
+check "field_report refuses a .lan name" eval '! _fr "ssh to ap1.lan"'
+check "the shipped field reports still validate" python3 tools/field_report.py check field-reports/*.toml
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

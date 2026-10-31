@@ -38,8 +38,8 @@ the log lines in `evidence`.
 | `[[result]]` | at least one | `feature` (an id), `outcome` (`pass`, `fail`, `partial`, `not-run`), `how` (what you did), `evidence` (required unless `not-run`), `notes` |
 
 The checker rejects an unknown feature id or outcome, a missing `how`, a result with no
-evidence, and anything that looks like a password, key, token or public IP address. Private
-addresses and MAC addresses are allowed; mask them if you prefer.
+evidence, and anything that looks like a password, key, token or public IP address. LAN
+addresses, MAC addresses, SSIDs and hostnames too: mask them (192.0.2.x, 00:00:5e:00:53:xx).
 
 ## Useful evidence
 

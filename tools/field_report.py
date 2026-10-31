@@ -7,8 +7,9 @@
 
 Standard library only (tomllib, Python 3.11+), so CI and a contributor's machine need
 nothing installed. A report that does not validate is not merged: the checker refuses
-unknown feature ids and outcomes, and anything that looks like a secret or a public
-address, because a report is published as it is.
+unknown feature ids and outcomes, and anything that looks like a secret, an address
+(public or private IP, MAC), a network name (SSID) or a hostname, because a report is
+published as it is. Mask them (192.0.2.x, 00:00:5e:00:53:xx, "the SSID") instead.
 """
 import datetime
 import ipaddress
@@ -81,6 +82,20 @@ SECRET_PATTERNS = [
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "a GitHub token"),
 ]
 IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Addresses of a real LAN. The documentation ranges (RFC 5737) and the
+# 00:00:5e:00:53 MAC block (RFC 7042) are the masks a report should use.
+PRIVATE_NETS = [ipaddress.ip_network(n) for n in
+                ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10")]
+MAC = re.compile(r"(?<![0-9A-Fa-f:-])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])")
+MAC_MASK = re.compile(r"(?i)^00[:-]00[:-]5e[:-]00[:-]53[:-]")
+# A network name or a host name given as a value: `ssid = x`, `SSID "x"`, `hostname: x`, host.lan.
+NAMES = [
+    (re.compile(r"(?i)\bssid\s*[=:]\s*[^\s\"'`]"), "an SSID"),
+    (re.compile(r"(?i)\bssid\s+[\"'“‘`]"), "an SSID"),
+    (re.compile(r"(?i)\bhost(?:name)?\s*[=:]\s*[^\s\"'`]"), "a hostname"),
+    (re.compile(r"(?i)\bhost(?:name)?\s+[\"'“‘`]"), "a hostname"),
+    (re.compile(r"(?i)\b[a-z0-9][a-z0-9-]*\.(?:lan|local|localdomain|home|internal|home\.arpa)\b"), "a hostname"),
+]
 
 
 def strings(node, path=""):
@@ -137,6 +152,14 @@ def check(path):
                 continue
             if ip.is_global:
                 errors.append(f"{where}: public address {m}; remove or mask it")
+            elif any(ip in n for n in PRIVATE_NETS):
+                errors.append(f"{where}: LAN address {m}; mask it (192.0.2.x)")
+        for m in MAC.findall(s):
+            if not MAC_MASK.match(m):
+                errors.append(f"{where}: MAC address {m}; mask it (00:00:5e:00:53:xx)")
+        for pat, what in NAMES:
+            if pat.search(s):
+                errors.append(f"{where}: looks like {what}; remove it")
     return errors, doc
 
 
