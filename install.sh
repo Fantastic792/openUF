@@ -464,11 +464,19 @@ case "$ACTION" in
 
 		# Remove the SSH bootstrap account/group if present (hygiene --
 		# symmetric with what install --bootstrap-adopt added, regardless of
-		# whether that flag is passed here).
-		if grep -q "^ubnt:" /etc/passwd 2>/dev/null; then
+		# whether that flag is passed here). Only the account openUF made:
+		# hook/openuf-bootstrap.sh writes "openuf bootstrap adoption" as its
+		# gecos. A ubnt login the admin made before openUF is theirs, and
+		# deleting it would lock them out.
+		_ubnt_gid=$(awk -F: '$1=="ubnt" && $5=="openuf bootstrap adoption" {print $4}' /etc/passwd 2>/dev/null)
+		if [ -n "$_ubnt_gid" ]; then
 			sed -i '/^ubnt:/d' /etc/passwd
 			sed -i '/^ubnt:/d' /etc/shadow
 			echo "Removed SSH bootstrap account 'ubnt'."
+			# Its group, by the gid the account had -- not any "openuf".
+			sed -i "/^openuf:[^:]*:$_ubnt_gid:/d" /etc/group
+		elif grep -q "^ubnt:" /etc/passwd 2>/dev/null; then
+			echo "Left the 'ubnt' account alone: openUF did not create it."
 		fi
 		# The shell that account was registered with in /etc/shells (dropbear
 		# refuses a login whose shell is not listed there) goes with it --
@@ -476,9 +484,6 @@ case "$ACTION" in
 		if grep -q '/hook/adopt-shell\.sh$' /etc/shells 2>/dev/null; then
 			sed -i '/\/hook\/adopt-shell\.sh$/d' /etc/shells
 			echo "Removed the bootstrap shell from /etc/shells."
-		fi
-		if grep -q "^openuf:" /etc/group 2>/dev/null; then
-			sed -i '/^openuf:/d' /etc/group
 		fi
 
 		# Drop the sysupgrade keep-list entry for conf.lua: that file goes

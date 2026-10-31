@@ -26,12 +26,16 @@ mkdefine() { # makefile, define name
 		| sed 's/\$\$/$/g'
 }
 # Paths into the scratch root R.
-reroot() { sed "s#/etc/#$R/etc/#g; s#/opt/#$R/opt/#g"; }
+reroot() {
+	sed "s#/etc/#$R/etc/#g; s#/opt/#$R/opt/#g; s#/usr/bin/#$R/usr/bin/#g;
+		s#/usr/sbin/#$R/usr/sbin/#g; s#/usr/lib/openuf#$R/usr/lib/openuf#g"
+}
 
 # A fresh scratch root with stub uci (a flat key=value file) and init scripts.
 newroot() {
 	R=$T/root.$1
-	rm -rf "$R"; mkdir -p "$R/etc/init.d" "$R/etc/crontabs" "$R/bin" "$R/opt"
+	rm -rf "$R"; mkdir -p "$R/etc/init.d" "$R/etc/crontabs" "$R/bin" "$R/opt" \
+		"$R/usr/bin" "$R/usr/sbin"
 	: > "$R/uci"
 	cat > "$R/bin/uci" <<EOF
 #!/bin/sh
@@ -117,6 +121,31 @@ mkdir -p "$R/opt/openuf"; : > "$R/opt/openuf/inform.lua"
 check "preinst refuses beside a file install" eval '! run_preinst'
 : > "$R/opt/openuf/.package-replaces"
 check "preinst passes when setup.sh replaces the file install" run_preinst
+
+# ── B20: install.sh uninstall removes only the ubnt account openUF made ────
+run_install() { # args...
+	reroot < install.sh > "$R/install.sh"
+	( PATH=$R/bin:$PATH; sh "$R/install.sh" "$@" ) > "$R/out" 2>&1
+}
+fileinstall() {
+	mkdir -p "$R/opt/openuf/hook"; : > "$R/opt/openuf/inform.lua"
+}
+newroot un-marked; fileinstall
+add_ubnt "openuf bootstrap adoption" /opt/openuf/hook/adopt-shell.sh
+check "uninstall runs" run_install uninstall
+check "uninstall removes the marked ubnt account" hasnt '^ubnt:' "$R/etc/passwd"
+check "uninstall removes its group" hasnt '^openuf:' "$R/etc/group"
+check "uninstall removes its shell line" hasnt adopt-shell "$R/etc/shells"
+check "uninstall removes /opt/openuf" test ! -e "$R/opt/openuf"
+
+newroot un-foreign; fileinstall
+add_ubnt "the admin" /bin/ash
+echo 'openuf:x:901:' >> "$R/etc/group"
+check "uninstall runs (foreign ubnt)" run_install uninstall
+check "uninstall keeps a ubnt account openUF did not make" has '^ubnt:x:900' "$R/etc/passwd"
+check "uninstall keeps its shadow line" has '^ubnt:' "$R/etc/shadow"
+check "uninstall says why it kept it" has 'did not create it' "$R/out"
+check "uninstall keeps a group openUF did not make" has '^openuf:x:901' "$R/etc/group"
 
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
