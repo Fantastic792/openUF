@@ -297,6 +297,21 @@ return {
 		end
 	},
 	{
+		name = "backhaul: plan() carries the push's hide_ssid to the downlink (hidden unless it says false)",
+		fn = function()
+			assert_true(backhaul.plan(MESH, ENTRIES, {}, {backhaul_mode = ""}).downlink.hidden,
+				"hide_ssid=true stays hidden")
+			local shown = {{role = "downlink", radio = "radio1", ssid = ENTRIES[1].ssid,
+				psk = ENTRIES[1].psk, devname = "vwire3", hidden = false}}
+			assert_false(backhaul.plan(MESH, shown, {}, {backhaul_mode = ""}).downlink.hidden,
+				"hide_ssid=false beacons the SSID")
+			local bare = {{role = "downlink", radio = "radio1", ssid = ENTRIES[1].ssid,
+				psk = ENTRIES[1].psk, devname = "vwire3"}}
+			assert_true(backhaul.plan(MESH, bare, {}, {backhaul_mode = ""}).downlink.hidden,
+				"no hide_ssid in the push keeps the hidden default")
+		end
+	},
+	{
 		name = "backhaul: plan() keeps the station enabled while the device is already on its wireless uplink",
 		fn = function()
 			local plan = backhaul.plan(MESH, ENTRIES, {}, {backhaul_mode = "wireless"})

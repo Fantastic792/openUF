@@ -314,6 +314,9 @@ function M.plan(mesh, entries, cfg, st)
 					ssid    = (e.ssid and e.ssid ~= "") and e.ssid or mesh.essid,
 					key     = (type(e.psk) == "string" and #e.psk >= 8) and e.psk or mesh.psk,
 					devname = e.devname,  -- the controller's own name for it (vwire3), reported back as `name`
+					-- The push's hide_ssid; only an explicit false beacons the
+					-- SSID (a push without it keeps the hidden default).
+					hidden  = e.hidden ~= false,
 					path_ie = st and type(st.backhaul_ie) == "string" and st.backhaul_ie or nil,
 				}
 			elseif e.role == "uplink" then

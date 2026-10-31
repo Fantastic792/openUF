@@ -346,6 +346,9 @@ return {
 				assert_nil(dl.vendor_elements, "no sibling element unless given")
 				ucihelper.backhaul_apply({downlink = {radio = "radio1", ssid = "vwire-5f3369181f7fbab5", key = "0123456789abcdef", vendor_elements = "dd0d026f556f554601aabbccddeeff"}})
 				assert_eq(db.wireless.openuf_bh_dl_radio1.vendor_elements, "dd0d026f556f554601aabbccddeeff", "sibling element beaconed on the downlink")
+				assert_eq(db.wireless.openuf_bh_dl_radio1.hidden, "1", "no hidden in the plan: still hidden")
+				ucihelper.backhaul_apply({downlink = {radio = "radio1", ssid = "vwire-5f3369181f7fbab5", key = "0123456789abcdef", hidden = false}})
+				assert_eq(db.wireless.openuf_bh_dl_radio1.hidden, "0", "hide_ssid=false: the downlink beacons its SSID")
 				assert_eq(#ucihelper.backhaul_downlink_sections(), 1, "downlink listed")
 				local ul = db.wireless.openuf_bh_ul_radio1
 				assert_eq(ul.mode, "sta", "uplink is a station")
