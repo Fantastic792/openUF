@@ -65,6 +65,40 @@ local PROC_NET_DEV = table.concat({
 
 return {
 	{
+		name = "announce: without its own MAC or IP nothing is announced or answered",
+		fn = function()
+			-- There used to be a fixed fallback MAC and 192.168.1.1: a device
+			-- that does not exist, broadcast to the whole LAN.
+			local sent = {}
+			local udpb = {sendto = function(_, pkt, ip, port)
+				sent[#sent + 1] = {pkt = pkt, to = ip .. ":" .. port}
+				return #pkt
+			end}
+			local o_mac, o_ip, o_err = announce.get_mac, announce.get_ip, io.stderr
+			local said = {}
+			io.stderr = {write = function(_, m) said[#said + 1] = m end}
+			local ok, err = pcall(function()
+				local cfg = sample_cfg({mac = nil, ip = nil, iface = "br-lan"})
+				cfg.mac, cfg.ip = nil, nil
+				assert_false(announce._announce_once(cfg, udpb), "no MAC, no IP: not sent")
+				assert_false(announce._announce_once(cfg, udpb), "still not")
+				assert_eq(#sent, 0, "nothing broadcast")
+				assert_eq(#said, 1, "said once, not every tick")
+				assert_nil(announce.reply_for(string.char(1, 0, 0, 0), cfg), "and no reply either")
+				-- The netdev comes up: _refresh finds both, announcing starts.
+				announce.get_mac = function() return {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01} end
+				announce.get_ip = function() return {192, 0, 2, 1} end
+				announce._refresh(cfg)
+				assert_true(announce._announce_once(cfg, udpb), "sent once both are known")
+				assert_eq(sent[1].to, announce.BROADCAST_ADDR .. ":" .. announce.PORT, "broadcast")
+				assert_true(sent[1].pkt:find(string.char(0x00, 0x00, 0x5e, 0x00, 0x53, 0x01,
+					192, 0, 2, 1), 1, true) ~= nil, "with the real MAC and IP")
+			end)
+			announce.get_mac, announce.get_ip, io.stderr = o_mac, o_ip, o_err
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "announce: _refresh keeps the previous values when a source cannot be read",
 		fn = function()
 			local o_popen, o_read, o_state = announce._popen, announce._read_file, announce._state
@@ -740,6 +774,40 @@ return {
 			assert_eq(sent[2][1]:byte(2), 9, "v2 reply")
 			assert_eq(sent[3][2], "192.0.2.51", "second asker")
 			assert_eq(sent[3][1]:byte(2), 9, "v2 reply")
+		end
+	},
+	{
+		name = "announce: the reply limiter keeps live keys past 64 askers and refreshes once per gap",
+		fn = function()
+			local now = 0
+			local queue = {}
+			for i = 1, 70 do queue[#queue + 1] = {string.char(1, 0, 0, 0), "192.0.2." .. i, 40000} end
+			local sent, refreshes = {}, 0
+			local udpl = {
+				receivefrom = function() local q = table.remove(queue, 1); return q[1], q[2], q[3] end,
+				sendto = function(_, data, ip) sent[#sent + 1] = ip; return 1 end,
+			}
+			local fake = {
+				gettime = function() now = now + 0.001; return now end,
+				select = function() if #queue > 0 then return {udpl} end; now = now + 100; return {} end,
+			}
+			local saved = {announce._refresh, announce._last_reply, announce._last_refresh}
+			announce._refresh = function(c) refreshes = refreshes + 1; return c end
+			announce._last_reply, announce._last_refresh = {}, nil
+			announce._serve_requests(udpl, sample_cfg(), 10, fake)
+			local kept = announce._last_reply["192.0.2.1/1.0"]
+			announce._refresh, announce._last_reply, announce._last_refresh = saved[1], saved[2], saved[3]
+			assert_eq(#sent, 64, "a flood of distinct askers gets 64 replies within one gap")
+			assert_true(kept ~= nil, "an early asker's limit entry survives the flood")
+			assert_eq(refreshes, 1, "one /proc + ip refresh for all of them, not one per request")
+			-- Expired entries are pruned to make room.
+			announce._last_reply = {}
+			for i = 1, 64 do announce._last_reply["k" .. i] = 0 end
+			assert_true(announce._admit("new", 10), "stale entries make room")
+			announce._last_reply = {}
+			for i = 1, 64 do announce._last_reply["k" .. i] = 10 end
+			assert_false(announce._admit("new", 10.1), "live entries do not")
+			announce._last_reply = saved[2]
 		end
 	},
 	{

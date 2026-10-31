@@ -16,8 +16,8 @@ local function with_cmd(output_or_fn, fn)
 		and output_or_fn
 		or function() return output_or_fn end
 	-- neighbors() is TTL-cached (lldpd advertises on a 30s interval; forking
-	-- lldpctl every 10s bought nothing) and _local_port_idx is memoized for
-	-- the process. Both must be dropped on the way in AND out, or one test's
+	-- lldpctl every 10s bought nothing) and _local_port_idx is memoized per
+	-- read. Both must be dropped on the way in AND out, or one test's
 	-- fixture answers the next one's question.
 	lldp._neighbours_cache = nil
 	lldp._port_idx_cache   = {}
@@ -178,6 +178,29 @@ return {
 
 			lldp._run_cmd, lldp._time = orig_cmd, orig_time
 			lldp._neighbours_cache = nil
+		end
+	},
+	{
+		name = "lldp: a recreated or late netdev gets its new ifindex on the next read",
+		fn = function()
+			-- The memo lasts one neighbour read: a port recreated by a
+			-- reload has a new ifindex, and a port absent at the first
+			-- heartbeat appears later.
+			local orig_rf = lldp._read_file
+			local idx = {}
+			lldp._read_file = function(path)
+				local n = path:match("^/sys/class/net/(.-)/ifindex$")
+				return n and idx[n] and (idx[n] .. "\n") or nil
+			end
+			local ok, err = pcall(with_cmd, fixture("lldpctl_output.json"), function()
+				assert_nil(lldp.neighbors()[1].local_port_idx, "eth0 not there yet")
+				idx.eth0 = 3
+				assert_eq(lldp.neighbors()[1].local_port_idx, 3, "found once it exists")
+				idx.eth0 = 12
+				assert_eq(lldp.neighbors()[1].local_port_idx, 12, "recreated: the new ifindex")
+			end)
+			lldp._read_file = orig_rf
+			if not ok then error(err, 0) end
 		end
 	},
 	{

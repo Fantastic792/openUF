@@ -18,10 +18,10 @@ local function with_capture(fn, trigger, max)
 		if max and path:find("/max_brightness", 1, true) then return max end
 		return nil
 	end
-	led._saved_trigger = {}
+	led._saved_trigger, led._default_trigger = {}, {}
 	local ok, err = pcall(fn, writes)
 	led._write_file, led._read_file = orig_w, orig_r
-	led._saved_trigger = {}
+	led._saved_trigger, led._default_trigger = {}, {}
 	if not ok then error(err, 2) end
 end
 
@@ -109,6 +109,45 @@ return {
 				led.set_enabled("/sys/class/leds/test", true)
 				assert_eq(writes[2].contents, "1", "a GPIO LED's own 1 is 1")
 			end, nil, "1\n")
+		end
+	},
+	{
+		name = "led: set_enabled off then on restores the board's own trigger",
+		fn = function()
+			-- AX3000T: the only LED is mt76-phy0 on phy0tpt. A fake sysfs
+			-- whose trigger file reflects what was last written to it.
+			local active = "phy0tpt"
+			local writes = {}
+			local orig_w, orig_r = led._write_file, led._read_file
+			led._write_file = function(path, contents)
+				writes[#writes + 1] = {path = path, contents = contents}
+				if path:find("/trigger", 1, true) then active = contents end
+				return true
+			end
+			led._read_file = function(path)
+				if path:find("/trigger", 1, true) then
+					return "none timer [" .. active .. "] phy1tpt"
+				end
+				if path:find("/max_brightness", 1, true) then return "255" end
+			end
+			led._default_trigger = {}
+			local ok, err = pcall(function()
+				local p = "/sys/class/leds/mt76-phy0"
+				led.set_enabled(p, false)
+				assert_eq(active, "none", "off clears the trigger")
+				assert_eq(writes[2].contents, "0", "off is brightness 0")
+				led.set_enabled(p, true)
+				assert_eq(active, "phy0tpt", "on restores the board's trigger, not none")
+				assert_eq(writes[4].contents, "255", "at full scale")
+				-- Locate's blink is never taken for the default.
+				led._default_trigger = {}
+				active = "timer"
+				led.set_enabled(p, true)
+				assert_eq(active, "none", "timer is not a default; unknown stays none")
+			end)
+			led._write_file, led._read_file = orig_w, orig_r
+			led._default_trigger = {}
+			if not ok then error(err, 0) end
 		end
 	},
 	{

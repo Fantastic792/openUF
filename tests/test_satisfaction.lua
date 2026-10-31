@@ -72,7 +72,8 @@ return {
 			assert_eq(r(100, 50, 0), 67, "50 %: 100 - 2500/75 = 100 - 33")
 			assert_eq(r(100, 100, 0), 0, "100 %")
 			assert_eq(r(1000, 251, 0), 100, "25.1 % truncates to 25")
-			assert_eq(r(100, 101, 0), 0, "more retries than frames: 0")
+			assert_eq(r(100, 101, 0), 0, "more retries than frames: clamped to 100 %")
+			assert_eq(r(0, 5, 0), 100, "retries with no frames: skew, not judged")
 			assert_eq(r(100, 0, 30), 70, "30 drops")
 			assert_eq(r(100, 0, 500), 0, "drops count at most 100")
 			assert_eq(r(100, 50, 80), 0, "never below 0")
@@ -81,7 +82,9 @@ return {
 			_, a = sat.retry_score(100, 0, 50)
 			assert_false(a, "50 is not")
 			_, a = sat.retry_score(100, 101, 0)
-			assert_true(a, "retries > frames is one")
+			assert_true(a, "100 % after the clamp is one")
+			_, a = sat.retry_score(0, 5, 0)
+			assert_false(a, "retries with no frames is not an anomaly")
 		end
 	},
 	{

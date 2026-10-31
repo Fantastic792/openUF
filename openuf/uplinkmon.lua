@@ -44,14 +44,17 @@ local util = package.loaded["openuf.util"]
 	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 M.FAIL_TICKS = 5
-M.OK_TICKS = 1
+-- The whole verdict's budget, in seconds: inform.lua asks once per
+-- heartbeat, in its main loop. `-c 2 -W 2` waited 2 s after the second
+-- probe, about 3 s of a dead uplink's heartbeat; `-w` ends ping at this
+-- deadline whatever it has heard.
+M.PING_DEADLINE = 2
 
 -- Injectable seams.
 M._exec = os.execute
 M._popen = util.popen
 
 M._fails = 0
-M._oks = 0
 
 -- system_cfg -> {enabled = bool, host = string|nil, gateway = string|nil},
 -- or nil when the push carries no connectivity block at all. host is the
@@ -89,23 +92,21 @@ function M.reachable(host)
 	host = host or M.default_gateway()
 	if not valid_host(host) then return nil end
 	-- Two probes per verdict, as the firmware: one answer is enough.
-	return util.exec_ok(M._exec("ping -c 2 -W 2 " .. host .. " >/dev/null 2>&1"))
+	return util.exec_ok(M._exec("ping -c 2 -w " .. M.PING_DEADLINE .. " " .. host .. " >/dev/null 2>&1"))
 end
 
 -- Pure policy step. reachable: true/false/nil. Returns the new isolated
--- flag; the counters live on M.
+-- flag; the failure count lives on M. One answer ends isolation at once,
+-- as the firmware's recovery does.
 function M.decide(enabled, reachable, isolated)
 	if not enabled then
-		M._fails, M._oks = 0, 0
+		M._fails = 0
 		return false
 	end
 	if reachable == true then
 		M._fails = 0
-		M._oks = M._oks + 1
-		if isolated and M._oks < M.OK_TICKS then return true end
 		return false
 	elseif reachable == false then
-		M._oks = 0
 		M._fails = M._fails + 1
 		return isolated or M._fails >= M.FAIL_TICKS
 	end

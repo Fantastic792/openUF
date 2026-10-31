@@ -159,6 +159,39 @@ return {
 		end
 	},
 	{
+		name = "stun: blocking lookups are bounded: backoff, last address, literals skip DNS",
+		fn = function()
+			-- A dead DNS server: each toip blocks the inform loop for the
+			-- resolver's timeout, so lookups back off instead of every 5 s.
+			local f = fake_socket({no_dns = true})
+			local c = stun.new(f)
+			stun.sync(c, "stun://ctrl.example:3478/", true)
+			for t = 100, 1100 do stun.send_due(c, t) end
+			-- 5, 10, 20, ... 300: 100, 105, 115, 135, 175, 255, 415, 715, 1015
+			assert_eq(f.resolved, 9, "nine lookups in 1000 s, not two hundred")
+			assert_true(c.next_send - 1015 == 300, "capped at RESOLVE_BACKOFF_MAX")
+
+			-- A name that resolved once keeps its address while a re-resolve fails.
+			f = fake_socket()
+			c = stun.new(f)
+			stun.sync(c, "stun://ctrl.example:3478/", true)
+			stun.send_due(c, 100)
+			f.dns.toip = function() f.resolved = f.resolved + 1 return nil end
+			for t = 130, 220, 30 do stun.send_due(c, t) end  -- 3 unanswered -> re-resolve at 190
+			assert_eq(f.resolved, 2, "re-resolved once")
+			assert_eq(#f.sent, 5, "and kept sending")
+			assert_eq(f.sent[5].to, "192.0.2.10:3478", "to the last address it had")
+
+			-- An address literal never reaches the resolver.
+			f = fake_socket()
+			c = stun.new(f)
+			stun.sync(c, "stun://192.0.2.5:3478/", true)
+			assert_true(stun.send_due(c, 100), "sent")
+			assert_nil(f.resolved, "no lookup for a literal")
+			assert_eq(f.sent[1].to, "192.0.2.5:3478", "to the literal")
+		end
+	},
+	{
 		name = "stun: the name is resolved again after three requests go unanswered",
 		fn = function()
 			local f = fake_socket()

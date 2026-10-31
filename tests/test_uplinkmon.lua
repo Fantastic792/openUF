@@ -52,7 +52,7 @@ return {
 		end
 	},
 	{
-		name = "uplinkmon: decide() goes off the air after FAIL_TICKS failures and back after OK_TICKS answers",
+		name = "uplinkmon: decide() goes off the air after FAIL_TICKS failures and back on one answer",
 		fn = function()
 			uplinkmon.decide(false)
 			local iso = false
@@ -69,6 +69,7 @@ return {
 			iso = uplinkmon.decide(true, false, iso)
 			assert_false(iso, "and the failure count starts again from nothing")
 			assert_false(uplinkmon.decide(false, false, true), "switched off: never isolated")
+			assert_nil(uplinkmon.OK_TICKS, "no recovery threshold that nothing reads")
 		end
 	},
 	{
@@ -88,9 +89,9 @@ return {
 			local e = uplinkmon.reachable()
 			uplinkmon._exec, uplinkmon._popen = orig_exec, orig_popen
 			assert_true(a, "gateway answered")
-			assert_eq(cmds[1], "ping -c 2 -W 2 192.0.2.1 >/dev/null 2>&1", "the default gateway")
+			assert_eq(cmds[1], "ping -c 2 -w 2 192.0.2.1 >/dev/null 2>&1", "the default gateway")
 			assert_true(b, "named host answered")
-			assert_eq(cmds[2], "ping -c 2 -W 2 198.51.100.7 >/dev/null 2>&1", "the named host")
+			assert_eq(cmds[2], "ping -c 2 -w 2 198.51.100.7 >/dev/null 2>&1", "the named host")
 			assert_nil(c, "an unsafe name is never run")
 			assert_eq(#cmds, 2, "nothing else ran")
 			assert_nil(d, "no default route: unknown, not down")

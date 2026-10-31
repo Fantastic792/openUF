@@ -342,6 +342,8 @@ function M._refresh(cfg)
 	if cfg.iface then
 		local ip = M.get_ip(cfg.iface)
 		if ip then cfg.ip = ip end
+		-- Unreadable at startup (the netdev was not up yet): found later.
+		if not cfg.mac then cfg.mac = M.get_mac(cfg.iface) end
 	end
 	local hostname = M.get_hostname()
 	if hostname then cfg.hostname = hostname end
@@ -351,6 +353,33 @@ function M._refresh(cfg)
 	local adopted = M.adopted(cfg.state_file)
 	if adopted ~= nil then cfg.adopted = adopted end
 	return cfg
+end
+
+-- Whether cfg has this device's own MAC and IPv4 to announce. Without them
+-- there is nothing true to say: the daemon used to fall back to a fixed
+-- MAC and 192.168.1.1, and broadcast a device that does not exist.
+function M.ready(cfg)
+	return type(cfg.mac) == "table" and #cfg.mac == 6
+		and type(cfg.ip) == "table" and #cfg.ip == 4
+end
+
+-- One broadcast, when there is something to announce. Returns whether a
+-- packet went out.
+function M._announce_once(cfg, udpb)
+	if not M.ready(cfg) then
+		if not cfg._said_not_ready then
+			cfg._said_not_ready = true
+			io.stderr:write("announce: no MAC or IPv4 on " .. tostring(cfg.iface)
+				.. " yet; not announcing until there is\n")
+		end
+		return false
+	end
+	cfg._said_not_ready = nil
+	local ok, err = udpb:sendto(M.build_packet(cfg), M.BROADCAST_ADDR, M.PORT)
+	if not ok then
+		io.stderr:write("announce: send failed: " .. tostring(err) .. "\n")
+	end
+	return ok and true or false
 end
 
 -- The reply a received datagram deserves, or nil. Pure.
@@ -367,7 +396,7 @@ end
 -- one is firmware-confirmed for 4.0.15 only. Everything else is not a request,
 -- notably our own broadcast (02 06) arriving back on the listener.
 function M.reply_for(data, cfg)
-	if type(data) ~= "string" then return nil end
+	if type(data) ~= "string" or not M.ready(cfg) then return nil end
 	local ver, cmd, l1, l2 = data:byte(1, 4)
 	if not (ver and l1 and l1 == 0) then return nil end
 	if #data == 4 and l2 == 0 then
@@ -413,6 +442,24 @@ end
 
 -- Last reply time per asker address and request type, for REPLY_MIN_GAP.
 M._last_reply = {}
+M._last_refresh = nil
+M.REPLY_MAX_KEYS = 64
+
+-- Room for one more (asker, type) key? Entries older than the gap no longer
+-- limit anything and are dropped first; when the table is still full the
+-- request is not answered (a flood of distinct askers gets at most
+-- REPLY_MAX_KEYS replies per gap, and live keys are never forgotten).
+function M._admit(key, now)
+	local t = M._last_reply
+	if t[key] then return true end
+	local n = 0
+	for _ in pairs(t) do n = n + 1 end
+	if n < M.REPLY_MAX_KEYS then return true end
+	for k, last in pairs(t) do
+		if now - last >= M.REPLY_MIN_GAP then t[k] = nil; n = n - 1 end
+	end
+	return n < M.REPLY_MAX_KEYS
+end
 
 -- Wait out `interval` seconds on the listener, answering each request that
 -- arrives meanwhile: unicast to the asker's address and port, from port 10001
@@ -430,13 +477,14 @@ function M._serve_requests(udpl, cfg, interval, socket)
 				local key = ip .. "/" .. tostring(data:byte(1)) .. "." .. tostring(data:byte(2))
 				local last = M._last_reply[key]
 				if not (last and now - last < M.REPLY_MIN_GAP)
-						and M.reply_for(data, cfg) then
-					-- Fresh figures (IP, uptime, adoption) for the reply itself.
-					M._refresh(cfg)
+						and M.reply_for(data, cfg) and M._admit(key, now) then
+					-- Fresh figures (IP, uptime, adoption) for the reply itself,
+					-- re-read at most once per gap however many askers there are.
+					if not M._last_refresh or now - M._last_refresh >= M.REPLY_MIN_GAP then
+						M._refresh(cfg)
+						M._last_refresh = now
+					end
 					local reply = M.reply_for(data, cfg)
-					local n = 0
-					for _ in pairs(M._last_reply) do n = n + 1 end
-					if n > 64 then M._last_reply = {} end
 					M._last_reply[key] = now
 					local sent, serr = udpl:sendto(reply, ip, port)
 					if not sent then
@@ -496,11 +544,7 @@ function M.run(cfg)
 		-- _refresh replaces it with the real figure whenever it can.
 		cfg.uptime = (cfg.uptime or 0) + interval
 		M._refresh(cfg)
-
-		local ok, err = udpb:sendto(M.build_packet(cfg), M.BROADCAST_ADDR, M.PORT)
-		if not ok then
-			io.stderr:write("announce: send failed: " .. tostring(err) .. "\n")
-		end
+		M._announce_once(cfg, udpb)
 		if udpl then
 			M._join_multicast(udpl, cfg)
 			M._serve_requests(udpl, cfg, interval, socket)
@@ -524,8 +568,9 @@ if not OPENUF_TEST_MODE then
 		ufhw.uap = dofile("ufmodel/" .. dev.openuf.uap.ufmodel .. ".lua")
 
 		local iface = dev.conf.net.lan_cpueth or "eth1"
-		local mac   = M.get_mac(iface) or {0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad}
-		local ip    = M.get_ip(iface)  or {192, 168, 1, 1}
+		-- nil when unreadable: nothing is announced until _refresh finds them.
+		local mac   = M.get_mac(iface)
+		local ip    = M.get_ip(iface)
 		local hostname = M.get_hostname() or "openUF"
 		-- conf.lua's state_file, honoured here the way inform.lua and
 		-- hook/syswrapper.lua honour it, so all three agree on the file.

@@ -93,7 +93,9 @@ end
 -- dropped. Returns the score and whether it is a high_wifi_retries anomaly.
 function M.retry_score(tries, retries, dropped)
 	tries, retries, dropped = tries or 0, retries or 0, dropped or 0
-	if retries > tries then return 0, true end
+	-- A retry counter can run ahead of the frame counter (they are read
+	-- separately); that is skew, not a dead link, so clamp rather than fail.
+	if retries > tries then retries = tries end
 	if tries == 0 then return 100, false end
 	local p = math.floor(retries * 100.0 / tries)
 	local score = 100

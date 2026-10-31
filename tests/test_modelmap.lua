@@ -294,7 +294,7 @@ return {
 	{
 		name = "modelmap: openwrt_boards names real board strings, and no two maps claim one",
 		fn = function()
-			-- tools/openuf-setup.sh reads this to preselect a profile from
+			-- setup.sh (map_boards) reads this to preselect a profile from
 			-- `ubus call system board`. Two maps claiming the same board makes
 			-- that choice arbitrary; a malformed entry makes it silently never
 			-- match, and the installer falls back to a generic profile on

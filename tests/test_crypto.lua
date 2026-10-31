@@ -161,8 +161,7 @@ return {
 				if os.getenv("OPENUF_REQUIRE_GCM") == "1" then
 					error("OPENUF_REQUIRE_GCM=1 but no GCM backend -- CI must install lua-openssl")
 				end
-				print("SKIP  GCM known-answer vector (no backend -- luarocks install --local openssl)")
-				return
+				return skip("GCM known-answer vector (no backend -- luarocks install --local openssl)")
 			end
 			-- Vector generated once with pycryptodome (an independent AES-GCM
 			-- implementation, the same library tools/test_controller.py runs
@@ -195,8 +194,7 @@ return {
 				if os.getenv("OPENUF_REQUIRE_GCM") == "1" then
 					error("OPENUF_REQUIRE_GCM=1 but no GCM backend -- CI must install lua-openssl")
 				end
-				print("SKIP  GCM tamper test (no backend)")
-				return
+				return skip("GCM tamper test (no backend)")
 			end
 			local key = crypto.DEFAULT_KEY
 			local pt  = "GCM secret body!"
@@ -217,14 +215,26 @@ return {
 	{
 		name = "crypto: GCM without a backend raises a clear error (never silent garbage)",
 		fn = function()
-			if crypto.gcm_available() then
-				print("SKIP  no-backend contract (a GCM backend is installed here)")
-				return
-			end
-			local ok, err = pcall(crypto.aes_gcm_encrypt,
-				crypto.DEFAULT_KEY, FIXED_IV, "x", string.rep("\1", 40))
-			assert_false(ok, "gcm_encrypt must error without a backend")
+			-- CI installs lua-openssl, so load a second copy of the module with
+			-- both bindings made unloadable: the contract runs everywhere.
+			local had_ossl, had_crypto = package.loaded.openssl, package.loaded.crypto
+			local pre_ossl, pre_crypto = package.preload.openssl, package.preload.crypto
+			package.loaded.openssl, package.loaded.crypto = nil, nil
+			package.preload.openssl = function() error("lua-openssl absent") end
+			package.preload.crypto = function() error("luacrypto absent") end
+			local ok, nob = pcall(dofile, "openuf/crypto.lua")
+			package.loaded.openssl, package.loaded.crypto = had_ossl, had_crypto
+			package.preload.openssl, package.preload.crypto = pre_ossl, pre_crypto
+			assert_true(ok, tostring(nob))
+			assert_false(nob.gcm_available(), "stubbed: no GCM backend")
+			local eok, err = pcall(nob.aes_gcm_encrypt,
+				nob.DEFAULT_KEY, FIXED_IV, "x", string.rep("\1", 40))
+			assert_false(eok, "gcm_encrypt must error without a backend")
 			assert_contains(tostring(err), "no GCM backend", "actionable error message")
+			local dok, derr = pcall(nob.aes_gcm_decrypt,
+				nob.DEFAULT_KEY, FIXED_IV, "x", string.rep("\0", 16), string.rep("\1", 40))
+			assert_false(dok, "gcm_decrypt must error without a backend")
+			assert_contains(tostring(derr), "no GCM backend", "actionable decrypt error")
 		end
 	},
 	{

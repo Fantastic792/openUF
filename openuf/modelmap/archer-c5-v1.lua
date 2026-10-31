@@ -17,7 +17,7 @@
 local dev = {}
 dev.conf = {}
 
--- OpenWrt board names this profile is for. Read by tools/openuf-setup.sh to
+-- OpenWrt board names this profile is for. Read by setup.sh (map_boards) to
 -- preselect the right map from `ubus call system board`; openUF itself never
 -- looks at it, so a map without this field is still perfectly valid.
 dev.openwrt_boards = {"tplink,archer-c5-v1"}

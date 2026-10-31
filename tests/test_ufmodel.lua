@@ -46,11 +46,10 @@ return {
 					assert_true(type(uap.fw[k]) == "string" and uap.fw[k] ~= "",
 						name .. ": fw." .. k .. " is a non-empty string (announce catstr's it)")
 				end
-				-- inform.lua: model / bootrom_version / required_version. The
-				-- older identities predate `model` and `required_version`;
-				-- build_json defaults them, so they are optional -- but a
-				-- present one has to be a string, not a number someone
-				-- typed without quotes.
+				-- inform.lua: model / bootrom_version / required_version. A
+				-- present one has to be a string, not a number someone typed
+				-- without quotes (that every identity sets model is the next
+				-- test's job).
 				if uap.model ~= nil then
 					assert_true(type(uap.model) == "string" and uap.model ~= "",
 						name .. ": model is a non-empty string when set")
@@ -61,6 +60,23 @@ return {
 					assert_true(type(uap.required_version) == "string",
 						name .. ": required_version is a string when set")
 				end
+			end)
+		end
+	},
+	{
+		name = "ufmodel: every identity names its own model and a bare catalog version",
+		fn = function()
+			-- inform.lua sends `model = uap.model or "U6IW"`: an identity
+			-- without model reported U6IW next to its own platform (uapg1-lr
+			-- said U6IW / BZ2LR). And `version` is string-compared to the
+			-- firmware catalog, so a placeholder like "3.7.x" can never match.
+			each_ufmodel(function(name, uap)
+				assert_eq(uap.model, uap.platform, name .. ": model is set and matches platform")
+				assert_true(uap.fw.ver:match("^%d+%.%d+%.%d+%.%d+$") ~= nil,
+					name .. ": fw.ver is bare M.m.p.build, got " .. tostring(uap.fw.ver))
+				assert_true(uap.fw.buildtime:match("^%d%d%d%d%d%d%.%d%d%d%d$") ~= nil,
+					name .. ": fw.buildtime is YYMMDD.HHMM, got " .. tostring(uap.fw.buildtime))
+				assert_eq(type(uap.required_version), "string", name .. ": required_version is set")
 			end)
 		end
 	},
@@ -109,16 +125,15 @@ return {
 		end
 	},
 	{
-		name = "ufmodel: every WiFi 5 identity has every field the validated u6iw identity has",
+		name = "ufmodel: every identity has every field the validated u6iw identity has",
 		fn = function()
 			-- u6iw is the identity validated end-to-end and the one
-			-- build_json / announce were written against. Every other
-			-- dual-band identity must be a superset of its keys so that every
-			-- read those two files make finds a value, rather than a default
+			-- build_json / announce were written against. Every shipped
+			-- identity must be a superset of its keys so that every read
+			-- those two files make finds a value, rather than a default
 			-- that happens to say "U6IW".
 			local ref = dofile(UFMODEL_DIR .. "/u6iw.lua")
-			for _, name in ipairs({"uhdiw", "u7hd"}) do
-				local uap = dofile(UFMODEL_DIR .. "/" .. name .. ".lua")
+			each_ufmodel(function(name, uap)
 				for k, v in pairs(ref) do
 					assert_not_nil(uap[k], name .. " carries u6iw's field " .. k)
 					assert_eq(type(uap[k]), type(v), name .. "." .. k .. " has u6iw's type")
@@ -126,48 +141,53 @@ return {
 				for k in pairs(ref.fw) do
 					assert_not_nil(uap.fw[k], name .. ".fw carries u6iw's field " .. k)
 				end
-			end
+			end)
 		end
 	},
 	{
-		name = "ufmodel: every WiFi 5 identity builds a discovery packet that names the model and firmware",
+		name = "ufmodel: every identity builds a discovery packet that names the model and firmware",
 		fn = function()
 			-- announce.lua catstr's five of the identity's strings into TLVs
 			-- with no nil check; a field the file forgot is a crash on the
 			-- first broadcast, i.e. a device that never appears in UniFi
 			-- Discover. Map each shipped file exactly as announce.lua's own
 			-- startup does and build one packet.
+			local had_mode = OPENUF_TEST_MODE
 			OPENUF_TEST_MODE = true
-			if not ufpkt then dofile("openuf/lib/lib.lua") end
-			local announce = dofile("openuf/announce.lua")
-			for _, id in ipairs({{"uhdiw", "UHDIW"}, {"u7hd", "U7HD"}}) do
-				local name, code = id[1], id[2]
-				local uap = dofile(UFMODEL_DIR .. "/" .. name .. ".lua")
-				local pkt = announce.build_packet({
-					mac           = {0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad},
-					ip            = {192, 168, 1, 1},
-					hostname      = "openUF",
-					adopted       = false,
-					platform      = uap.platform,
-					fw_pre        = uap.fw.pre,
-					fw_ver        = uap.fw.ver,
-					fw_buildtime  = uap.fw.buildtime,
-					fw_factoryver = uap.fw.factoryver,
-					uptime        = 100,
-					counter       = 1,
-				})
-				assert_true(type(pkt) == "string" and #pkt > 4, name .. ": a packet was built")
-				-- Platform TLVs (0x0c / 0x15) carry the bare code; the verbose
-				-- firmware TLV (0x03) is pre .. ver .. suffix .. "." .. buildtime,
-				-- so both the prefixed version and the build stamp appear.
-				assert_true(pkt:find(code, 1, true) ~= nil, name .. ": platform code is in the packet")
-				assert_true(pkt:find(uap.fw.pre .. uap.fw.ver, 1, true) ~= nil,
-					name .. ": verbose firmware string starts with pre .. ver")
-				assert_true(pkt:find(uap.fw.buildtime, 1, true) ~= nil,
-					name .. ": build stamp is in the packet")
-				assert_true(pkt:find(uap.fw.factoryver, 1, true) ~= nil,
-					name .. ": factory firmware TLV (0x1b) carries factoryver")
-			end
+			local ok, err = pcall(function()
+				if not ufpkt then dofile("openuf/lib/lib.lua") end
+				local announce = dofile("openuf/announce.lua")
+				each_ufmodel(function(name, uap)
+					local pkt = announce.build_packet({
+						mac           = {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01},
+						ip            = {192, 0, 2, 1},
+						hostname      = "openUF",
+						adopted       = false,
+						platform      = uap.platform,
+						fw_pre        = uap.fw.pre,
+						fw_ver        = uap.fw.ver,
+						fw_buildtime  = uap.fw.buildtime,
+						fw_factoryver = uap.fw.factoryver,
+						uptime        = 100,
+						counter       = 1,
+					})
+					assert_true(type(pkt) == "string" and #pkt > 4, name .. ": a packet was built")
+					-- Platform TLVs (0x0c / 0x15) carry the bare code; the verbose
+					-- firmware TLV (0x03) is pre .. ver .. suffix .. "." .. buildtime,
+					-- so both the prefixed version and the build stamp appear.
+					assert_true(pkt:find(uap.platform, 1, true) ~= nil,
+						name .. ": platform code is in the packet")
+					assert_true(pkt:find(uap.fw.pre .. uap.fw.ver, 1, true) ~= nil,
+						name .. ": verbose firmware string starts with pre .. ver")
+					assert_true(pkt:find(uap.fw.buildtime, 1, true) ~= nil,
+						name .. ": build stamp is in the packet")
+					assert_true(pkt:find(uap.fw.factoryver, 1, true) ~= nil,
+						name .. ": factory firmware TLV (0x1b) carries factoryver")
+				end)
+			end)
+			-- A leaked OPENUF_TEST_MODE changes how later files' modules load.
+			OPENUF_TEST_MODE = had_mode
+			if not ok then error(err, 0) end
 		end
 	},
 }

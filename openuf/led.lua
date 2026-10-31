@@ -152,10 +152,24 @@ end
 -- toggle (mgmt_cfg's led_enabled key). Distinct from the locate blink above
 -- -- this is the device's normal/idle LED state, not a transient identify
 -- pattern.
+--
+-- Off is trigger "none", brightness 0. On puts back the trigger the board
+-- itself drove the LED with, remembered the first time set_enabled sees one
+-- (not "none", and not Locate's "timer"): forcing "none" here left a board
+-- whose only LED is a radio's (AX3000T, phy0tpt) with a plain lamp instead
+-- of its activity light after one off/on. Unknown -- the daemon started
+-- with the LED already off -- keeps the old steady "none" at full scale.
+M._default_trigger = {}
+
 function M.set_enabled(led, enabled)
 	local led_path = _resolve(led)
 	if not led_path then return false end
-	M._write_file(led_path .. "/trigger", "none")
+	local cur = active_trigger(led_path)
+	if cur and cur ~= "none" and cur ~= "timer" and not M._default_trigger[led_path] then
+		M._default_trigger[led_path] = cur
+	end
+	M._write_file(led_path .. "/trigger",
+		enabled and M._default_trigger[led_path] or "none")
 	M._write_file(led_path .. "/brightness", enabled and full_brightness(led_path) or "0")
 	return true
 end

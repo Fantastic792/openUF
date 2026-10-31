@@ -5,12 +5,12 @@
 local backhaul = dofile("openuf/backhaul.lua")
 
 local MESH = {status = true, version = 3, essid = "vwire-5f3369181f7fbab5",
-	psk = "0123456789abcdef0123456789abcdef", serial1 = "78:bb:c1:fe:3f:c9",
+	psk = "0123456789abcdef0123456789abcdef", serial1 = "00:00:5e:00:53:01",
 	connectivity = {status = true, uplink_eth = "eth0", uplink_wds = "ath4", uplink_bridge = "br0"}}
 local ENTRIES = {
 	{role = "downlink", radio = "radio1", ssid = "vwire-5f3369181f7fbab5",
 		psk = "0123456789abcdef0123456789abcdef", devname = "vwire3", hidden = true},
-	{role = "uplink", radio = "radio1", ssid = "vport-ac10076fc670", devname = "ath4", hidden = true},
+	{role = "uplink", radio = "radio1", ssid = "vport-00005e005320", devname = "ath4", hidden = true},
 }
 
 -- A fake ucihelper: the two functions tick()/uplink_report() call.
@@ -162,11 +162,11 @@ return {
 				-- On the parent, mid-mesh: the PC behind the child's WDS station,
 				-- a VLAN host behind it too, a phone on the parent's own AP.
 				fdb.out = table.concat({
-					"c8:7f:54:06:03:0a dev phy1-ap1.sta1 master br-lan ",
+					"00:00:5e:00:53:10 dev phy1-ap1.sta1 master br-lan ",
 					"02:00:00:00:00:20 dev phy1-ap1.sta1 vlan 20 master br-openuf20 ",
 					"02:00:00:00:00:99 dev phy1-ap0 master br-lan ",
-					"08:bf:b8:71:c0:31 dev wan master br-lan ",
-					"08:bf:b8:71:c0:31 dev wan self ",
+					"00:00:5e:00:53:11 dev wan master br-lan ",
+					"00:00:5e:00:53:11 dev wan self ",
 					"33:33:00:00:00:01 dev phy1-ap1.sta1 master br-lan permanent",
 				}, "\n")
 				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "nothing moved yet")
@@ -175,17 +175,17 @@ return {
 				-- The child's cable is back: the WDS port is gone, the PC turns up
 				-- behind the parent's wan, the phone roams onto a cable too.
 				fdb.out = table.concat({
-					"c8:7f:54:06:03:0a dev wan master br-lan ",
+					"00:00:5e:00:53:10 dev wan master br-lan ",
 					"02:00:00:00:00:20 dev lan2 vlan 20 master br-openuf20 ",
 					"02:00:00:00:00:99 dev lan1 master br-lan ",
 				}, "\n")
 				assert_eq(backhaul.heal_wds_moves({}, si, nil), 2, "the two hosts the mesh link carried")
-				assert_eq(rec.cmds[1], "bridge fdb replace c8:7f:54:06:03:0a dev wan master static >/dev/null 2>&1", "pin")
-				assert_eq(rec.cmds[2], "bridge fdb del c8:7f:54:06:03:0a dev wan master >/dev/null 2>&1", "unpin")
+				assert_eq(rec.cmds[1], "bridge fdb replace 00:00:5e:00:53:10 dev wan master static >/dev/null 2>&1", "pin")
+				assert_eq(rec.cmds[2], "bridge fdb del 00:00:5e:00:53:10 dev wan master >/dev/null 2>&1", "unpin")
 				assert_eq(rec.cmds[3], "bridge fdb replace 02:00:00:00:00:20 dev lan2 vlan 20 master static >/dev/null 2>&1",
 					"the VLAN bridge's host keeps its VLAN")
 				assert_eq(#rec.cmds, 4, "the phone was never behind a WDS port: untouched")
-				assert_true(rec.logs[1]:find("c8:7f:54:06:03:0a on wan", 1, true) ~= nil, "logged")
+				assert_true(rec.logs[1]:find("00:00:5e:00:53:10 on wan", 1, true) ~= nil, "logged")
 
 				-- Once only: the next heartbeat leaves the relearnt entries alone.
 				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "healed once")
@@ -200,15 +200,15 @@ return {
 			with_fdb_seams(fdb, function(rec)
 				local si = fake_sysinfo("wan")
 				fdb.out = table.concat({
-					"96:28:d6:13:bf:ad dev phy1-ap5.sta1 master br-lan ",
-					"08:bf:b8:71:c0:31 dev wan master br-lan ",
-					"08:bf:b8:71:c0:31 dev wan self ",
+					"02:00:5e:00:53:12 dev phy1-ap5.sta1 master br-lan ",
+					"00:00:5e:00:53:11 dev wan master br-lan ",
+					"00:00:5e:00:53:11 dev wan self ",
 				}, "\n")
 				backhaul.heal_wds_moves({}, si, nil)
 				-- Mid-mesh, a wired host without its switch entry is left alone.
 				fdb.out = table.concat({
-					"96:28:d6:13:bf:ad dev phy1-ap5.sta1 master br-lan ",
-					"08:bf:b8:71:c0:31 dev wan master br-lan ",
+					"02:00:5e:00:53:12 dev phy1-ap5.sta1 master br-lan ",
+					"00:00:5e:00:53:11 dev wan master br-lan ",
 				}, "\n")
 				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "no window while the WDS port is up")
 
@@ -216,14 +216,14 @@ return {
 				-- the bridge has it on wan, the switch does not. The gateway has its
 				-- switch entry; eth1 is no switch port at all.
 				local after = table.concat({
-					"08:bf:b8:71:c0:31 dev wan master br-lan ",
-					"a8:88:1f:43:85:3f dev wan master br-lan ",
-					"a8:88:1f:43:85:3f dev wan self ",
+					"00:00:5e:00:53:11 dev wan master br-lan ",
+					"00:00:5e:00:53:13 dev wan master br-lan ",
+					"00:00:5e:00:53:13 dev wan self ",
 					"02:00:00:00:00:e1 dev eth1 master br-lan ",
 				}, "\n")
 				fdb.out = after
 				assert_eq(backhaul.heal_wds_moves({}, si, nil), 1, "the stuck controller")
-				assert_eq(rec.cmds[1], "bridge fdb replace 08:bf:b8:71:c0:31 dev wan master static >/dev/null 2>&1", "rewritten")
+				assert_eq(rec.cmds[1], "bridge fdb replace 00:00:5e:00:53:11 dev wan master static >/dev/null 2>&1", "rewritten")
 				assert_eq(backhaul.heal_wds_moves({}, si, nil), 0, "once per window, even before the switch relearns")
 				for _ = 1, backhaul.WDS_HEAL_WINDOW do backhaul.heal_wds_moves({}, si, nil) end
 				assert_eq(#rec.cmds, 2, "nothing more, and the window has closed")
@@ -238,23 +238,23 @@ return {
 			with_fdb_seams(fdb, function(rec)
 				local si = fake_sysinfo("wan")
 				fdb.out = table.concat({
-					"a8:88:1f:43:85:3f dev phy1-sta0 master br-lan ",
+					"00:00:5e:00:53:13 dev phy1-sta0 master br-lan ",
 					"02:00:00:00:00:51 dev phy1-sta0 master br-lan ",
 					"02:00:00:00:00:52 dev phy1-sta0 master br-lan ",
 				}, "\n")
 				backhaul.heal_wds_moves({}, si, "phy1-sta0")
 				fdb.now = 1000 + backhaul.WDS_HEAL_TTL + 1
 				fdb.out = table.concat({
-					"a8:88:1f:43:85:3f dev phy1-sta0 master br-lan ",   -- still on the air: refreshed
+					"00:00:5e:00:53:13 dev phy1-sta0 master br-lan ",   -- still on the air: refreshed
 					"02:00:00:00:00:51 dev lan3 master br-lan static", -- someone's static entry
 				}, "\n")
 				assert_eq(backhaul.heal_wds_moves({}, si, "phy1-sta0"), 0, "static entries are left alone")
 				fdb.out = table.concat({
-					"a8:88:1f:43:85:3f dev wan master br-lan ",
+					"00:00:5e:00:53:13 dev wan master br-lan ",
 					"02:00:00:00:00:52 dev lan3 master br-lan ",       -- moved after the TTL ran out
 				}, "\n")
 				assert_eq(backhaul.heal_wds_moves({}, si, "phy1-sta0"), 1, "only the gateway, still remembered")
-				assert_eq(rec.cmds[1], "bridge fdb replace a8:88:1f:43:85:3f dev wan master static >/dev/null 2>&1", "gateway")
+				assert_eq(rec.cmds[1], "bridge fdb replace 00:00:5e:00:53:13 dev wan master static >/dev/null 2>&1", "gateway")
 			end)
 		end
 	},
@@ -264,15 +264,15 @@ return {
 			local fdb = {}
 			with_fdb_seams(fdb, function(rec)
 				local ufuci = fake_ufuci({}, nil, {{name = "openuf_bh_dl_radio1"}})
-				fdb.out = "c8:7f:54:06:03:0a dev phy1-ap1.sta1 master br-lan "
+				fdb.out = "00:00:5e:00:53:10 dev phy1-ap1.sta1 master br-lan "
 				backhaul.tick({}, {}, ufuci, fake_sysinfo("wan"), nil)
-				fdb.out = "c8:7f:54:06:03:0a dev lan3 master br-lan "
+				fdb.out = "00:00:5e:00:53:10 dev lan3 master br-lan "
 				backhaul.tick({}, {}, ufuci, fake_sysinfo("wan"), nil)
-				assert_eq(count(rec.cmds, "^bridge fdb replace c8:7f:54:06:03:0a dev lan3 master static"), 1, "healed through tick()")
+				assert_eq(count(rec.cmds, "^bridge fdb replace 00:00:5e:00:53:10 dev lan3 master static"), 1, "healed through tick()")
 				backhaul._wds_hosts = {}
-				fdb.out = "c8:7f:54:06:03:0a dev phy1-ap1.sta1 master br-lan "
+				fdb.out = "00:00:5e:00:53:10 dev phy1-ap1.sta1 master br-lan "
 				backhaul.tick({}, SWCFG, ufuci, fake_sysinfo("wan"), nil)
-				fdb.out = "c8:7f:54:06:03:0a dev eth0.1 master br-lan "
+				fdb.out = "00:00:5e:00:53:10 dev eth0.1 master br-lan "
 				backhaul.tick({}, SWCFG, ufuci, fake_sysinfo("wan"), nil)
 				assert_eq(count(rec.cmds, "^bridge fdb"), 2, "swconfig: no FDB rewrite (its ARL heal covers it)")
 			end)
@@ -291,7 +291,7 @@ return {
 			assert_eq(plan.uplink.key, MESH.psk, "same PSK")
 			assert_false(plan.uplink.enabled, "wired by default: the station is written disabled")
 			assert_nil(plan.uplink.bssid, "no BSSID pin from the push")
-			assert_eq(plan.uplink.vport, "vport-ac10076fc670", "the station's own name is kept for reporting")
+			assert_eq(plan.uplink.vport, "vport-00005e005320", "the station's own name is kept for reporting")
 			assert_eq(plan.uplink.devname, "ath4", "the controller's devname for the station")
 			assert_eq(plan.downlink.devname, "vwire3", "and for the downlink")
 		end
@@ -362,12 +362,12 @@ return {
 			st = {backhaul_mode = "wired"}
 			backhaul.plan(MESH, ENTRIES, {}, st)
 			assert_eq(st.backhaul_ul.radio, "radio1", "radio remembered")
-			assert_eq(st.backhaul_ul.vport, "vport-ac10076fc670", "vport remembered")
+			assert_eq(st.backhaul_ul.vport, "vport-00005e005320", "vport remembered")
 			assert_eq(st.backhaul_ul.devname, "ath4", "devname remembered")
 			backhaul._popen = function() error("not needed: the radio is remembered") end
 			plan = backhaul.plan(MESH, {}, {}, st)
 			assert_eq(plan.uplink.radio, "radio1", "remembered radio")
-			assert_eq(plan.uplink.vport, "vport-ac10076fc670", "remembered vport for the report")
+			assert_eq(plan.uplink.vport, "vport-00005e005320", "remembered vport for the report")
 			assert_eq(plan.uplink.devname, "ath4", "remembered devname")
 			-- No 5 GHz radio and nothing remembered: none, and a log line.
 			backhaul._popen = function() return "wireless.radio0.band='2g'\n" end
@@ -621,21 +621,21 @@ return {
 	{
 		name = "backhaul: uplink_report() describes the hop only while wireless and associated",
 		fn = function()
-			local link = "Connected to 78:bb:c1:fe:3f:cb (on phy1-sta0)\n\tSSID: vwire-5f3369181f7fbab5\n"
+			local link = "Connected to 00:00:5e:00:53:03 (on phy1-sta0)\n\tSSID: vwire-5f3369181f7fbab5\n"
 				.. "\tfreq: 5500\n\tRX: 1000 bytes (10 packets)\n\tTX: 2000 bytes (20 packets)\n"
 				.. "\tsignal: -47 dBm\n\trx bitrate: 866.7 MBit/s\n\ttx bitrate: 780.0 MBit/s\n"
 			with_seams({}, link, function()
 				local secs = {{name = "openuf_bh_ul_radio1", radio = "radio1", ssid = MESH.essid, disabled = false}}
 				local uf = fake_ufuci(secs, "phy1-sta0")
-				local st = {backhaul_mode = "wireless", backhaul_parent = "78:bb:c1:fe:3f:c9"}
+				local st = {backhaul_mode = "wireless", backhaul_parent = "00:00:5e:00:53:01"}
 				local up = backhaul.uplink_report(st, {}, uf)
 				assert_eq(up.type, "wireless", "type")
 				assert_eq(up.name, "phy1-sta0", "netdev name when the section has no controller devname")
 				secs[1].devname = "ath4"
 				assert_eq(backhaul.uplink_report(st, {}, uf).name, "ath4", "the controller's devname when known")
 				secs[1].devname = nil
-				assert_eq(up.bssid, "78:bb:c1:fe:3f:cb", "the BSS it joined")
-				assert_eq(up.uplink_mac, "78:bb:c1:fe:3f:c9", "the parent the controller named")
+				assert_eq(up.bssid, "00:00:5e:00:53:03", "the BSS it joined")
+				assert_eq(up.uplink_mac, "00:00:5e:00:53:01", "the parent the controller named")
 				assert_eq(up.channel, 100, "freq 5500 -> channel 100")
 				assert_eq(up.radio, "na", "5 GHz")
 				assert_eq(up.signal, -47, "signal")
@@ -646,10 +646,10 @@ return {
 				-- no priority-1 parent from the controller: resolve it from the sibling element
 				local si = {scan_table = function() return {
 					{bssid = "aa:bb:cc:dd:ee:ff", is_unifi = false},
-					{bssid = "78:BB:C1:FE:3F:CB", is_unifi = true, serialno = "78:bb:c1:fe:3f:c9"},
+					{bssid = "00:00:5E:00:53:03", is_unifi = true, serialno = "00:00:5e:00:53:01"},
 				} end}
 				local up2 = backhaul.uplink_report({backhaul_mode = "wireless", backhaul_parent = ""}, {}, uf, si)
-				assert_eq(up2.uplink_mac, "78:bb:c1:fe:3f:c9", "parent from the scan table's serialno")
+				assert_eq(up2.uplink_mac, "00:00:5e:00:53:01", "parent from the scan table's serialno")
 				local up3 = backhaul.uplink_report({backhaul_mode = "wireless", backhaul_parent = ""}, {}, uf,
 					{scan_table = function() return {} end})
 				assert_nil(up3.uplink_mac, "unknown parent stays absent, never guessed")
@@ -668,24 +668,24 @@ return {
 			-- is_unifi/serialno exist only on the payload's scan_radio_table.
 			local si = {scan_table = function() return {
 				{bssid = "aa:bb:cc:dd:ee:ff"},
-				{bssid = "7A:BB:C1:FE:3F:CB", peer_mac = "78:BB:C1:FE:3F:C9"},
+				{bssid = "02:00:5E:00:53:03", peer_mac = "00:00:5E:00:53:01"},
 			} end}
-			assert_eq(backhaul.parent_for_bssid({backhaul_parent = ""}, "7a:bb:c1:fe:3f:cb", "phy1-sta0", si),
-				"78:bb:c1:fe:3f:c9", "the raw entry's peer_mac, case-insensitively on both sides")
-			assert_eq(backhaul.parent_for_bssid({backhaul_parent = "11:22:33:44:55:66"}, "7a:bb:c1:fe:3f:cb", "phy1-sta0", si),
-				"78:bb:c1:fe:3f:c9", "the BSS actually joined beats the parent the last push named")
+			assert_eq(backhaul.parent_for_bssid({backhaul_parent = ""}, "02:00:5e:00:53:03", "phy1-sta0", si),
+				"00:00:5e:00:53:01", "the raw entry's peer_mac, case-insensitively on both sides")
+			assert_eq(backhaul.parent_for_bssid({backhaul_parent = "11:22:33:44:55:66"}, "02:00:5e:00:53:03", "phy1-sta0", si),
+				"00:00:5e:00:53:01", "the BSS actually joined beats the parent the last push named")
 			-- Payload-shaped entries still work (is_unifi + serialno).
 			local si2 = {scan_table = function() return {
-				{bssid = "7a:bb:c1:fe:3f:cb", is_unifi = true, serialno = "78:bb:c1:fe:3f:c9"},
+				{bssid = "02:00:5e:00:53:03", is_unifi = true, serialno = "00:00:5e:00:53:01"},
 			} end}
-			assert_eq(backhaul.parent_for_bssid({}, "7a:bb:c1:fe:3f:cb", "phy1-sta0", si2), "78:bb:c1:fe:3f:c9", "decoded shape too")
+			assert_eq(backhaul.parent_for_bssid({}, "02:00:5e:00:53:03", "phy1-sta0", si2), "00:00:5e:00:53:01", "decoded shape too")
 			-- The push's parent is the fallback, never the first word.
 			assert_eq(backhaul.parent_for_bssid({backhaul_parent = "11:22:33:44:55:66"}, "aa:bb:cc:dd:ee:ff", "phy1-sta0", si),
 				"11:22:33:44:55:66", "a BSS with no sibling element: the push's parent")
-			assert_eq(backhaul.parent_for_bssid({backhaul_parent = "11:22:33:44:55:66"}, "7a:bb:c1:fe:3f:cb", nil, si),
+			assert_eq(backhaul.parent_for_bssid({backhaul_parent = "11:22:33:44:55:66"}, "02:00:5e:00:53:03", nil, si),
 				"11:22:33:44:55:66", "no interface to scan from: the push's parent")
 			assert_nil(backhaul.parent_for_bssid({backhaul_parent = ""}, "aa:bb:cc:dd:ee:ff", "phy1-sta0", si), "neither: unknown, never a guess")
-			assert_nil(backhaul.parent_for_bssid({backhaul_parent = ""}, "7a:bb:c1:fe:3f:cb", nil, si), "no interface and no push: unknown")
+			assert_nil(backhaul.parent_for_bssid({backhaul_parent = ""}, "02:00:5e:00:53:03", nil, si), "no interface and no push: unknown")
 		end
 	},
 	{
@@ -693,13 +693,13 @@ return {
 		fn = function()
 			local scans = {{name = "radio1", scan_table = {
 				{bssid = "aa:bb:cc:dd:ee:01", is_unifi = false},
-				{bssid = "ac:10:07:6f:c6:71", is_unifi = true, serialno = "AC:10:07:6F:C6:70"},
+				{bssid = "00:00:5e:00:53:21", is_unifi = true, serialno = "00:00:5E:00:53:20"},
 				{bssid = "11:22:33:44:55:66", is_unifi = true, serialno = "11:22:33:44:55:60"},
 			}}}
-			local fdb = {["ac:10:07:6f:c6:70"] = "phy1-ap1.sta1", ["20:f1:b2:c5:c6:de"] = "phy1-ap1.sta1",
-				["aa:10:07:6f:c6:72"] = "phy1-ap1.sta1", ["66:76:5b:ed:8c:a2"] = "phy1-ap0"}
+			local fdb = {["00:00:5e:00:53:20"] = "phy1-ap1.sta1", ["00:00:5e:00:53:15"] = "phy1-ap1.sta1",
+				["02:00:5e:00:53:22"] = "phy1-ap1.sta1", ["02:00:5e:00:53:14"] = "phy1-ap0"}
 			local si = {lan_bridge = function() return "br-lan" end, bridge_fdb_ports = function() return fdb end}
-			assert_eq(backhaul.child_serialno("phy1-ap1.sta1", scans, {}, si), "ac:10:07:6f:c6:70",
+			assert_eq(backhaul.child_serialno("phy1-ap1.sta1", scans, {}, si), "00:00:5e:00:53:20",
 				"the sibling whose identity MAC sits behind the station's netdev, lower-cased")
 			assert_nil(backhaul.child_serialno("phy1-ap0", scans, {}, si), "a user VAP netdev: no sibling behind it")
 			assert_nil(backhaul.child_serialno("phy1-ap1.sta1", {}, {}, si), "no siblings known: nothing")
@@ -838,14 +838,14 @@ return {
 		name = "backhaul: child_serialno() finds a swconfig parent's LAN bridge through the trunk's sub-device",
 		fn = function()
 			local scans = {{name = "radio0", scan_table = {
-				{bssid = "ac:10:07:6f:c6:71", is_unifi = true, serialno = "ac:10:07:6f:c6:70"},
+				{bssid = "00:00:5e:00:53:21", is_unifi = true, serialno = "00:00:5e:00:53:20"},
 			}}}
 			local si = fake_swsysinfo({up = {}})
 			si.bridge_fdb_ports = function(br)
 				assert_eq(br, "br-lan", "asked of the LAN bridge")
-				return {["ac:10:07:6f:c6:70"] = "phy0-ap1.sta1"}
+				return {["00:00:5e:00:53:20"] = "phy0-ap1.sta1"}
 			end
-			assert_eq(backhaul.child_serialno("phy0-ap1.sta1", scans, SWCFG, si), "ac:10:07:6f:c6:70",
+			assert_eq(backhaul.child_serialno("phy0-ap1.sta1", scans, SWCFG, si), "00:00:5e:00:53:20",
 				"the child behind the WDS netdev")
 		end
 	},
