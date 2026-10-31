@@ -318,11 +318,23 @@ function M.apply(extra, vap, bssid, cursor, delete, learned)
 			.. "fast roaming to UniFi APs will not work", tostring(vap.ssid)))
 	end
 
+	-- hostapd_bss_options is a list other writers share (SAE tuning, RADIUS
+	-- MAC-auth, PPSK, Hotspot 2.0), so only this writer's own line comes and
+	-- goes. `delete` is the shared sentinel: never appended to, and only
+	-- what is left when no line at all remains.
 	local ifn = M.ft_iface(cursor)
+	local lines = {}
+	local cur = extra.hostapd_bss_options
+	if type(cur) == "table" and cur ~= delete then
+		for _, l in ipairs(cur) do
+			if not tostring(l):match("^ft_iface=") then lines[#lines + 1] = l end
+		end
+	end
 	if ifn then
-		extra.hostapd_bss_options = {"ft_iface=" .. ifn}
-	else
-		extra.hostapd_bss_options = delete
+		lines[#lines + 1] = "ft_iface=" .. ifn
+	end
+	extra.hostapd_bss_options = #lines > 0 and lines or delete
+	if not ifn then
 		if installed and M.translator_active(cursor) then
 			M._log("ft_iface not present, hostapd stays on the bridge: "
 				.. "the translator's veth is not up (openuf rrb status)")

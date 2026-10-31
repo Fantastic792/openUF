@@ -272,7 +272,93 @@ return {
 				assert_false(has_log(logged, "ft_iface not present"), "no veth diagnosis")
 				assert_false(has_log(logged, "no UniFi peer"), "no peer diagnosis")
 				assert_eq(#logged, 1, "exactly one line")
+				assert_nil(next(DELETE), "the shared sentinel stays empty")
 			end)
+		end
+	},
+	{
+		name = "ftinterop: without a veth only the ft_iface line goes, the other writers' lines stay",
+		fn = function()
+			with_ftinterop({[INSTALLED] = true}, function()
+				-- A stale ft_iface from a producer before it, next to a line
+				-- that is not ftinterop's to drop.
+				local extra = {hostapd_bss_options = {"sae_groups=19", "ft_iface=vft0"}}
+				ftinterop.apply(extra, {ssid = "corp", radio = "radio0", iapp_key = KEY},
+					OWN, ro_cursor({}), DELETE)
+				assert_eq(type(extra.hostapd_bss_options), "table", "still a list")
+				assert_eq(table.concat(extra.hostapd_bss_options, ","), "sae_groups=19",
+					"the SAE line kept, the stale ft_iface dropped")
+				assert_nil(next(DELETE), "the shared sentinel untouched")
+			end)
+			with_ftinterop({vft0 = true, [INSTALLED] = true}, function()
+				local extra = {hostapd_bss_options = {"sae_groups=19", "ft_iface=vft0"}}
+				ftinterop.apply(extra, {ssid = "corp", radio = "radio0", iapp_key = KEY},
+					OWN, ro_cursor({}), DELETE)
+				assert_eq(table.concat(extra.hostapd_bss_options, ","), "sae_groups=19,ft_iface=vft0",
+					"with the veth: one ft_iface, the SAE line kept")
+			end)
+		end
+	},
+	{
+		name = "ftinterop: apply_config without the veth keeps the SAE lines and never fills ucihelper.DELETE",
+		fn = function()
+			local db = {openuf = {rrb = {[".type"] = "rrb"}}}
+			local cursor = rw_cursor(db)
+			local orig = {uci = ucihelper._uci, popen = ucihelper._popen,
+				read = ucihelper._read_file, run = ucihelper._run_cmd,
+				bcf = ucihelper._bcfilter, shaper = ucihelper._shaper,
+				fti = ucihelper._ftinterop, vap = ucihelper.get_ifname_for_vap}
+			local function restore()
+				ucihelper._uci, ucihelper._popen = orig.uci, orig.popen
+				ucihelper._read_file, ucihelper._run_cmd = orig.read, orig.run
+				ucihelper._bcfilter, ucihelper._shaper = orig.bcf, orig.shaper
+				ucihelper._ftinterop, ucihelper.get_ifname_for_vap = orig.fti, orig.vap
+				ucihelper._phy_caps_cache = nil
+				ucihelper._phy_caps_unstable_until = nil
+				ucihelper._phy_caps_read_at = nil
+				ucihelper._network_dirty = false
+				ucihelper.end_pass()
+			end
+			ucihelper.end_pass()
+			ucihelper._phy_caps_cache = nil
+			ucihelper._uci = {cursor = function() return cursor end}
+			ucihelper._popen = function() return "" end
+			-- The veth never comes up (the HIGH case: first push after boot).
+			ucihelper._read_file = function(path)
+				if path == "/sys/class/net/phy0-ap0/address" then return OWN .. "\n" end
+				if path == "/etc/init.d/openuf-rrb" then return "#!/bin/sh /etc/rc.common\n" end
+				return nil
+			end
+			ucihelper._run_cmd = function() return true end
+			ucihelper._bcfilter = {reconcile = function() end}
+			ucihelper._shaper = {reconcile = function() end}
+			ucihelper._ftinterop = ftinterop
+			ucihelper.get_ifname_for_vap = function(radio)
+				return radio == "radio0" and "phy0-ap0" or nil
+			end
+			local resp = {radio_table = {}, vap_table = {
+				{ssid = "corp", radio = "radio0", security = "wpa3",
+				 x_passphrase = "hunter22", wpa3_fast_roaming_enabled = true,
+				 fast_roaming_enabled = true, iapp_key = KEY,
+				 sae_groups = "19", sae_sync = "5"},
+			}}
+			local ok, err = pcall(function()
+				with_ftinterop({[INSTALLED] = true}, function()
+					for push = 1, 2 do
+						ucihelper.apply_config(resp, {config = {unifi_ft_interop = true}}, {})
+						local s = db.wireless.openuf_radio0_corp
+						assert_eq(s.ieee80211r, "1", "FT on, push " .. push)
+						assert_eq(type(s.hostapd_bss_options), "table",
+							"the raw lines reach UCI, push " .. push)
+						local raw = table.concat(s.hostapd_bss_options, ",")
+						assert_eq(raw, "sae_groups=19,sae_sync=5",
+							"SAE lines kept, no ft_iface, push " .. push)
+						assert_nil(next(ucihelper.DELETE), "DELETE still empty, push " .. push)
+					end
+				end)
+			end)
+			restore()
+			if not ok then error(err, 0) end
 		end
 	},
 	{

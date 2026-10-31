@@ -639,10 +639,13 @@ local SECURITY_MAP = {
 -- Append one raw per-BSS hostapd line to an `extra` table, creating the list
 -- on first use. Appending rather than assigning on purpose: hostapd_bss_options
 -- has more than one producer, and a bare `extra.hostapd_bss_options = {...}`
--- from a second one would silently drop the first one's lines.
+-- from a second one would silently drop the first one's lines. ftinterop.lua
+-- writes the list first, and leaves M.DELETE there when it has no line of its
+-- own: that is the shared sentinel, so it counts as empty and gets replaced,
+-- never appended to.
 local function add_bss_option(extra, line)
 	local t = extra.hostapd_bss_options
-	if type(t) ~= "table" then
+	if type(t) ~= "table" or t == M.DELETE then
 		t = {}
 		extra.hostapd_bss_options = t
 	end
@@ -778,19 +781,6 @@ function M.vap_vlan_ids(vap)
 	for _, e in ipairs(vap.mac_vlans or {}) do add(e.vid) end
 	table.sort(out)
 	return out
-end
-
--- Append one raw hostapd line to this VAP's hostapd_bss_options list
--- (ap.uc writes each verbatim into the BSS's section of the hostapd config),
--- creating the list on first use. Appending, not assigning: ftinterop.lua
--- writes the same list first.
-local function add_bss_option(extra, line)
-	local t = extra.hostapd_bss_options
-	if type(t) ~= "table" then
-		t = {}
-		extra.hostapd_bss_options = t
-	end
-	t[#t + 1] = line
 end
 
 -- One wifi-vlan section for `vid` on the VAP in wifi-iface section `iface`,
