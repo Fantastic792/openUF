@@ -1452,6 +1452,40 @@ end
 -- reads them).
 M.FT_VETH_SECTIONS = {"openuf_ftveth", "openuf_ftlink", "openuf_ftpeer"}
 
+-- What the openuf-rrb daemon takes from the wireless config, as one string:
+-- per BSS on the veth its section, radio, network (the LAN bridge, opened
+-- once at start), mobility domain, BSSID override and wildcard r0kh key
+-- (UBNT_ROAM's wlan_id and key). The other r0kh lines are left out: hostapd
+-- holds the key holders, the daemon never reads them, and a learned peer
+-- adds one. apply_config restarts the daemon only when this changes.
+local function as_text(v)
+	if type(v) == "table" then return table.concat(v, " ") end
+	return tostring(v or "")
+end
+
+function M.rrb_signature(cursor)
+	local parts = {}
+	cursor:foreach("wireless", "wifi-iface", function(s)
+		local veth = false
+		if type(s.hostapd_bss_options) == "table" then
+			for _, l in ipairs(s.hostapd_bss_options) do
+				if tostring(l):match("^ft_iface=") then veth = true end
+			end
+		end
+		if not veth or s.disabled == "1" then return end
+		local key = ""
+		if type(s.r0kh) == "table" then
+			for _, e in ipairs(s.r0kh) do
+				if tostring(e):match("^ff:ff:ff:ff:ff:ff,") then key = tostring(e) end
+			end
+		end
+		parts[#parts + 1] = table.concat({as_text(s[".name"]), as_text(s.device),
+			as_text(s.network), as_text(s.mobility_domain), as_text(s.macaddr), key}, "|")
+	end)
+	table.sort(parts)
+	return table.concat(parts, "\n")
+end
+
 local function ft_veth_names(cursor)
 	local ft = cursor and cursor:get("openuf", "rrb", "ft_iface")
 	local peer = cursor and cursor:get("openuf", "rrb", "peer_iface")
@@ -1472,6 +1506,9 @@ function M.ensure_ft_veth(cursor)
 		return M._read_file("/sys/class/net/" .. ft .. "/ifindex") ~= nil
 	end
 	if present() then return true end
+	-- A new veth: the daemon's end of the old one went with it, so the
+	-- translator is restarted after this push whatever rrb_signature says.
+	M._rrb_sig = nil
 	local dev, link, peerif = M.FT_VETH_SECTIONS[1], M.FT_VETH_SECTIONS[2], M.FT_VETH_SECTIONS[3]
 	if cursor:get("network", dev, "name") ~= ft
 		or cursor:get("network", dev, "peer_name") ~= peer then
@@ -3229,10 +3266,18 @@ function M.apply_config(resp, cfg, opts)
 	-- daemon derives the served BSSes and the LAN bridge from the running
 	-- hostapd configs at start, and its own reload trigger fires on LuCI's
 	-- reload_config, never on this `wifi reload`. So it is restarted here,
-	-- after the reload has written the configs it will read. A push is a
-	-- rare event, and the daemon keeps what it learned in its peers file.
-	if interop_veth and M._read_file("/etc/init.d/openuf-rrb") then
-		M._run_cmd("/etc/init.d/openuf-rrb restart")
+	-- after the reload has written the configs it will read, and only when
+	-- what it reads changed (M.rrb_signature): every WLAN edit is a push,
+	-- and the lab showed a restart on each one. The daemon keeps what it
+	-- learned in its peers file.
+	if interop_veth then
+		local sig = M.rrb_signature(wcursor)
+		if sig ~= M._rrb_sig and M._read_file("/etc/init.d/openuf-rrb") then
+			M._run_cmd("/etc/init.d/openuf-rrb restart")
+			M._rrb_sig = sig
+		end
+	else
+		M._rrb_sig = nil
 	end
 	-- netifd may hand the interfaces new netdev names on the way back up, and
 	-- the wireless config this reload just wrote is the very thing the radio

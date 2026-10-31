@@ -461,6 +461,24 @@ return {
 					ucihelper.apply_config(resp, {config = {unifi_ft_interop = true}}, {})
 					assert_nil(index_of("/etc/init.d/network reload 2>/dev/null"), "veth present: no reload")
 					assert_eq(#db.wireless.openuf_radio0_corp.r0kh, 2, "hand peer + wildcard without learned ones")
+					-- Lab: every push restarted the translator. Nothing it
+					-- reads changed (only a learned key holder went), so not.
+					assert_nil(index_of("/etc/init.d/openuf-rrb restart"),
+						"same BSSes, bridge, mobility domain and key: no restart")
+					-- the SSID (so the mobility domain) changes: restarted
+					cmds = {}
+					resp.vap_table[1].ssid = "corp2"
+					ucihelper.apply_config(resp, {config = {unifi_ft_interop = true}}, {})
+					resp.vap_table[1].ssid = "corp"
+					assert_not_nil(index_of("/etc/init.d/openuf-rrb restart"), "new mobility domain: restarted")
+					-- the veth recreated (deleted under us): restarted though
+					-- the config is the same, the daemon's end went with it
+					veth_up = false
+					ucihelper.apply_config(resp, {config = {unifi_ft_interop = true}}, {})
+					cmds = {}
+					veth_up = false
+					ucihelper.apply_config(resp, {config = {unifi_ft_interop = true}}, {})
+					assert_not_nil(index_of("/etc/init.d/openuf-rrb restart"), "veth recreated: restarted")
 
 					-- forget takes the veth pair with everything else
 					cmds = {}
