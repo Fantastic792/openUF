@@ -349,5 +349,10 @@ for f in $(git ls-files -s openuf | awk '$1 == "100755" { print $4 }'); do
 done
 check "dist.sh keeps every executable bit git records (lost:${_lost:- none})" test -z "$_lost"
 
+# ── B9: PACKAGING.md's hard-deps row names the Makefile's DEPENDS ──────────
+for _d in $(sed -n '/^  DEPENDS:=/,/^  PKGARCH/p' package/openuf/Makefile | sed 's/\\//g' | tr ' \t' '\n\n' | grep '^+'); do
+	check "PACKAGING.md names $_d" grep -qF -- "$_d" PACKAGING.md
+done
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
