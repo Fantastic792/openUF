@@ -329,7 +329,8 @@ return {
 				if path == "/etc/init.d/openuf-rrb" then return "#!/bin/sh /etc/rc.common\n" end
 				return nil
 			end
-			ucihelper._run_cmd = function() return true end
+			local cmds = {}
+			ucihelper._run_cmd = function(cmd) cmds[#cmds + 1] = cmd; return true end
 			ucihelper._bcfilter = {reconcile = function() end}
 			ucihelper._shaper = {reconcile = function() end}
 			ucihelper._ftinterop = ftinterop
@@ -354,6 +355,12 @@ return {
 						assert_eq(raw, "sae_groups=19,sae_sync=5",
 							"SAE lines kept, no ft_iface, push " .. push)
 						assert_nil(next(ucihelper.DELETE), "DELETE still empty, push " .. push)
+					end
+					-- No BSS on the veth: nothing for the translator to pick
+					-- up, so it is not restarted on every push.
+					for _, c in ipairs(cmds) do
+						assert_neq(c, "/etc/init.d/openuf-rrb restart",
+							"no veth: the translator is left alone")
 					end
 				end)
 			end)

@@ -2575,8 +2575,13 @@ function M.apply_config(resp, cfg, opts)
 					if fti then
 						fti.apply(extra, vap, M.vap_bssid(vap.radio, vap.ssid),
 							get_uci().cursor(), M.DELETE, opts and opts.rrb_peers)
-						if type(extra.hostapd_bss_options) == "table" then
-							interop_veth = true
+						-- Only a BSS really put on the veth: the list may be
+						-- M.DELETE (no line) or hold other writers' lines.
+						local bo = extra.hostapd_bss_options
+						if type(bo) == "table" and bo ~= M.DELETE then
+							for _, l in ipairs(bo) do
+								if tostring(l):match("^ft_iface=") then interop_veth = true end
+							end
 						end
 					else
 						io.stderr:write("openuf: unifi_ft_interop is on but "
