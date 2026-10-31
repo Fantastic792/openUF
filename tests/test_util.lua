@@ -79,6 +79,10 @@ return {
 			assert_false(util.valid_ifname(string.rep("a", 16)), "16 do not")
 			assert_false(util.valid_ifname("wlan0 && reboot"), "no shell")
 			assert_false(util.valid_ifname(""), "empty")
+			assert_false(util.valid_ifname("-f"), "a leading dash is an option to ip/tc")
+			assert_false(util.valid_ifname("--help"), "so is a double one")
+			assert_false(util.valid_ifname(".."), "not a path")
+			assert_true(util.valid_ifname("br-lan"), "a dash inside is fine")
 		end
 	},
 	{
