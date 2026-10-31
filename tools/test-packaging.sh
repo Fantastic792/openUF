@@ -254,5 +254,41 @@ srcdl 1
 check "setup.sh refuses an archive that does not match" grep -q '^die: the source archive does not match' "$R/dl/out"
 check "and unpacks nothing" eval '! grep -q ^SRC= "$R/dl/out"'
 
+# ── B3: update.sh's backup and rollback cover the init scripts and links ───
+newroot rollback
+mkdir -p "$R/opt/openuf" "$R/etc/openuf" "$R/etc/rc.d" "$R/tmp"
+echo old > "$R/opt/openuf/inform.lua"; echo state > "$R/etc/openuf/state.json"
+printf '#!/bin/sh\necho old-init "$1" >> "%s/init.log"\n' "$R" > "$R/etc/init.d/openuf"
+chmod +x "$R/etc/init.d/openuf"
+ln -s ../init.d/openuf "$R/etc/rc.d/S95openuf"
+ln -s /opt/openuf/hook/syswrapper.sh "$R/usr/bin/syswrapper.sh"
+awk '/^BACKUP=/ { f = 1 } f { print } f && /^}$/ { exit }' update.sh | reroot \
+	| sed "s#-C / #-C $R/ #g; s#-C /\$#-C $R/#; s#\"/\\\$_p\"#\"$R/\$_p\"#g; s#cd / #cd $R/ #; s#/tmp/openuf-backup#$R/tmp/openuf-backup#" \
+	> "$R/backup.sh"
+if grep -qE '(-C /( |$)|"/\$_p"|cd / )' "$R/backup.sh"; then
+	# never run a block that would back up or restore into the host's /
+	bad "the rerooted backup block still names a host path"; : > "$R/backup.sh"
+fi
+( die() { echo "die: $*"; exit 1; }; ok() { :; }; warn() { :; }
+  INSTALL_DIR=$R/opt/openuf
+  . "$R/backup.sh"
+  # the new version's install: a changed tree and init script, a new service
+  echo new > "$R/opt/openuf/inform.lua"; echo new-only > "$R/opt/openuf/new.lua"
+  printf '#!/bin/sh\necho new-init "$1" >> "%s/init.log"\n' "$R" > "$R/etc/init.d/openuf"
+  printf '#!/bin/sh\n' > "$R/etc/init.d/openuf-rrb"; ln -s ../init.d/openuf-rrb "$R/etc/rc.d/S96openuf-rrb"
+  restore_backup ) > "$R/out" 2>&1
+check "the backup holds the init script" eval 'tar tzf "$R"/tmp/openuf-backup-*.tgz | grep -qx etc/init.d/openuf'
+check "the backup holds the rc.d link" eval 'tar tzf "$R"/tmp/openuf-backup-*.tgz | grep -qx etc/rc.d/S95openuf'
+check "the backup holds the command link" eval 'tar tzf "$R"/tmp/openuf-backup-*.tgz | grep -qx usr/bin/syswrapper.sh'
+check "rollback restores the old tree" grep -qx old "$R/opt/openuf/inform.lua"
+check "rollback drops the new version's files" test ! -e "$R/opt/openuf/new.lua"
+check "rollback restores the old init script" grep -q old-init "$R/etc/init.d/openuf"
+check "rollback restarts with the old init script" grep -q 'old-init restart' "$R/init.log"
+check "rollback removes a service the new version added" test ! -e "$R/etc/init.d/openuf-rrb"
+check "rollback removes its rc.d link" test ! -L "$R/etc/rc.d/S96openuf-rrb"
+check "rollback keeps the old rc.d link" test -L "$R/etc/rc.d/S95openuf"
+check "rollback keeps the command link" test -L "$R/usr/bin/syswrapper.sh"
+check "rollback keeps the state" grep -qx state "$R/etc/openuf/state.json"
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

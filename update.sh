@@ -273,13 +273,28 @@ ok "${FREE_KB:-?} KB free on the overlay"
 
 # ─── Backup ─────────────────────────────────────────────────────────────────
 BACKUP="/tmp/openuf-backup-$(date +%Y%m%d-%H%M%S).tgz"
-tar czf "$BACKUP" -C / opt/openuf etc/openuf 2>/dev/null \
+# Everything install.sh writes outside the state directory, not only the
+# tree: the init scripts (a new version's could otherwise outlive a rollback
+# and start the old tree with the new script), the command links, and the
+# rc.d links that say which services are enabled. Relative to /, and only
+# what exists: tar fails on a missing name.
+INSTALLED_FILES="etc/init.d/openuf etc/init.d/openuf-rrb usr/bin/syswrapper.sh usr/bin/openuf
+	usr/sbin/openuf-convert usr/sbin/openuf-deps"
+BACKUP_PATHS=""
+for _p in opt/openuf etc/openuf $INSTALLED_FILES $(cd / && ls -d etc/rc.d/*openuf* 2>/dev/null); do
+	if [ -e "/$_p" ] || [ -L "/$_p" ]; then BACKUP_PATHS="$BACKUP_PATHS $_p"; fi
+done
+tar czf "$BACKUP" -C / $BACKUP_PATHS 2>/dev/null \
 	|| die "could not write the backup $BACKUP; not updating without one"
 ok "backup $BACKUP ($(wc -c < "$BACKUP" | tr -d ' ') bytes; /tmp is tmpfs, so it is gone at reboot)"
 
+# The tree and the files beside it go first, so what the new version added
+# (an init script, an rc.d link) does not survive next to the old version.
 restore_backup() {
 	warn "restoring $BACKUP"
 	rm -rf "$INSTALL_DIR"
+	for _p in $INSTALLED_FILES; do rm -f "/$_p"; done
+	rm -f /etc/rc.d/*openuf*
 	tar xzf "$BACKUP" -C / && ok "previous openUF restored" || warn "RESTORE FAILED -- $BACKUP is intact, unpack it by hand: tar xzf $BACKUP -C /"
 	/etc/init.d/openuf restart >/dev/null 2>&1
 }
