@@ -188,7 +188,7 @@ define Package/openuf/install
 	$(LN) ../lib/openuf/hook/openuf-deps.sh $(1)/usr/sbin/openuf-deps
 	$(INSTALL_DIR) $(1)/usr/lib/openuf/rrb
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/rrb/rrb-unifi.uc $(1)/usr/lib/openuf/rrb/
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/openuf/rrb/README.md $(1)/usr/lib/openuf/rrb/
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/openuf/rrb/README.md $(PKG_BUILD_DIR)/openuf/rrb/LICENSE $(1)/usr/lib/openuf/rrb/
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/etc/init.d/openuf $(1)/etc/init.d/openuf
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/etc/init.d/openuf-rrb $(1)/etc/init.d/openuf-rrb

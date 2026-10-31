@@ -31,4 +31,5 @@ The standalone setup tool (`rrb-unifi-setup`) is not vendored: `install`,
 (`openuf/hook/openuf-rrb.sh`, adapted from it).
 
 License: GPL-3.0-or-later, the same as the rest of openUF since 2026-10-25
-(the repository's LICENSE; the copyright holders are listed in NOTICE).
+(the GPL-3.0 text is `LICENSE` here, a copy of the repository's, installed with the
+translator; the copyright holders are listed in NOTICE).

@@ -302,5 +302,10 @@ for v in 'http://a/inform?x=1&y=2' 'http://a|b/inform' 'http://a/in\form' 'http:
 done
 check "conf_set leaves the other keys" grep -qxF '	l2_announce = true,' "$CONF"
 
+# ── B5: the vendored translator carries its GPL text ───────────────────────
+check "openuf/rrb/LICENSE is the repository's GPL-3.0 text" cmp -s openuf/rrb/LICENSE LICENSE
+check "the package installs it beside the translator" \
+	grep -q 'openuf/rrb/LICENSE \$(1)/usr/lib/openuf/rrb/' package/openuf/Makefile
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
