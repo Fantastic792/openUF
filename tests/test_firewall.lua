@@ -89,8 +89,12 @@ return {
 			local exec, r = fake_nft(function(l) return l:find("daddr", 1, true) end)
 			local orig = firewall._exec
 			firewall._exec = exec
-			firewall.reconcile({"aa:bb:cc:dd:ee:01"})
-			firewall._exec = orig
+			local orig_stderr, logged = io.stderr, {}
+			io.stderr = {write = function(_, s) logged[#logged + 1] = s end}
+			local res = firewall.reconcile({"aa:bb:cc:dd:ee:01"})
+			firewall._exec, io.stderr = orig, orig_stderr
+			assert_false(res, "reconcile reports the partial apply")
+			assert_contains(table.concat(logged), "not fully applied", "and logs it")
 			local joined = table.concat(r.cmds, "\n")
 			assert_contains(joined, "ether saddr @blocked_macs drop", "the other rule is installed")
 			assert_contains(joined, "blocked_macs { aa:bb:cc:dd:ee:01 }", "and the element")

@@ -58,8 +58,13 @@ function M.reconcile(blocked_macs)
 	stmts[#stmts + 1] = "add chain " .. T .. " block { type filter hook forward priority 0; }"
 	stmts[#stmts + 1] = "add rule " .. T .. " block ether saddr @blocked_macs drop"
 	stmts[#stmts + 1] = "add rule " .. T .. " block ether daddr @blocked_macs drop"
-	util.nft_apply(T, stmts, M._exec)
-	return true
+	-- false when any statement was refused: a block that did not take is
+	-- said out loud rather than reported as in force.
+	local ok = util.nft_apply(T, stmts, M._exec)
+	if not ok then
+		io.stderr:write("firewall: blocklist not fully applied (nft refused a statement)\n")
+	end
+	return ok and true or false
 end
 
 -- Injectable: run a command and return its output.

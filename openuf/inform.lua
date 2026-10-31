@@ -5790,8 +5790,15 @@ function M._shaper_resync(st)
 		st.sta_rates = next(rates) and rates or nil
 		M._state.save(st)
 	end
-	shaper.sync(desired)
-	return true
+	-- sync is false when a netdev did not end up as wanted. Logged when it
+	-- starts and when it clears, not on every heartbeat.
+	local ok = shaper.sync(desired) ~= false
+	if ok ~= not M._shaper_failed then
+		M._shaper_failed = not ok
+		io.stderr:write(ok and "inform: shaper: rate limits applied again\n"
+			or "inform: shaper: a rate limit did not apply (tc refused it)\n")
+	end
+	return ok
 end
 
 -- A block's refusal in hostapd (firewall.deny_sync) is lost whenever hostapd

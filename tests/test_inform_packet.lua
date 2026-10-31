@@ -8243,6 +8243,29 @@ return {
 		end
 	},
 	{
+		name = "inform packet: _shaper_resync passes on a failed shaper.sync and logs it once",
+		fn = function()
+			local real_sh, sync_ok = inform._shaper, false
+			inform._shaper = {sync = function() return sync_ok end}
+			inform._shape_obs = {complete = false, by_ifname = {}, where = {}, conn = {}}
+			inform._shaper_failed = nil
+			local res1, res2, res3
+			local out = with_stderr(function()
+				res1 = inform._shaper_resync(sample_state())
+				res2 = inform._shaper_resync(sample_state())
+			end)
+			sync_ok = true
+			local out2 = with_stderr(function() res3 = inform._shaper_resync(sample_state()) end)
+			inform._shaper, inform._shape_obs, inform._shaper_failed = real_sh, nil, nil
+			assert_false(res1, "a failed sync is reported")
+			assert_false(res2)
+			local _, n = out:gsub("did not apply", "")
+			assert_eq(n, 1, "logged once, not per heartbeat")
+			assert_true(res3, "a good sync again")
+			assert_contains(out2, "applied again", "and the recovery is logged")
+		end
+	},
+	{
 		name = "inform packet: a client's own limit lasts one association",
 		fn = function()
 			local save, saves = inform._state.save, 0
