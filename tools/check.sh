@@ -171,7 +171,8 @@ echo "[ State directory ]"
 if [ -d /etc/openuf ]; then
 	ok "/etc/openuf exists"
 	if [ -f /etc/openuf/state.json ]; then
-		info "state.json present — $(cat /etc/openuf/state.json)"
+		# The authkey is the controller session secret: never print it.
+		info "state.json present — $(sed 's/"authkey"[[:space:]]*:[[:space:]]*"[^"]*"/"authkey":"(hidden)"/' /etc/openuf/state.json)"
 	else
 		info "state.json absent (will be created on first run)"
 	fi

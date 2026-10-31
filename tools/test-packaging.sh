@@ -354,5 +354,14 @@ for _d in $(sed -n '/^  DEPENDS:=/,/^  PKGARCH/p' package/openuf/Makefile | sed 
 	check "PACKAGING.md names $_d" grep -qF -- "$_d" PACKAGING.md
 done
 
+# ── B18: check.sh never prints the authkey ─────────────────────────────────
+newroot b18
+mkdir -p "$R/etc/openuf"
+printf '{\n  "authkey": "0123456789abcdef0123456789abcdef",\n  "adopted": true\n}\n' > "$R/etc/openuf/state.json"
+{ echo 'info() { echo "$*"; }'; grep 'state.json present' tools/check.sh | reroot; } > "$R/f.sh"
+sh "$R/f.sh" > "$R/out" 2>&1
+check "check.sh shows state.json" grep -q adopted "$R/out"
+check "check.sh hides the authkey" eval '! grep -q 0123456789abcdef "$R/out"'
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
