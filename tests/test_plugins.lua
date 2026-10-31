@@ -153,6 +153,23 @@ return {
 				plugins.vap_options(extra, VAP, cfg_of("p"), ENV)
 				assert_eq(extra.fine, "1", "untouched reserved and list options do not trip the check")
 			end)
+			-- Removing a reserved option with plain nil is refused too: the
+			-- edited copy replaces extra, so it would vanish unchecked.
+			for _, k in ipairs({"openuf_bcfilt", "ssid"}) do
+				with_plugins({p = plugin_src("extra.fine = '1'; extra." .. k .. " = nil")}, function(logged)
+					local extra = {openuf_bcfilt = "1", ssid = "x"}
+					plugins.vap_options(extra, VAP, cfg_of("p"), ENV)
+					assert_eq(extra[k], k == "ssid" and "x" or "1", k .. " survives")
+					assert_nil(extra.fine, k .. ": the edit is refused whole")
+					assert_true(has_log(logged, "removed"), k .. ": says why")
+				end)
+			end
+			-- A plugin's own option may still be removed.
+			with_plugins({p = plugin_src("extra.mine = nil")}, function()
+				local extra = {mine = "1"}
+				plugins.vap_options(extra, VAP, cfg_of("p"), ENV)
+				assert_nil(extra.mine, "a non-reserved option can go")
+			end)
 		end
 	},
 	{

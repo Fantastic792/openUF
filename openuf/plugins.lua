@@ -240,6 +240,15 @@ local function bad_edit(before, after, DELETE)
 			if why then return "option '" .. k .. "' is " .. why end
 		end
 	end
+	-- A reserved option removed outright (`extra.k = nil`) never shows up
+	-- in `after`, and vap_options replaces extra with the plugin's copy:
+	-- that deleted openUF's own option behind the check's back.
+	for k in pairs(before) do
+		if after[k] == nil and type(k) == "string"
+				and (RESERVED[k] or k:sub(1, 7) == "openuf_") then
+			return "option '" .. k .. "' is reserved to openUF (removed)"
+		end
+	end
 	return nil
 end
 
