@@ -4598,7 +4598,12 @@ function M.handle_response(json_str, st, cfg)
 					elseif k == "led_enabled" then
 						local enabled = (v == "true")
 						st.led_enabled = enabled
-						M._led.set_enabled(cfg and cfg.led, enabled)
+						-- Every config push repeats led_enabled. During a
+						-- Locate the blink owns the LED (set_enabled would end
+						-- it); unset-locate re-asserts this choice.
+						if not st.locating then
+							M._led.set_enabled(cfg and cfg.led, enabled)
+						end
 					elseif k == "authkey" then
 						-- Only trusted pre-adoption. Real L3 adoption has no SSH
 						-- step at all (controller logs "skip SSH adoption" for
@@ -5035,7 +5040,11 @@ function M.handle_response(json_str, st, cfg)
 				-- a restart can easily land between them, and only this copy
 				-- then knows what to put back. See M.run's startup handling.
 				local _, prev = M._led.locate_start(led_path)
-				st.locate_prev_trigger = prev
+				-- A second set-locate finds the LED on the blink ("timer") or
+				-- unreadable: the first one's snapshot is the one to keep.
+				if not (st.locating and (prev == nil or prev == "timer")) then
+					st.locate_prev_trigger = prev
+				end
 			else
 				M._led.locate_stop(led_path, st.locate_prev_trigger)
 				st.locate_prev_trigger = nil

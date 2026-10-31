@@ -5810,6 +5810,45 @@ return {
 		end
 	},
 	{
+		name = "inform packet: a second set-locate and an led_enabled push mid-Locate leave the LED right",
+		fn = function()
+			local st = sample_state({led_enabled = true})
+			local cur = "phy0tpt"
+			local writes = {}
+			local orig_w, orig_r = inform._led._write_file, inform._led._read_file
+			inform._led._write_file = function(path, v)
+				writes[#writes + 1] = {path = path, contents = v}
+				if path:find("/trigger$") then cur = v end
+				return true
+			end
+			inform._led._read_file = function(path)
+				if path:find("/trigger$") then return "none [" .. cur .. "] timer phy0tpt\n" end
+				return nil
+			end
+			inform._led._saved_trigger = {}
+			local cfg = {led = "/sys/class/leds/mt76-phy0"}
+			local ok, err = pcall(function()
+				inform.handle_response('{"_type":"cmd","cmd":"set-locate"}', st, cfg)
+				inform.handle_response('{"_type":"cmd","cmd":"set-locate"}', st, cfg)
+				assert_eq(st.locate_prev_trigger, "phy0tpt", "the second Locate keeps the first snapshot")
+				-- Restart between the two set-locates: no in-memory snapshot.
+				inform._led._saved_trigger = {}
+				inform.handle_response('{"_type":"cmd","cmd":"set-locate"}', st, cfg)
+				assert_eq(st.locate_prev_trigger, "phy0tpt", "nor does a restart lose it")
+				-- A config push mid-Locate repeats led_enabled.
+				inform.handle_response('{"_type":"setparam","mgmt_cfg":"led_enabled=false\\n"}', st, cfg)
+				assert_eq(cur, "timer", "the blink is not ended by the push")
+				assert_false(st.led_enabled, "the choice is recorded")
+				inform.handle_response('{"_type":"cmd","cmd":"unset-locate"}', st, cfg)
+				assert_eq(cur, "none", "unset-locate applies the pushed off")
+				assert_eq(writes[#writes].contents, "0", "dark, as chosen")
+			end)
+			inform._led._write_file, inform._led._read_file = orig_w, orig_r
+			inform._led._saved_trigger = {}
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform packet: stopping a Locate returns the LED to its chosen idle state",
 		fn = function()
 			-- Restoring the trigger is not the whole idle state. A dedicated
