@@ -4550,6 +4550,11 @@ function M.handle_response(json_str, st, cfg)
 		-- confirmed by amd989/unifi-gateway _parse_mgmt_cfg).
 		local mgmt_raw = resp.mgmt_cfg
 		local newly_adopted = false
+		-- The pushed cfgversion is recorded only once the WiFi pass has gone
+		-- through: recorded first (and saved by the IP-settings save below),
+		-- a failed apply_config left the controller sure the AP was
+		-- provisioned and it never pushed again.
+		local pending_cfgversion, wifi_applied = nil, true
 		if type(mgmt_raw) == "string" then
 			-- The controller builds mgmt_cfg whole and always appends
 			-- stun_url, so one without it means no STUN (stun.lua).
@@ -4589,7 +4594,7 @@ function M.handle_response(json_str, st, cfg)
 						-- firmware, only "off" is off.
 						st.guest_selfrun = (v == "off") and "off" or "pass"
 					elseif k == "cfgversion" then
-						if v ~= "" then st.cfgversion = v end
+						if v ~= "" then pending_cfgversion = v end
 					elseif k == "led_enabled" then
 						local enabled = (v == "true")
 						st.led_enabled = enabled
@@ -4766,9 +4771,15 @@ function M.handle_response(json_str, st, cfg)
 				if #radio_table > 0 or #vap_table > 0 then
 					local steering_active, roam_assist_active =
 						M._steering_flags(vap_table, sys_raw)
-					M._usteer.set_enabled(steering_active, cfg, roam_assist_active)
+					-- usteer is a side service: its failure must not stop the
+					-- WLANs from being written.
+					local ok_us, err_us = pcall(M._usteer.set_enabled,
+						steering_active, cfg, roam_assist_active)
+					if not ok_us then
+						io.stderr:write("inform: usteer: " .. tostring(err_us) .. "\n")
+					end
 					M._usteer_filter_next = 0   -- re-check the sync filter next tick
-					pcall(ufuci.apply_config,
+					local ok_ac, err_ac = pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,
 							roam_assist_active = roam_assist_active,
@@ -4777,6 +4788,15 @@ function M.handle_response(json_str, st, cfg)
 							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac),
 							backhaul = backhaul_plan,
 							rrb_peers = st and st.rrb_peers})
+					if not ok_ac then
+						-- The wireless config is committed once, at the end of
+						-- apply_config, so a raise before it leaves the previous
+						-- WLANs on disk; the cfgversion stays unrecorded and the
+						-- controller pushes again.
+						wifi_applied = false
+						io.stderr:write("inform: WiFi config not applied, the "
+							.. "controller will push again: " .. tostring(err_ac) .. "\n")
+					end
 					M._deny_reloaded()   -- apply_config ran `wifi reload`
 				end
 			end
@@ -4940,6 +4960,7 @@ function M.handle_response(json_str, st, cfg)
 			M._sync_blocked_stas(st, resp.blocked_sta)
 		end
 
+		if pending_cfgversion and wifi_applied then st.cfgversion = pending_cfgversion end
 		M._state.save(st)
 		-- Adopted by this answer's authkey, not by a set-adopt the reload
 		-- would have seen: lock the bootstrap account now. It used to wait

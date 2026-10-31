@@ -611,6 +611,66 @@ return {
 		end
 	},
 	{
+		name = "inform packet: a failed apply_config leaves the cfgversion unrecorded and says why",
+		fn = function()
+			local st = sample_state({cfgversion = "v1"})
+			local orig_us, orig_err = inform._usteer.set_enabled, io.stderr
+			inform._usteer.set_enabled = function() end
+			local fail = true
+			inform._ucihelper = {
+				apply_config = function() if fail then error("uci: boom") end end,
+			}
+			local buf = {}
+			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			local function push(ver)
+				return ('{"_type":"setparam","mgmt_cfg":"cfgversion=%s\\n","system_cfg":"%s"}')
+					:format(ver, (sys_cfg:gsub("\n", "\\n")))
+			end
+			local ok, err = pcall(function()
+				io.stderr = {write = function(_, t) buf[#buf + 1] = t end}
+				inform.handle_response(push("v2"), st, {net = {lan_cpueth = "eth0"}})
+				io.stderr = orig_err
+				assert_eq(st.cfgversion, "v1", "the controller is not told v2 is in place")
+				assert_contains(table.concat(buf), "uci: boom", "and the reason is logged")
+				fail = false
+				inform.handle_response(push("v2"), st, {net = {lan_cpueth = "eth0"}})
+				assert_eq(st.cfgversion, "v2", "the re-push that applies is recorded")
+			end)
+			io.stderr = orig_err
+			inform._usteer.set_enabled = orig_us
+			inform._ucihelper = nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: a raising usteer.set_enabled does not stop the WLANs being written",
+		fn = function()
+			local st = sample_state({cfgversion = "v1"})
+			local orig_us, orig_err = inform._usteer.set_enabled, io.stderr
+			inform._usteer.set_enabled = function() error("usteer: boom") end
+			local applied = false
+			inform._ucihelper = {apply_config = function() applied = true end}
+			local buf = {}
+			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			local resp = ('{"_type":"setparam","mgmt_cfg":"cfgversion=v2\\n","system_cfg":"%s"}')
+				:format((sys_cfg:gsub("\n", "\\n")))
+			local ok, err = pcall(function()
+				io.stderr = {write = function(_, t) buf[#buf + 1] = t end}
+				inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}})
+				io.stderr = orig_err
+				assert_true(applied, "apply_config still ran")
+				assert_eq(st.cfgversion, "v2", "and the version is recorded")
+				assert_contains(table.concat(buf), "usteer: boom", "the usteer failure is logged")
+			end)
+			io.stderr = orig_err
+			inform._usteer.set_enabled = orig_us
+			inform._ucihelper = nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform packet: handle_response setparam applies static IP from system_cfg",
 		fn = function()
 			local st = sample_state()
@@ -6027,10 +6087,14 @@ return {
 				saved = saved or {ip_mode = t.ip_mode, static_ip = t.static_ip,
 					static_netmask = t.static_netmask, static_gateway = t.static_gateway}
 			end
-			-- Everything after the IP branch blows up, the way usteer did.
+			-- Everything after the IP branch blows up, the way usteer did
+			-- (usteer and apply_config are pcalled now; the steering flags
+			-- right before them are not).
+			local orig_flags = inform._steering_flags
+			inform._steering_flags = function() error("boom: anything downstream can raise") end
 			inform._ucihelper = setmetatable({
 				begin_pass = function() end, end_pass = function() end,
-				apply_config = function() error("boom: anything downstream can raise") end,
+				apply_config = function() end,
 			}, {__index = orig_uci})
 
 			local cfg = {net = {lan_cpueth = "eth0"}, config = {}}
@@ -6041,6 +6105,7 @@ return {
 
 			inform._state.save, inform._netconfig._exec = orig_save, orig_exec
 			inform._ucihelper = orig_uci
+			inform._steering_flags = orig_flags
 
 			assert_false(ok, "the downstream failure really did raise")
 			assert_true(saved ~= nil, "state was saved anyway, before the raise")

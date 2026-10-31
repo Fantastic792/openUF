@@ -694,9 +694,10 @@ end
 
 -- Delete all openuf_* wifi-iface sections on the given radio (or all radios).
 -- radio: optional UCI radio name (e.g. "radio0"); nil removes from all radios.
-function M.wlan_clear(radio)
-	local uci = get_uci()
-	local cursor = uci.cursor()
+-- cursor: optional; given, the deletes are staged on it and the caller commits.
+function M.wlan_clear(radio, cursor)
+	local owned = cursor == nil
+	cursor = cursor or get_uci().cursor()
 	local to_delete = {}
 	cursor:foreach("wireless", "wifi-iface", function(s)
 		local name = s[".name"]
@@ -728,7 +729,7 @@ function M.wlan_clear(radio)
 	for _, name in ipairs(to_delete) do
 		cursor:delete("wireless", name)
 	end
-	cursor:commit("wireless")
+	release_cursor(cursor, owned, "wireless")
 end
 
 -- "Show Access Point Name in Beacon": the hostapd vendor_elements hex of a
@@ -2448,8 +2449,16 @@ function M.apply_config(resp, cfg, opts)
 		end
 	end
 
+	-- ONE cursor for the whole loop, committed once below: the three writers
+	-- (wlan_add, ppsk_add, mac_vlans_add) each used to open and commit their
+	-- own, so a four-WLAN push rewrote /etc/config/wireless four to twelve
+	-- times. Nothing between here and the commit reads the wireless config
+	-- through a second cursor, so there is no half-written state to observe.
+	-- The clear is staged on it too: a push that raises before the commit
+	-- leaves the previous WLANs on disk instead of none at all.
+	local wcursor = get_uci().cursor()
 	-- Clear existing openuf_ VAPs and re-add from vap_table
-	M.wlan_clear()
+	M.wlan_clear(nil, wcursor)
 	-- Every VLAN this push still wants an L2 for; anything else gets pruned
 	-- after the loop.
 	local wanted_vlans = {}
@@ -2470,12 +2479,6 @@ function M.apply_config(resp, cfg, opts)
 			if any_ft then M.ensure_ft_veth(get_uci().cursor()) end
 		end
 	end
-	-- ONE cursor for the whole loop, committed once below: the three writers
-	-- (wlan_add, ppsk_add, mac_vlans_add) each used to open and commit their
-	-- own, so a four-WLAN push rewrote /etc/config/wireless four to twelve
-	-- times. Nothing between here and the commit reads the wireless config
-	-- through a second cursor, so there is no half-written state to observe.
-	local wcursor = get_uci().cursor()
 	-- One read of the plugin list for the whole loop instead of one per VAP
 	-- (plugins.lua's begin_pass note). Closed after the commit below.
 	do

@@ -5385,11 +5385,11 @@ Wiphy phy2
 							 mac_vlans = {{mac = "00:00:5e:00:53:01", vid = 40}}},
 						},
 					}, {net = {lan_cpueth = "eth1"}})
-					-- One for wlan_clear's teardown, one for everything the VAP
-					-- loop staged. Not one per WLAN, and not three for the WLAN
-					-- that carries keys and overrides.
-					assert_eq(commits.wireless, 2,
-						"wlan_clear, then the whole VAP loop in a single commit")
+					-- One, for wlan_clear's teardown and everything the VAP loop
+					-- staged on the same cursor. Not one per WLAN, and not three
+					-- for the WLAN that carries keys and overrides.
+					assert_eq(commits.wireless, 1,
+						"wlan_clear and the whole VAP loop in a single commit")
 					-- And the config itself is unchanged by the deferral.
 					assert_not_nil(db.wireless.openuf_radio0_home, "the plain WLAN")
 					assert_eq(db.wireless.openuf_radio0_keys_psk1.key, "clientpass1",
@@ -5428,8 +5428,8 @@ Wiphy phy2
 						},
 						peer_ie = "dd0d026f556f554601aabbccddeeff",
 					})
-					assert_eq(commits.wireless, 2,
-						"wlan_clear, then the VAP loop and the backhaul in a single commit")
+					assert_eq(commits.wireless, 1,
+						"wlan_clear, the VAP loop and the backhaul in a single commit")
 					local dl = db.wireless[ucihelper.BACKHAUL_DL_PREFIX .. "radio1"]
 					local ul = db.wireless[ucihelper.BACKHAUL_UL_PREFIX .. "radio1"]
 					assert_not_nil(dl, "the downlink AP still landed")
@@ -5792,6 +5792,29 @@ Wiphy phy2
 			end)
 			ucihelper._write_file, ucihelper._remove_file = ow, orm
 			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "ucihelper: a push that raises mid-loop commits no wireless change, so the old WLANs stay",
+		fn = function()
+			with_ucihelper(function(db, _, commits)
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "openuf_radio0_old", "wifi-iface")
+				c:set("wireless", "openuf_radio0_old", "device", "radio0")
+				-- Any raise between the clear and the commit: here ftinterop's.
+				ucihelper._ftinterop = {
+					translator_active = function() return false end,
+					apply = function() error("fti: boom") end,
+				}
+				local ok, err = pcall(ucihelper.apply_config, {radio_table = {}, vap_table = {
+					{ssid = "corp", radio = "radio0", security = "wpa2",
+					 x_passphrase = "hunter22", fast_roaming_enabled = true},
+				}}, {config = {unifi_ft_interop = true}})
+				assert_false(ok, "the raise reaches the caller")
+				assert_contains(tostring(err), "fti: boom", "unchanged")
+				assert_nil(commits.wireless,
+					"the clear was only staged: on libuci the previous WLANs stay on disk")
+			end)
 		end
 	},
 	{
