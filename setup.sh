@@ -1434,9 +1434,16 @@ else
 	# A file install left from before: the init script already ignores it in
 	# favour of the package, so all it can do now is confuse. Its state (the
 	# adoption, in $STATE_DIR) is shared with the package and stays.
+	# install.sh's uninstall, not a bare rm -rf: with the package present it
+	# removes only that prefix's own files (the updater, its sysupgrade.conf
+	# line, its adoption shell, moving a bootstrap account onto the package's).
 	if [ "$FILES_INSTALLED" = 1 ]; then
-		rm -rf "$INSTALL_DIR"
-		ok "removed the file install under $INSTALL_DIR (state in $STATE_DIR kept)"
+		if ( cd "$SRC" && sh install.sh uninstall ) >/dev/null 2>&1; then
+			ok "removed the file install under $INSTALL_DIR (state in $STATE_DIR kept)"
+		else
+			rm -rf "$INSTALL_DIR"
+			warn "install.sh uninstall failed; removed $INSTALL_DIR itself (state in $STATE_DIR kept)"
+		fi
 	fi
 
 	# The package's install started the service with the shipped defaults;

@@ -147,5 +147,40 @@ check "uninstall keeps its shadow line" has '^ubnt:' "$R/etc/shadow"
 check "uninstall says why it kept it" has 'did not create it' "$R/out"
 check "uninstall keeps a group openUF did not make" has '^openuf:x:901' "$R/etc/group"
 
+# ── B7: setup.sh replaces a file install with install.sh uninstall ─────────
+# With the package in, uninstall removes only /opt/openuf's own files.
+newroot un-pkg; fileinstall
+mkdir -p "$R/usr/lib/openuf/hook"; : > "$R/usr/lib/openuf/inform.lua"
+printf '#!/bin/sh\necho "openuf $1" >> "%s/init.log"\n' "$R" > "$R/etc/init.d/openuf"
+chmod +x "$R/etc/init.d/openuf"
+ln -s ../lib/openuf/hook/syswrapper.sh "$R/usr/bin/syswrapper.sh"
+: > "$R/usr/bin/openuf-update"
+seed_shared
+sed -i 's#:/usr/lib/openuf/hook/adopt-shell.sh$#:/opt/openuf/hook/adopt-shell.sh#' "$R/etc/passwd"
+sed -i 's#^/usr/lib/openuf/hook/adopt-shell.sh$#/opt/openuf/hook/adopt-shell.sh#' "$R/etc/shells"
+sed -i "s#/opt/#$R/opt/#" "$R/etc/passwd" "$R/etc/shells"
+printf '/etc/openuf/\n%s/opt/openuf/conf.lua\n' "$R" > "$R/etc/sysupgrade.conf"
+# setup.sh's own block, run with install.sh (rerooted) as $SRC/install.sh
+mkdir -p "$R/src"; reroot < install.sh > "$R/src/install.sh"
+awk '/install.sh.s uninstall, not a bare rm -rf/ { f = 1 } f { print } f && /^\tfi$/ { exit }' setup.sh \
+	> "$R/block.sh"
+check "setup.sh's block is found" grep -q 'install.sh uninstall' "$R/block.sh"
+( ok() { echo "ok: $*"; }; warn() { echo "warn: $*"; }
+  PATH=$R/bin:$PATH; SRC=$R/src; INSTALL_DIR=$R/opt/openuf; STATE_DIR=/etc/openuf; FILES_INSTALLED=1
+  . "$R/block.sh" ) > "$R/out" 2>&1
+check "setup.sh reports the removal" has '^ok: removed the file install' "$R/out"
+check "the file install is gone" test ! -e "$R/opt/openuf"
+check "its updater is gone" test ! -e "$R/usr/bin/openuf-update"
+check "its sysupgrade line is gone" hasnt conf.lua "$R/etc/sysupgrade.conf"
+check "the package's init script stays" test -x "$R/etc/init.d/openuf"
+check "the package's service is not stopped" test ! -e "$R/init.log"
+check "the package's link stays" test -L "$R/usr/bin/syswrapper.sh"
+check "the cron block stays" has syswrapper "$R/etc/crontabs/root"
+check "the veth pair stays" has openuf_ftveth "$R/uci"
+check "the bootstrap account stays" has '^ubnt:' "$R/etc/passwd"
+check "it moves onto the package's shell" has ":$R/usr/lib/openuf/hook/adopt-shell.sh$" "$R/etc/passwd"
+check "the package's shell is registered" has "^$R/usr/lib/openuf/hook/adopt-shell.sh$" "$R/etc/shells"
+check "the old shell line is gone" hasnt "/opt/openuf/hook" "$R/etc/shells"
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
