@@ -4879,13 +4879,16 @@ function M.handle_response(json_str, st, cfg)
 				end
 			end
 
-			-- Controller-managed system settings: timezone, NTP servers and
-			-- the nightly `syswrapper.sh 11k-scan` cron job (sysconf.lua).
-			-- Each part is pcall'd inside apply(); this pcall is for parse.
+			-- Controller-managed system settings: timezone, NTP servers,
+			-- the nightly `syswrapper.sh 11k-scan` cron job and the device
+			-- name as hostname (sysconf.lua). Each part is pcall'd inside
+			-- apply(); this pcall is for parse. A new hostname goes into the
+			-- inform payload too, from this heartbeat on.
 			if M._sysconf then
 				pcall(function()
 					local sc = M._sysconf.parse(sys_raw)
-					if sc then M._sysconf.apply(sc) end
+					local r = sc and M._sysconf.apply(sc)
+					if r and r.hostname then st.hostname = r.hostname end
 				end)
 			end
 

@@ -6453,6 +6453,21 @@ return {
 		end
 	},
 	{
+		name = "inform: a hostname sysconf wrote goes into the inform payload's hostname",
+		fn = function()
+			local orig, real = inform._sysconf, dofile("openuf/sysconf.lua")
+			local got
+			inform._sysconf = {parse = real.parse,
+				apply = function(p) got = p; return {hostname = real.clean_hostname(p.hostname)} end}
+			local st = sample_state()
+			local resp = '{"_type":"setparam","system_cfg":"resolv.host.1.name=Living Room AP\n"}'
+			with_stderr(function() inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}}) end)
+			inform._sysconf = orig
+			assert_eq(got and got.hostname, "Living Room AP", "the name handed to sysconf")
+			assert_eq(st.hostname, "Living-Room-AP", "the payload reports the new hostname")
+		end
+	},
+	{
 		name = "inform: a setparam with the ebtables block records the intent in state and reconciles l2guard on the AP VAPs",
 		fn = function()
 			local orig_l2, real_uci = inform._l2guard, inform._ucihelper

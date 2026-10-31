@@ -49,6 +49,7 @@ local function fresh(db)
 	sysconf.CRONTAB = "/tmp/openuf_test_crontab"
 	sysconf._read_file = function(p) return files[p] end
 	sysconf._write_file = function(p, c) files[p] = c; return true end
+	sysconf._write_proc = function(p, c) files[p] = c; return true end
 	return commits, cmds, files
 end
 
@@ -352,6 +353,55 @@ return {
 			assert_contains(out, "sysconf: timezone: ", "and was reported")
 			assert_eq(#r, 0, "no crash")
 			assert_eq(sysconf.apply(nil).timezone, nil, "nil parsed -> nothing")
+		end
+	},
+	{
+		-- WiFiman showed renamed APs as "OpenWrt": the discovery reply sends
+		-- the kernel hostname, and the pushed name only reached the beacon
+		-- (hardware finding (e), 2026-10-29).
+		name = "sysconf: the pushed device name becomes the hostname, in UCI and the kernel",
+		fn = function()
+			local db = system_db("UTC", nil, nil)
+			local commits, _, files = fresh(db)
+			local p = sysconf.parse("resolv.host.1.name=Router-A\n")
+			assert_eq(p.hostname, "Router-A", "parsed")
+			local r
+			local out = with_stderr(function() r = sysconf.apply(p) end)
+			assert_eq(r.hostname, "Router-A", "written")
+			assert_eq(db.system.cfg01.hostname, "Router-A", "UCI hostname")
+			assert_eq(db.system.cfg01.openuf_hostname_orig, "U6_IW", "the board's own stamped")
+			assert_eq(files[sysconf.PROC_HOSTNAME], "Router-A\n", "kernel hostname")
+			assert_eq(#commits, 1, "system committed once")
+			assert_contains(out, "sysconf: hostname U6_IW -> Router-A", "logged")
+			-- the same push again: nothing to do
+			assert_false(sysconf.apply_hostname("Router-A"), "unchanged")
+			assert_eq(#commits, 1, "no second commit")
+			-- a rename keeps the first stamp
+			with_stderr(function() sysconf.apply_hostname("Router-B") end)
+			assert_eq(db.system.cfg01.openuf_hostname_orig, "U6_IW", "stamped once")
+			assert_eq(#commits, 2, "committed for the rename")
+			-- the kernel's hostname alone differs
+			files[sysconf.PROC_HOSTNAME] = "OpenWrt\n"
+			with_stderr(function() assert_eq(sysconf.apply_hostname("Router-B"), "Router-B", "kernel fixed") end)
+			assert_eq(#commits, 2, "UCI already right: no commit")
+			assert_eq(files[sysconf.PROC_HOSTNAME], "Router-B\n", "kernel hostname")
+		end
+	},
+	{
+		name = "sysconf: a device name is cut to what a hostname may hold; none pushed changes nothing",
+		fn = function()
+			assert_eq(sysconf.clean_hostname("Living Room AP"), "Living-Room-AP", "spaces")
+			assert_eq(sysconf.clean_hostname(" -AP_1 (top)- "), "AP-1-top", "runs and ends")
+			assert_eq(#sysconf.clean_hostname(string.rep("a", 80)), 63, "63 characters")
+			assert_nil(sysconf.clean_hostname("***"), "nothing left")
+			assert_nil(sysconf.clean_hostname(nil), "nil")
+			local db = system_db("UTC", nil, nil)
+			local commits = fresh(db)
+			assert_nil(sysconf.parse("resolv.host.1.name=\n"), "empty name: no block")
+			assert_nil(sysconf.parse(CAPTURE).hostname, "no name in the push")
+			assert_false(sysconf.apply_hostname(nil), "nothing to apply")
+			assert_eq(db.system.cfg01.hostname, "U6_IW", "left alone")
+			assert_eq(#commits, 0, "no commit")
 		end
 	},
 }

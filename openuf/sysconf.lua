@@ -41,6 +41,14 @@
 	a pushed command this build cannot run is logged, never written -- crond
 	running an unknown string as root is not "compatibility".
 
+	Device name -> hostname. resolv.host.1.name is the name the device has
+	in the controller (Devices -> [AP] -> Name). It becomes UCI
+	system.@system[0].hostname and /proc/sys/kernel/hostname, as UniFi
+	firmware does, so the discovery reply (announce.lua reads the proc file
+	on every refresh) and WiFiman show it instead of "OpenWrt". The name is
+	cut to what a hostname may hold; the board's own is stamped once as
+	openuf_hostname_orig. No name pushed: nothing changes.
+
 	The pushed cron user is ignored (jobs run as root here; the pushed account
 	does not exist -- see REVERSE-ENGINEERING.md backlog row 14). The timezone
 	is only ever written when it differs, which on a board setup.sh configured
@@ -55,6 +63,15 @@ local util = package.loaded["openuf.util"]
 M._uci  = nil                                            -- mock UCI table; nil = require("uci")
 M._exec = os.execute
 M._read_file = util.read_file
+-- A proc file is written in place: no temp file and rename there.
+M._write_proc = function(path, content)
+	local f = io.open(path, "w")
+	if not f then return false end
+	f:write(content)
+	f:close()
+	return true
+end
+M.PROC_HOSTNAME = "/proc/sys/kernel/hostname"
 -- Sibling temp file and rename, like state.save: crond must never see half a file.
 M._write_file = function(path, content)
 	local tmp = path .. ".tmp"
@@ -121,6 +138,18 @@ function M.is_valid_server(s)
 end
 
 -- Five crontab fields of digits, '*', ',', '-', '/'.
+-- A controller device name as a hostname: letters, digits and '-' only
+-- (anything else becomes '-', runs of '-' one), no '-' at either end, at
+-- most 63 characters. nil when nothing is left. "Living Room AP" ->
+-- "Living-Room-AP".
+function M.clean_hostname(name)
+	if type(name) ~= "string" then return nil end
+	local h = name:gsub("[^%w%-]", "-"):gsub("%-%-+", "-")
+	h = h:gsub("^%-+", ""):sub(1, 63):gsub("%-+$", "")
+	if h == "" then return nil end
+	return h
+end
+
 function M.is_valid_schedule(s)
 	if type(s) ~= "string" then return false end
 	local n = 0
@@ -138,13 +167,15 @@ end
 -- Returns nil when none of the three is present at all.
 function M.parse(sys_raw)
 	if type(sys_raw) ~= "string" then return nil end
-	local tz, ntp, cron = nil, nil, nil
+	local tz, ntp, cron, host = nil, nil, nil, nil
 	local ntp_rows, cron_rows = {}, {}
 	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
 		local k, v = line:match("^([^=]+)=(.*)$")
 		if k then
 			if k == "system.timezone" or (k == "locale.timezone" and tz == nil) then
 				if v ~= "" then tz = v end
+			elseif k == "resolv.host.1.name" then
+				if v ~= "" then host = v end
 			elseif k == "ntpclient.status" then
 				ntp = ntp or {servers = {}}
 				ntp.enabled = (v == "enabled")
@@ -213,8 +244,8 @@ function M.parse(sys_raw)
 		end
 		if cron.enabled == nil then cron.enabled = (#cron.jobs > 0) end
 	end
-	if tz == nil and ntp == nil and cron == nil then return nil end
-	return {timezone = tz, ntp = ntp, cron = cron}
+	if tz == nil and ntp == nil and cron == nil and host == nil then return nil end
+	return {timezone = tz, ntp = ntp, cron = cron, hostname = host}
 end
 
 -- ─── Apply ───────────────────────────────────────────────────────────────────
@@ -277,6 +308,31 @@ function M.apply_timezone(tz)
 	io.stderr:write(("sysconf: timezone %s -> %s (controller)\n"):format(tostring(cur), tz))
 	M._exec("/etc/init.d/system reload >/dev/null 2>&1")
 	return true
+end
+
+-- UCI system.@system[0].hostname and the kernel's hostname <- the pushed
+-- device name. Written only when either differs; the original is stamped
+-- once as openuf_hostname_orig. Returns the hostname when something was
+-- written, else false.
+function M.apply_hostname(name)
+	local h = M.clean_hostname(name)
+	if not h then return false end
+	local cursor = get_uci().cursor()
+	local sec = system_section(cursor)
+	if not sec then return false end
+	local cur = cursor:get("system", sec, "hostname")
+	local kernel = (M._read_file(M.PROC_HOSTNAME) or ""):match("^%s*(.-)%s*$")
+	if cur == h and kernel == h then return false end
+	if cur ~= h then
+		if not cursor:get("system", sec, "openuf_hostname_orig") then
+			cursor:set("system", sec, "openuf_hostname_orig", cur or "OpenWrt")
+		end
+		cursor:set("system", sec, "hostname", h)
+		cursor:commit("system")
+	end
+	M._write_proc(M.PROC_HOSTNAME, h .. "\n")
+	io.stderr:write(("sysconf: hostname %s -> %s (controller device name)\n"):format(tostring(cur), h))
+	return h
 end
 
 -- UCI system.ntp.server <- the pushed list, when the block is enabled and
@@ -400,6 +456,8 @@ function M.apply(parsed)
 	if not ok then io.stderr:write("sysconf: ntp: " .. tostring(res) .. "\n") end
 	ok, res = pcall(M.apply_cron, parsed.cron);         r.cron = ok and res or false
 	if not ok then io.stderr:write("sysconf: cron: " .. tostring(res) .. "\n") end
+	ok, res = pcall(M.apply_hostname, parsed.hostname); r.hostname = ok and res or false
+	if not ok then io.stderr:write("sysconf: hostname: " .. tostring(res) .. "\n") end
 	return r
 end
 
