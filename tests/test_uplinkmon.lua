@@ -229,4 +229,43 @@ return {
 			assert_nil(st.uplinkmon_enabled, "no block: off")
 		end
 	},
+	{
+		-- Lab: with the gateway gone the inform failed too, its backoff grew
+		-- to 60 s, and the fifth verdict was due after about 4.5 minutes.
+		name = "uplinkmon: a failed verdict caps the heartbeat at PROBE_S until the uplink answers",
+		fn = function()
+			uplinkmon._fails = 0
+			assert_nil(uplinkmon.wait_cap(), "healthy: no cap")
+			uplinkmon.decide(true, false, false)
+			assert_eq(uplinkmon.wait_cap(), uplinkmon.PROBE_S, "counting: probe cadence")
+			for _ = 2, uplinkmon.FAIL_TICKS do uplinkmon.decide(true, false, false) end
+			assert_eq(uplinkmon.wait_cap(), uplinkmon.PROBE_S, "isolated: still, so recovery is quick")
+			uplinkmon.decide(true, true, true)
+			assert_nil(uplinkmon.wait_cap(), "answered: no cap")
+
+			-- inform's cycle: a 60 s backoff is cut to PROBE_S, the backoff kept
+			local orig = {tick = inform._tick, idle = inform._idle, gc = inform._collectgarbage,
+				um = inform._uplinkmon, bh = inform._backhaul}
+			local waited
+			inform._tick = function() return 60 end
+			inform._collectgarbage = function() end
+			inform._idle = function(_, wait) waited = wait; return nil end
+			inform._uplinkmon = uplinkmon
+			inform._backhaul = nil
+			local ok, err = pcall(function()
+				local ctx = {interval = 10, backoff = 60, last_mtime = "x"}
+				uplinkmon._fails = 0
+				inform._cycle({}, nil, nil, ctx, {})
+				assert_eq(waited, 60, "no failed verdict: the backoff's wait")
+				uplinkmon._fails = 2
+				inform._cycle({}, nil, nil, ctx, {})
+				assert_eq(waited, uplinkmon.PROBE_S, "counting: the probe cadence")
+				assert_eq(ctx.backoff, 60, "the backoff itself stands")
+			end)
+			inform._tick, inform._idle, inform._collectgarbage = orig.tick, orig.idle, orig.gc
+			inform._uplinkmon, inform._backhaul = orig.um, orig.bh
+			uplinkmon._fails = 0
+			if not ok then error(err, 0) end
+		end
+	},
 }

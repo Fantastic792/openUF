@@ -44,6 +44,13 @@ local util = package.loaded["openuf.util"]
 	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 M.FAIL_TICKS = 5
+
+-- The firmware probes every ~15 s. A verdict comes once per heartbeat, and a
+-- dead uplink is a failed inform, whose backoff grows to 60 s: five verdicts
+-- then took about 4.5 minutes in the lab instead of a minute. wait_cap keeps
+-- the heartbeat at this while any verdict has failed, isolation included, so
+-- the SSIDs also come back within one probe of the uplink returning.
+M.PROBE_S = 15
 -- The whole verdict's budget, in seconds: inform.lua asks once per
 -- heartbeat, in its main loop. `-c 2 -W 2` waited 2 s after the second
 -- probe, about 3 s of a dead uplink's heartbeat; `-w` ends ping at this
@@ -93,6 +100,13 @@ function M.reachable(host)
 	if not valid_host(host) then return nil end
 	-- Two probes per verdict, as the firmware: one answer is enough.
 	return util.exec_ok(M._exec("ping -c 2 -w " .. M.PING_DEADLINE .. " " .. host .. " >/dev/null 2>&1"))
+end
+
+-- The longest the next heartbeat may wait, or nil: PROBE_S while a failed
+-- verdict is counting (or holding the SSIDs down).
+function M.wait_cap()
+	if M._fails > 0 then return M.PROBE_S end
+	return nil
 end
 
 -- Pure policy step. reachable: true/false/nil. Returns the new isolated

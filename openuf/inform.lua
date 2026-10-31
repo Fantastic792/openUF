@@ -8306,6 +8306,14 @@ function M._cycle(st, cfg, ufhw, ctx, socket)
 			ctx.backoff = ctx.interval
 		end
 	end
+	-- The uplink monitor counting failed verdicts: one every PROBE_S, not one
+	-- per failed inform's backoff (uplinkmon.wait_cap). The backoff stands:
+	-- the controller is no nearer for it.
+	local um = M._uplinkmon
+	if um and um.wait_cap then
+		local ok, cap = pcall(um.wait_cap)
+		if ok and type(cap) == "number" and wait > cap then wait = cap end
+	end
 	M._collectgarbage("collect")
 	-- Another process wrote state.json (syswrapper over SSH): wake, and start
 	-- the backoff over, so the next heartbeat reloads it and goes out at once.
