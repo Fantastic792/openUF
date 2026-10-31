@@ -1343,11 +1343,15 @@ else
 	# feeds refreshed in the packages phase. The files are unsigned, hence
 	# --allow-untrusted for apk (opkg takes a local file as it is).
 	info "$PKG_ADD $(basename "$P_OPENUF") $(basename "$P_APP")${P_THEME:+ $(basename "$P_THEME")}"
+	# The package's preinst refuses to land beside a file install; this
+	# marker says the file install goes once the package is in (below).
+	[ "$FILES_INSTALLED" = 1 ] && : > "$INSTALL_DIR/.package-replaces"
 	case "$PKG" in
 		apk)  pkg_add_v --allow-untrusted "$P_OPENUF" "$P_APP" ${P_THEME:+"$P_THEME"} ;;
 		*)    pkg_add_v "$P_OPENUF" "$P_APP" ${P_THEME:+"$P_THEME"} ;;
-	esac || die "the package install failed (its output is above). Nothing about the
-       network has been touched yet, so this device is still a working router."
+	esac || { rm -f "$INSTALL_DIR/.package-replaces"
+		die "the package install failed (its output is above). Nothing about the
+       network has been touched yet, so this device is still a working router."; }
 	[ -f "$PKG_DIR/inform.lua" ] \
 		|| die "the package manager reported success but $PKG_DIR/inform.lua is missing"
 	ok "installed openuf and luci-app-openuf${P_THEME:+ and luci-theme-halo}"
