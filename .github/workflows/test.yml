@@ -88,31 +88,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check the shell scripts
         run: |
-          bash -n install.sh
-          bash -n setup.sh
-          bash -n update.sh
-          bash -n tools/check.sh
-          bash -n tools/deploy.sh
-          bash -n tools/dist.sh
-          bash -n tools/simulate.sh
-          bash -n openuf/hook/syswrapper.sh
-          bash -n openuf/hook/adopt-shell.sh
-          bash -n openuf/etc/init.d/openuf || true  # uses /etc/rc.common sourcing, not plain bash
-          # The device runs busybox ash, not bash. dash is the strictest POSIX
-          # shell available on a runner and catches bashisms bash -n accepts --
-          # setup.sh is the one that has to survive being piped into `sh` on an
-          # OpenWrt box, so it is checked twice.
-          dash -n setup.sh
-          dash -n install.sh
-          dash -n update.sh
-          dash -n tools/deploy.sh
-          bash -n openuf/hook/openuf-deps.sh && dash -n openuf/hook/openuf-deps.sh
-          bash -n openuf/hook/openuf-rrb.sh && dash -n openuf/hook/openuf-rrb.sh
-          bash -n openuf/etc/init.d/openuf-rrb || true  # rc.common sourcing, as openuf's
-          # The LuCI packages' uci-defaults run under busybox ash on the device.
-          for f in package/luci-app-openuf/root/etc/uci-defaults/* package/luci-theme-halo/root/etc/uci-defaults/*; do
-            bash -n "$f" && dash -n "$f"
+          # Every tracked shell script, the init scripts and the uci-defaults
+          # (no extension), by listing them, so a new one is checked without
+          # editing this file. The device runs busybox ash, not bash: dash is
+          # the strictest POSIX shell a runner has and catches bashisms bash -n
+          # accepts (setup.sh must survive being piped into `sh` on OpenWrt).
+          # An init script's rc.common sourcing is a runtime matter; both
+          # shells parse the files themselves, so there is no `|| true`.
+          fail=0
+          for f in $(git ls-files '*.sh' 'openuf/etc/init.d/*' 'package/*/root/etc/uci-defaults/*'); do
+            bash -n "$f" && dash -n "$f" || { echo "syntax error: $f"; fail=1; }
           done
+          exit $fail
 
   web-syntax:
     name: Device page, LuCI views and theme script syntax

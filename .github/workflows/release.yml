@@ -133,11 +133,12 @@ jobs:
           sudo luarocks --lua-version 5.1 install lua-cjson LUA_INCDIR=/usr/include/lua5.1
       - name: Shell syntax, both shells
         run: |
-          for f in setup.sh install.sh update.sh tools/deploy.sh tools/dist.sh \
-              tools/release-archive.sh openuf/etc/init.d/openuf openuf/hook/*.sh \
-              package/openuf/test.sh; do
-            bash -n "$f" && dash -n "$f"
+          # The same list as the Tests workflow: every tracked script.
+          fail=0
+          for f in $(git ls-files '*.sh' 'openuf/etc/init.d/*' 'package/*/root/etc/uci-defaults/*'); do
+            bash -n "$f" && dash -n "$f" || { echo "syntax error: $f"; fail=1; }
           done
+          exit $fail
       # One archive, openuf-<version>.tar.gz: the OpenWrt package builds from
       # it, and it is also a manual install -- unpack and run install.sh
       # inside, or hand it to setup.sh (OPENUF_TARBALL_URL) or openuf-update

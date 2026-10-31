@@ -435,5 +435,16 @@ check "release.yml: workflow permissions are read-only" eval "awk '/^permissions
 check "release.yml: contents: write only inside jobs (3 upload jobs)" eval '[ "$(grep -c "contents: write" '$_rel')" = 3 ] && ! grep -q "^  contents: write" '$_rel
 check "release.yml: the version job asks for no write" eval "! awk '/^  version:/,/^  verify:/' $_rel | grep -q 'contents: write'"
 
+# ── B10: the workflows syntax-check every shell script, with no `|| true` ──
+for _w in .github/workflows/test.yml .github/workflows/release.yml; do
+	check "$_w lists scripts with git ls-files" grep -q "git ls-files '\*.sh' 'openuf/etc/init.d/\*'" $_w
+	check "$_w has no '-n ... || true'" eval "! grep -E '(bash|dash|sh) -n .*\|\| true' $_w"
+done
+_bad=""
+for f in $(git ls-files '*.sh' 'openuf/etc/init.d/*' 'package/*/root/etc/uci-defaults/*'); do
+	bash -n "$f" 2>/dev/null && dash -n "$f" 2>/dev/null || _bad="$_bad $f"
+done
+check "every script the workflows check parses in bash and dash (bad:${_bad:- none})" test -z "$_bad"
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
