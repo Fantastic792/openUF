@@ -4317,8 +4317,9 @@ function M._parse_net_system_cfg(sys_raw)
 				dhcp = _wire_bool(v) == true
 			elseif k == "resolv.host.1.name" then
 				-- The device's name in the controller. A device never renamed
-				-- gets no resolv.host.1.name at all (hardware test,
-				-- 2026-10-29), and the beacon falls back to the model name.
+				-- may get none: Router A/B (2026-10-29) and one lab AP got no
+				-- resolv.host.1.name, another lab AP got its model ("U6IW").
+				-- With none the beacon falls back to the model name.
 				-- Reused as the WPS Device Name value when advertise_ap_name
 				-- is on, since it's the only controller-assigned "AP name"
 				-- string available on this wire protocol.
