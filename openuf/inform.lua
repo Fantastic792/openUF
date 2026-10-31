@@ -6164,14 +6164,25 @@ end
 -- adopted state. Returns the current mtime (unchanged from last_mtime if
 -- the file didn't change).
 
+-- What this process last read from or wrote to the state file (state._seen),
+-- nil when unknown.
+function M._state_seen()
+	local seen = M._state._seen
+	return seen and seen[M._state._state_file] or nil
+end
+
 function M._reload_if_changed(st, cfg, last_mtime)
 	local mtime = M._state_mtime(M._state._state_file)
 	if mtime == nil or mtime == last_mtime then
 		return last_mtime
 	end
-	-- This process's own state.save: st already holds it. Reloading would
-	-- only rebuild the blocklist table (a drop gap) and re-run the deny sync.
-	if mtime == M._state.last_written then
+	-- The bytes this process last read or wrote (its own state.save): st
+	-- already holds them. Reloading would only rebuild the blocklist table (a
+	-- drop gap) and re-run the deny sync. Not last_written alone: a file put
+	-- back to this process's last write after another process changed it
+	-- matched that, skipped the reload, and state.save then refused every
+	-- write for good (lab: 23 minutes, a cfgversion restored by hand).
+	if mtime == M._state_seen() then
 		return mtime
 	end
 	local was_adopted = st.adopted
@@ -8300,7 +8311,7 @@ function M._cycle(st, cfg, ufhw, ctx, socket)
 	-- the backoff over, so the next heartbeat reloads it and goes out at once.
 	local function state_changed()
 		local token = M._state_mtime(M._state._state_file)
-		return token ~= nil and token ~= ctx.last_mtime and token ~= M._state.last_written
+		return token ~= nil and token ~= ctx.last_mtime and token ~= M._state_seen()
 	end
 	if wait > 0 and M._idle(socket, wait, state_changed) == true then
 		ctx.backoff = ctx.interval

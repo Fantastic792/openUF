@@ -5239,6 +5239,37 @@ return {
 		end
 	},
 	{
+		-- Lab: a hand edit of cfgversion, then the file put back byte for
+		-- byte to the daemon's last write. That matched last_written, the
+		-- reload was skipped, and every state.save after it was refused.
+		name = "inform: _reload_if_changed reloads a file put back to this process's last write",
+		fn = function()
+			local path = inform._state._state_file
+			local st = sample_state({adopted = true, cfgversion = "v1"})
+			inform._state.save(st)
+			local mine = inform._state_mtime(path)
+			local orig_fw = inform._firewall
+			inform._firewall = {reconcile = function() end,
+				deauth = function() end, hostapd_sockets = function() return "" end, deny_sync = function() return false end}
+			local ok, err = pcall(function()
+				local f = assert(io.open(path, "w"))
+				f:write('{"adopted":true,"cfgversion":"v0","authkey":"11112222333344445555666677778888"}')
+				f:close()
+				local token = inform._reload_if_changed(st, {config = {}}, mine)
+				assert_eq(st.cfgversion, "v0", "the hand edit is loaded")
+				f = assert(io.open(path, "w"))
+				f:write(mine)
+				f:close()
+				inform._reload_if_changed(st, {config = {}}, token)
+				assert_eq(st.cfgversion, "v1", "the file put back is loaded too")
+				st.cfgversion = "v2"
+				assert_true(inform._state.save(st), "and the daemon can save again")
+			end)
+			inform._firewall = orig_fw
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform: _reload_if_changed reloads state and preserves mac/ip/hostname when mtime changes",
 		fn = function()
 			-- Write a real fixture to the redirected state file, distinct
@@ -7952,6 +7983,8 @@ return {
 			inform._collectgarbage = function() end
 			inform._state_mtime = function() return token end
 			inform._state.last_written = "own"
+			local seen_orig = inform._state._seen[inform._state._state_file]
+			inform._state._seen[inform._state._state_file] = "own"
 			inform._idle = function(_, _, changed)
 				seen[#seen + 1] = changed()
 				return seen[#seen] or nil
@@ -7970,6 +8003,7 @@ return {
 			inform._tick, inform._idle, inform._collectgarbage, inform._state_mtime =
 				orig.tick, orig.idle, orig.gc, orig.mtime
 			inform._state.last_written = orig.lw
+			inform._state._seen[inform._state._state_file] = seen_orig
 			if not ok then error(err, 0) end
 			assert_eq(tostring(seen[1]) .. tostring(seen[2]) .. tostring(seen[3]),
 				"falsefalsetrue", "only the foreign write counts")
