@@ -341,5 +341,13 @@ check "hotpatch restarts a running translator" grep -q rrb-restart "$R/svc.log"
 check "an unchanged openuf script is left alone" eval '! grep -q "updated .*/etc/init.d/openuf\$" "$R/out"'
 check "no stray backup in /etc/init.d" test ! -e "$R/etc/init.d/openuf-rrb.pre-hotpatch"
 
+# ── B13: dist.sh keeps every executable bit ────────────────────────────────
+sh tools/dist.sh >/dev/null 2>&1
+_lost=""
+for f in $(git ls-files -s openuf | awk '$1 == "100755" { print $4 }'); do
+	[ -x "build/${f}" ] || _lost="$_lost $f"
+done
+check "dist.sh keeps every executable bit git records (lost:${_lost:- none})" test -z "$_lost"
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

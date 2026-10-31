@@ -61,10 +61,11 @@ for src in $(find openuf -type f ! -name '._*' ! -name .DS_Store | sort); do
 	esac
 done
 
-# Preserve the executable bit the installer relies on.
-chmod +x "$STAGE/etc/init.d/openuf" "$STAGE/etc/init.d/openuf-rrb" "$STAGE/hook/syswrapper.sh" \
-	"$STAGE/hook/adopt-shell.sh" "$STAGE/hook/openuf-cli.sh" "$STAGE/hook/openuf-convert.sh" \
-	"$STAGE/hook/openuf-rrb.sh" "$STAGE/rrb/rrb-unifi.uc"
+# Preserve the executable bit the installer relies on: every init script and
+# hook script, not a hand-kept list (openuf-bootstrap.sh and openuf-deps.sh
+# were missing from one), and the translator. tools/test-packaging.sh checks
+# that every file git marks executable comes out executable.
+chmod +x "$STAGE"/etc/init.d/* "$STAGE"/hook/*.sh "$STAGE/rrb/rrb-unifi.uc"
 
 # Build stamp: which commit this tarball is, so `openuf-update --check` on a
 # device can say what it runs. "-dirty" means uncommitted changes were in the
