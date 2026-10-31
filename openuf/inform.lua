@@ -6060,6 +6060,25 @@ function M._forget_controller(prev, cfg)
 	if prev.led_enabled == false and M._led then
 		pcall(M._led.set_enabled, cfg and cfg.led, true)
 	end
+	-- The controller's client blocks and rate limits go with it: an empty
+	-- blocklist and no openUF tc on any netdev, not a reboot's worth of
+	-- dropped clients and caps nobody can see in a UI any more.
+	if M._firewall then
+		local ok, err = pcall(M._firewall.reconcile, {})
+		if not ok then io.stderr:write("inform: forget: blocklist: " .. tostring(err) .. "\n") end
+	end
+	if M._shaper then
+		local ok, err = pcall(M._shaper.sync, {})
+		if not ok then io.stderr:write("inform: forget: rate limits: " .. tostring(err) .. "\n") end
+	end
+	M._shape_obs = nil
+	-- What held SSIDs down for the controller's features starts over: the
+	-- reset cleared the persisted lists (sched_vaps_down, uplinkmon_down,
+	-- guest_vaps_down) and forget removed the VAPs, so the in-memory
+	-- switches follow -- a re-adoption must not inherit an "off the air".
+	M._guest_selfrun_on = false
+	M._inform_fails = 0
+	if M._uplinkmon then M._uplinkmon._fails, M._uplinkmon._oks = 0, 0 end
 end
 
 -- Detects an out-of-process change to the on-disk state file -- written by

@@ -19,6 +19,8 @@ inform._firewall = {
 	deauth = function() end,
 	hostapd_sockets = function() return "" end, deny_sync = function() return false end,
 }
+-- And tc: _forget_controller syncs the shaper to nothing.
+inform._shaper = {sync = function() return true end}
 -- Same for the controller's L2 hardening (nft) and system settings (UCI
 -- system, root's crontab); the tests that exercise them stub their own.
 inform._l2guard = {reconcile = function() return 0 end,
@@ -5203,7 +5205,9 @@ return {
 				f:write('{"adopted":false,"cfgversion":"v3"}')
 				f:close()
 				inform._reload_if_changed(st, {config = {}}, token)
-				assert_eq(reconciles, 1, "an external write still reloads")
+				-- One for the reload, one for the Forget it implies
+				-- (adopted -> not), which empties the blocklist.
+				assert_eq(reconciles, 2, "an external write still reloads")
 				assert_eq(st.cfgversion, "v3", "external contents loaded")
 			end)
 			inform._firewall = orig_fw
@@ -9147,6 +9151,28 @@ return {
 			if not ok then error(err, 0) end
 			assert_true(torn, "tables deleted")
 			assert_true(closed and left == nil, "listener closed")
+		end
+	},
+	{
+		name = "inform packet: forgetting the controller lifts its client blocks, rate limits and SSID holds",
+		fn = function()
+			local real_fw, real_sh = inform._firewall, inform._shaper
+			local blocked, shaped = "untouched", "untouched"
+			inform._firewall = {reconcile = function(l) blocked = l end}
+			inform._shaper = {sync = function(d) shaped = d end}
+			inform._guest_selfrun_on = true
+			inform._inform_fails = 99
+			local ok, err = pcall(inform._forget_controller,
+				{blocked_stas = {"00:00:5e:00:53:01"}, sta_rates = {}}, {})
+			inform._firewall, inform._shaper = real_fw, real_sh
+			local selfrun = inform._guest_selfrun_on
+			inform._guest_selfrun_on, inform._inform_fails = false, 0
+			if not ok then error(err, 0) end
+			assert_eq(type(blocked), "table", "the blocklist rebuilt")
+			assert_nil(next(blocked), "and empty")
+			assert_eq(type(shaped), "table", "tc synced")
+			assert_nil(next(shaped), "to nothing")
+			assert_false(selfrun, "guest selfrun hold released")
 		end
 	},
 	{
