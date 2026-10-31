@@ -307,5 +307,39 @@ check "openuf/rrb/LICENSE is the repository's GPL-3.0 text" cmp -s openuf/rrb/LI
 check "the package installs it beside the translator" \
 	grep -q 'openuf/rrb/LICENSE \$(1)/usr/lib/openuf/rrb/' package/openuf/Makefile
 
+# ── B6: hotpatch.sh also ships /etc/init.d/openuf-rrb when it differs ──────
+# The "device" is a scratch root; OPENUF_SSH is a stub that runs the remote
+# script locally with its paths rerooted and the service calls logged.
+newroot hotpatch
+D=$R/usr/lib/openuf
+mkdir -p "$D/etc/init.d" "$R/tmp"
+: > "$D/inform.lua"
+echo old-rrb > "$R/etc/init.d/openuf-rrb"; cp "$R/etc/init.d/openuf-rrb" "$D/etc/init.d/openuf-rrb"
+# what hotpatch ships is dist.sh's stripped tree; the openuf script is current
+sh tools/dist.sh >/dev/null 2>&1
+cp build/openuf/etc/init.d/openuf "$R/etc/init.d/openuf"
+echo "last_ok=$(( $(date +%s) + 100 ))" > "$R/tmp/openuf-status"
+cat > "$R/bin/ssh-stub" <<EOF
+#!/bin/sh
+shift
+s=\$(printf '%s' "\$1" | sed \
+	-e 's#/etc/init.d/openuf-rrb running#true#' \
+	-e 's#/etc/init.d/openuf-rrb restart#echo rrb-restart >> $R/svc.log#' \
+	-e 's#/etc/init.d/openuf restart#echo openuf-restart >> $R/svc.log#' \
+	-e 's#\([ "(]\)/etc/#\1$R/etc/#g; s#\([ "(]\)/usr/lib/openuf#\1$R/usr/lib/openuf#g' \
+	-e 's#\([ "(]\)/opt/#\1$R/opt/#g' \
+	-e 's#/tmp/openuf-status#$R/tmp/openuf-status#g; s#sleep 3#:#')
+exec sh -c "\$s"
+EOF
+chmod +x "$R/bin/ssh-stub"
+( OPENUF_SSH=$R/bin/ssh-stub sh tools/hotpatch.sh testhost ) > "$R/out" 2>&1
+check "hotpatch runs against the stub" grep -q 'testhost: done' "$R/out"
+check "hotpatch ships the changed openuf-rrb script" cmp -s "$R/etc/init.d/openuf-rrb" build/openuf/etc/init.d/openuf-rrb
+check "hotpatch keeps the old one inside the tree" grep -qx old-rrb "$D/etc/init.d/openuf-rrb.pre-hotpatch"
+check "hotpatch says so" grep -q 'updated .*/etc/init.d/openuf-rrb$' "$R/out"
+check "hotpatch restarts a running translator" grep -q rrb-restart "$R/svc.log"
+check "an unchanged openuf script is left alone" eval '! grep -q "updated .*/etc/init.d/openuf\$" "$R/out"'
+check "no stray backup in /etc/init.d" test ! -e "$R/etc/init.d/openuf-rrb.pre-hotpatch"
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
