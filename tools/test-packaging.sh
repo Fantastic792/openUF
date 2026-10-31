@@ -380,5 +380,22 @@ check "release-archive.sh passes MTIME to tar" grep -q -- '--mtime="@\$MTIME"' t
 check "MTIME honours SOURCE_DATE_EPOCH" eval '[ "$(SOURCE_DATE_EPOCH=12345; eval "$_line"; echo $MTIME)" = 12345 ]'
 check "MTIME without it is the commit time, stable" eval '[ "$(unset SOURCE_DATE_EPOCH; eval "$_line"; echo $MTIME)" = "$(git log -1 --format=%ct)" ]'
 
+# ── B15: verify.py's router.txt has its secret values redacted ─────────────
+cat > "$T/rt.py" <<'PYEOF'
+import sys
+sys.path.insert(0, "tools")
+import verify
+raw = ("wireless.a.key='hunter2hunter2'\nwireless.a.ssid='Home'\n"
+       "\toption psk 'abcdefgh1234'\n{\"authkey\": \"0123456789abcdef\", \"adopted\": true}\n"
+       "x_passphrase=letmein99 ok\nadopted=1\n")
+out = verify.redact_text(raw)
+for leak in ("hunter2hunter2", "abcdefgh1234", "0123456789abcdef", "letmein99"):
+    assert leak not in out, leak
+for keep in ("ssid='Home'", "adopted=1", '"adopted": true'):
+    assert keep in out, keep
+PYEOF
+check "verify.py redact_text hides secret values, keeps the rest" python3 "$T/rt.py"
+check "verify.py writes router.txt through redact_text" grep -q 'f.write(redact_text(raw))' tools/verify.py
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
