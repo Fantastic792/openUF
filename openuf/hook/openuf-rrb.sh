@@ -47,7 +47,7 @@ done
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'openuf rrb: %s\n' "$*" >&2; exit 2; }
-fp() { [ -n "$1" ] && echo "$(echo "$1" | cut -c1-4)..." || echo "-"; }	# key fingerprint
+fp() { [ -n "$1" ] && echo "sha256:$(printf %s "$1" | sha256sum | cut -c1-8)" || echo "-"; }	# key fingerprint: a hash, no key bytes
 nocolon() { echo "$1" | tr -d ':' | tr 'A-F' 'a-f'; }
 lower() { echo "$1" | tr 'A-F' 'a-f'; }
 sha() { printf %s "$1" | sha256sum | cut -d' ' -f1; }
