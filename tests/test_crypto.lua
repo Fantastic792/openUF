@@ -161,8 +161,7 @@ return {
 				if os.getenv("OPENUF_REQUIRE_GCM") == "1" then
 					error("OPENUF_REQUIRE_GCM=1 but no GCM backend -- CI must install lua-openssl")
 				end
-				print("SKIP  GCM known-answer vector (no backend -- luarocks install --local openssl)")
-				return
+				return skip("GCM known-answer vector (no backend -- luarocks install --local openssl)")
 			end
 			-- Vector generated once with pycryptodome (an independent AES-GCM
 			-- implementation, the same library tools/test_controller.py runs
@@ -195,8 +194,7 @@ return {
 				if os.getenv("OPENUF_REQUIRE_GCM") == "1" then
 					error("OPENUF_REQUIRE_GCM=1 but no GCM backend -- CI must install lua-openssl")
 				end
-				print("SKIP  GCM tamper test (no backend)")
-				return
+				return skip("GCM tamper test (no backend)")
 			end
 			local key = crypto.DEFAULT_KEY
 			local pt  = "GCM secret body!"
@@ -218,8 +216,7 @@ return {
 		name = "crypto: GCM without a backend raises a clear error (never silent garbage)",
 		fn = function()
 			if crypto.gcm_available() then
-				print("SKIP  no-backend contract (a GCM backend is installed here)")
-				return
+				return skip("no-backend contract (a GCM backend is installed here)")
 			end
 			local ok, err = pcall(crypto.aes_gcm_encrypt,
 				crypto.DEFAULT_KEY, FIXED_IV, "x", string.rep("\1", 40))

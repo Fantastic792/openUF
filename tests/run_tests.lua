@@ -21,6 +21,15 @@ end
 
 local passed = 0
 local failed = 0
+local skipped = 0
+
+-- A test that cannot run here (a missing optional backend, say) calls
+-- skip(reason). It is counted as SKIP, never as PASS: a test that returned
+-- early without asserting used to read exactly like one that passed.
+local SKIP = {}
+function skip(reason)
+	error({[SKIP] = tostring(reason or "skipped")}, 0)
+end
 
 -- Global assert helpers available to all test files
 
@@ -119,36 +128,133 @@ function fake_nft(fail)
 	return exec, r
 end
 
--- Run a list of {name, fn} test entries. Returns the file's own pass/fail
--- counts so the per-file summary can make a silently-vanished file visible.
-local seen_names = {}
-local function run_suite(tests)
-	local file_passed, file_failed = 0, 0
+-- Run a list of {name, fn} test entries. Returns the file's own
+-- pass/fail/skip counts so the per-file summary can make a silently-vanished
+-- file visible. seen holds the names run so far; emit prints a line (the
+-- self-test below captures it instead).
+local function run_suite(tests, seen, emit)
+	local p, f, s = 0, 0, 0
 	for _, t in ipairs(tests) do
-		-- A copy-pasted duplicate name makes two results indistinguishable in
-		-- the output (and hides one of them from anyone grepping a name).
-		if seen_names[t.name] then
-			print("WARN  duplicate test name: " .. tostring(t.name))
-		end
-		seen_names[t.name] = true
 		local ok, err = pcall(t.fn)
+		if seen[t.name] then
+			-- A copy-pasted duplicate name makes two results indistinguishable
+			-- in the output (and hides one of them from anyone grepping a name).
+			ok, err = false, "duplicate test name"
+		end
+		seen[t.name] = true
 		if ok then
-			file_passed = file_passed + 1
-			print("PASS  " .. t.name)
+			p = p + 1
+			emit("PASS  " .. tostring(t.name))
+		elseif type(err) == "table" and err[SKIP] then
+			s = s + 1
+			emit("SKIP  " .. tostring(t.name) .. " (" .. err[SKIP] .. ")")
 		else
-			file_failed = file_failed + 1
-			print("FAIL  " .. t.name)
-			print("      " .. tostring(err):gsub("\n", "\n      "))
+			f = f + 1
+			emit("FAIL  " .. tostring(t.name))
+			emit("      " .. tostring(err):gsub("\n", "\n      "))
 		end
 	end
-	passed = passed + file_passed
-	failed = failed + file_failed
-	return file_passed, file_failed
+	return p, f, s
 end
 
--- Test files to run in order.
--- Files that don't exist yet are silently skipped so the runner
--- remains useful during incremental development.
+-- Load and run one test file. loader is loadfile (the self-test passes a
+-- fake). Every way a file can fail to run counts as a failure: missing,
+-- unloadable, erroring at load, not returning a table, or holding no tests.
+local function run_file(filepath, loader, seen, emit)
+	local fn, err = loader(filepath)
+	if not fn then
+		emit("ERROR loading " .. filepath .. ": " .. tostring(err))
+		return 0, 1, 0
+	end
+	local ok, result = pcall(fn)
+	if not ok then
+		-- Loud on purpose: one counted failure, but the real damage is
+		-- every test in the file silently not running.
+		emit("ERROR running " .. filepath .. ": " .. tostring(result))
+		emit("      ALL of this file's tests were SKIPPED and did not run")
+		return 0, 1, 0
+	elseif type(result) ~= "table" then
+		-- A file that forgets `return {...}` (or returns a function) used
+		-- to vanish with ZERO failures recorded.
+		emit("ERROR " .. filepath .. " returned " .. type(result)
+			.. " instead of a test table -- its tests did not run")
+		return 0, 1, 0
+	elseif #result == 0 then
+		emit("ERROR " .. filepath .. " returned no tests")
+		return 0, 1, 0
+	end
+	local p, f, s = run_suite(result, seen, emit)
+	emit(("      %s: %d passed, %d failed, %d skipped"):format(filepath, p, f, s))
+	return p, f, s
+end
+
+-- Every tests/test_*.lua on disk has to be registered: a file that is not
+-- never runs. names iterates the directory listing (nil when it could not be
+-- read). Returns the number of problems found.
+local function check_registered(names, registered, emit)
+	if not names then
+		emit("ERROR cannot list tests/ -- the unregistered-file check did not run")
+		return 1
+	end
+	local bad, listed = 0, {}
+	for name in names do
+		listed["tests/" .. name] = true
+		if name:match("^test_.*%.lua$") and not registered["tests/" .. name] then
+			emit("ERROR tests/" .. name .. " exists but is not registered in "
+				.. "tests/run_tests.lua -- its tests did not run")
+			bad = bad + 1
+		end
+	end
+	-- An empty or failed `ls` (its exit status is lost under Lua 5.1) would
+	-- otherwise pass the check vacuously.
+	for f in pairs(registered) do
+		if not listed[f] then
+			emit("ERROR " .. f .. " is registered but `ls tests` did not list it")
+			bad = bad + 1
+		end
+	end
+	return bad
+end
+
+-- The runner checks itself first, on synthetic files: these are the rules
+-- the gate's Results: line depends on.
+local function self_test()
+	local out = {}
+	local function emit(l) out[#out + 1] = l end
+	local function iter(t) local i = 0 return function() i = i + 1 return t[i] end end
+	local seen = {}
+	local p, f, s = run_suite({
+		{name = "a", fn = function() end},
+		{name = "b", fn = function() skip("no backend") end},
+		{name = "c", fn = function() error("boom") end},
+		{name = "a", fn = function() end},
+	}, seen, emit)
+	assert_eq(p, 1, "one pass"); assert_eq(s, 1, "skip is not a pass")
+	assert_eq(f, 2, "an error and a duplicate name both fail")
+	assert_contains(table.concat(out, "\n"), "SKIP  b (no backend)", "SKIP line")
+	local function loader(t) return function(path) return t[path] end end
+	local files = {
+		["empty"] = function() return {} end,
+		["str"] = function() return "x" end,
+		["dies"] = function() error("load") end,
+		["ok"] = function() return {{name = "ok1", fn = function() end}} end,
+	}
+	local l = loader(files)
+	assert_eq(select(2, run_file("missing", l, {}, emit)), 1, "missing file fails")
+	assert_eq(select(2, run_file("empty", l, {}, emit)), 1, "zero tests fails")
+	assert_eq(select(2, run_file("str", l, {}, emit)), 1, "non-table fails")
+	assert_eq(select(2, run_file("dies", l, {}, emit)), 1, "load error fails")
+	local op, of = run_file("ok", l, {}, emit)
+	assert_eq(op, 1, "a good file passes"); assert_eq(of, 0, "a good file has no failure")
+	local reg = {["tests/test_a.lua"] = true}
+	assert_eq(check_registered(nil, reg, emit), 1, "unlistable dir fails")
+	assert_eq(check_registered(iter({}), reg, emit), 1, "empty listing fails")
+	assert_eq(check_registered(iter({"test_a.lua", "test_b.lua"}), reg, emit), 1,
+		"unregistered file fails")
+	assert_eq(check_registered(iter({"test_a.lua", "x.txt"}), reg, emit), 0, "clean dir")
+end
+
+-- Test files to run in order. A listed file that is missing is a failure.
 local test_files = {
 	"tests/test_lib.lua",
 	"tests/test_util.lua",
@@ -194,55 +300,34 @@ local test_files = {
 	"tests/test_plugins.lua",
 }
 
-for _, filepath in ipairs(test_files) do
-	local fn, err = loadfile(filepath)
-	if not fn then
-		-- Missing file during incremental development — skip silently
-		if err and not err:find("No such file") and not err:find("cannot open") then
-			print("ERROR loading " .. filepath .. ": " .. tostring(err))
-			failed = failed + 1
-		end
+do
+	local ok, err = pcall(self_test)
+	if ok then
+		passed = passed + 1
+		print("PASS  runner: self-test (skip, duplicate, missing/empty file, ls checks)")
 	else
-		local ok, result = pcall(fn)
-		if not ok then
-			-- Loud on purpose: one counted failure, but the real damage is
-			-- every test in the file silently not running.
-			print("ERROR running " .. filepath .. ": " .. tostring(result))
-			print("      ALL of this file's tests were SKIPPED and did not run")
-			failed = failed + 1
-		elseif type(result) ~= "table" then
-			-- A file that forgets `return {...}` (or returns a function) used
-			-- to vanish with ZERO failures recorded -- strictly worse than a
-			-- load error, since there was no signal at all.
-			print("ERROR " .. filepath .. " returned " .. type(result)
-				.. " instead of a test table -- its tests did not run")
-			failed = failed + 1
-		else
-			local fp, ff = run_suite(result)
-			print(("      %s: %d passed, %d failed"):format(filepath, fp, ff))
-		end
+		failed = failed + 1
+		print("FAIL  runner: self-test\n      " .. tostring(err))
 	end
 end
 
--- Every tests/test_*.lua on disk has to be in the list above: a file that is
--- not registered never runs, and until now nothing said so. `ls` rather than
--- a filesystem library -- the runner has no external dependencies, and
--- io.popen is standard Lua.
+local seen_names = {}
+for _, filepath in ipairs(test_files) do
+	local p, f, s = run_file(filepath, loadfile, seen_names, print)
+	passed, failed, skipped = passed + p, failed + f, skipped + s
+end
+
+-- `ls` rather than a filesystem library -- the runner has no external
+-- dependencies, and io.popen is standard Lua.
 do
 	local registered = {}
 	for _, f in ipairs(test_files) do registered[f] = true end
 	local h = io.popen("ls tests 2>/dev/null")
-	if h then
-		for name in h:lines() do
-			if name:match("^test_.*%.lua$") and not registered["tests/" .. name] then
-				print("ERROR tests/" .. name .. " exists but is not registered in "
-					.. "tests/run_tests.lua -- its tests did not run")
-				failed = failed + 1
-			end
-		end
-		h:close()
-	end
+	failed = failed + check_registered(h and h:lines(), registered, print)
+	if h then h:close() end
 end
 
-print(string.format("\nResults: %d passed, %d failed", passed, failed))
+-- The first two fields keep their old shape: tools read "N passed, M failed".
+-- A skip never fails the run.
+print(string.format("\nResults: %d passed, %d failed, %d skipped", passed, failed, skipped))
 os.exit(failed == 0 and 0 or 1)
