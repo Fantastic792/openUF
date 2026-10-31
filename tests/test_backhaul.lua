@@ -365,9 +365,10 @@ return {
 		end
 	},
 	{
-		name = "backhaul: decide() is wired-first, waits DOWN_SECS on loss and nothing on return",
+		name = "backhaul: decide() is wired-first, waits DOWN_SECS on loss and UP_SECS on return",
 		fn = function()
 			assert_eq(backhaul.DOWN_SECS, 10, "10 s")
+			assert_eq(backhaul.UP_SECS, 10, "10 s")
 			local mode, since = backhaul.decide(true, "wired", nil, 100)
 			assert_eq(mode, "wired", "carrier: wired")
 			assert_nil(since, "nothing counted")
@@ -379,8 +380,25 @@ return {
 			assert_eq(since, 100, "and still timed from the loss")
 			mode, since = backhaul.decide(false, "wired", since, 110)
 			assert_eq(mode, "wireless", "10 s: wireless, however many heartbeats that was")
-			mode, since = backhaul.decide(true, "wireless", since, 111)
-			assert_eq(mode, "wired", "carrier back: wired at once")
+			assert_nil(since, "nothing pending once switched")
+			mode, since = backhaul.decide(false, "wireless", since, 115)
+			assert_nil(since, "still no carrier while wireless: nothing pending")
+			-- A flap: back for 5 s, gone again. Each failback is a commit and
+			-- a wifi reload, so this must not cause one.
+			mode, since = backhaul.decide(true, "wireless", since, 120)
+			assert_eq(mode, "wireless", "carrier back: not yet")
+			assert_eq(since, 120, "the return is timed from now")
+			mode, since = backhaul.decide(true, "wireless", since, 125)
+			assert_eq(mode, "wireless", "5 s up: still wireless")
+			mode, since = backhaul.decide(false, "wireless", since, 126)
+			assert_eq(mode, "wireless", "gone again: wireless")
+			assert_nil(since, "and the hold starts over")
+			mode, since = backhaul.decide(true, "wireless", since, 130)
+			assert_eq(since, 130, "back again, timed afresh")
+			mode, since = backhaul.decide(true, "wireless", since, 139)
+			assert_eq(mode, "wireless", "9 s up: still wireless")
+			mode, since = backhaul.decide(true, "wireless", since, 140)
+			assert_eq(mode, "wired", "up UP_SECS: wired")
 			assert_nil(since, "timer reset")
 			mode, since = backhaul.decide(nil, "wireless", 100, 200)
 			assert_eq(mode, "wireless", "unknown carrier: hold")
@@ -418,7 +436,12 @@ return {
 				assert_eq(st.backhaul_wired_port, "wan", "the station is not a wired socket")
 				-- cable back
 				carrier.wan = true
-				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wired", "wired again at once")
+				local n = #uf.calls
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wireless",
+					"cable back: held UP_SECS first")
+				assert_eq(#uf.calls, n, "station untouched while the cable proves itself")
+				now = now + backhaul.UP_SECS
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wired", "then wired")
 				assert_eq(uf.calls[#uf.calls], false, "station disabled")
 			end)
 		end
@@ -461,6 +484,9 @@ return {
 				assert_true(backhaul.watching(), "still watched while wireless")
 				carrier.wan = true
 				assert_true(backhaul.carrier_changed(), "the cable is back: wake the loop")
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), nil), "wireless", "held first")
+				assert_eq(backhaul.wait_cap(st), backhaul.UP_SECS, "wait no longer than the failback is due")
+				now = now + backhaul.UP_SECS
 				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), nil), "wired", "back on the wire")
 				assert_eq(backhaul.wait_cap(st), backhaul.FAST_RETRY_S, "fast again after failback")
 				carrier.wan = nil
@@ -718,9 +744,13 @@ return {
 				assert_eq(st.backhaul_wired_phys, 3, "the CPU port is never taken for the socket")
 				assert_eq(count(rec.cmds, "flush_arl_table"), 0, "no ARL flush while wireless")
 				-- Cable back in socket 3, the station still up: the ARL still says
-				-- CPU port. Wired at once, and that stale entry is flushed.
+				-- CPU port. Wired once the link has held UP_SECS, and that stale
+				-- entry is flushed.
 				sw.up[3] = true
-				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wired", "wired again at once")
+				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wireless", "held first")
+				assert_eq(count(rec.cmds, "flush_arl_table"), 0, "nothing flushed yet")
+				now = now + backhaul.UP_SECS
+				assert_eq(backhaul.tick(st, SWCFG, uf, si, nil), "wired", "then wired")
 				assert_eq(uf.calls[#uf.calls], false, "station disabled")
 				assert_eq(count(rec.cmds, "^swconfig dev switch0 set flush_arl_table"), 1,
 					"the switch's address table flushed: the gateway sat on the CPU port")

@@ -55,7 +55,8 @@ Landmines moved from CLAUDE.md; they load when a matching file is touched.
   10 s connect timeout and then a doubling backoff, and a pulled cable is exactly when that
   happens: the station came up 39 s to 98 s after the pull on a JIDU6401 (2026-10-28), and
   the controller heard of it up to 60 s later still. So the loss is timed in seconds
-  (`backhaul.DOWN_SECS`), `inform._idle` reads a DSA socket's link every
+  (`backhaul.DOWN_SECS`; a return must hold `backhaul.UP_SECS` before failback, since each
+  failback is a commit + `wifi reload`), `inform._idle` reads a DSA socket's link every
   `CARRIER_POLL_S` and wakes the loop when it changes, and `inform._cycle` caps the wait
   (`backhaul.wait_cap`) while a switch is due or has just been made, starting the backoff
   over. swconfig boards still read the switch port once per heartbeat.

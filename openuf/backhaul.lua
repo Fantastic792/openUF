@@ -73,12 +73,17 @@ end
 
 -- Seconds without wired carrier before the station is enabled. Rides out a
 -- cable being re-seated without taking the user SSIDs on that radio down for
--- nothing; carrier coming back disables the station on the very next tick.
+-- nothing; carrier coming back disables the station once it has held UP_SECS.
 -- Counted in seconds, not heartbeats: it was two heartbeats once, meant as
 -- ~20 s, but a heartbeat whose inform cannot reach the controller waits out
 -- a 10 s connect timeout and then a doubling backoff, so on a JIDU6401 the
 -- station came up 39 s to 98 s after the cable was pulled (2026-10-28).
 M.DOWN_SECS = 10
+-- Seconds the wired carrier must stay up before the station is disabled
+-- again. Every failback is a wireless commit and a `wifi reload`; without a
+-- hold, a cable flapping (a loose plug, a switch port renegotiating) took the
+-- radio's SSIDs down and up on every flap.
+M.UP_SECS = 10
 -- While a switch is pending or has just happened, the inform loop waits at
 -- most this long between heartbeats (wait_cap()), for SWITCH_FAST_S after
 -- the switch: the station needs a few seconds to join, and the inform that
@@ -86,6 +91,8 @@ M.DOWN_SECS = 10
 M.FAST_RETRY_S = 3
 M.SWITCH_FAST_S = 30
 
+-- When the carrier was first seen disagreeing with the mode (gone while
+-- wired, back while wireless); nil when nothing is pending.
 M._down_since = nil
 M._switched_at = nil
 -- The wired socket the idle loop watches between heartbeats (carrier_changed):
@@ -320,28 +327,32 @@ function M.plan(mesh, entries, cfg, st)
 end
 
 -- Pure policy step. carrier: true/false, or nil when it cannot be read;
--- since: when the carrier was first seen gone (nil while it is there).
+-- since: when the carrier was first seen disagreeing with the mode (gone
+-- while wired, back while wireless), nil while it agrees. A loss switches
+-- after DOWN_SECS, a return after UP_SECS; a flap in between starts over.
 -- Returns the new mode and the updated since.
 function M.decide(carrier, mode, since, now)
 	mode = (mode == "wireless") and "wireless" or "wired"
-	if carrier == true then return "wired", nil end
-	if carrier == false then
-		since = tonumber(since) or now
-		if now - since >= M.DOWN_SECS then return "wireless", since end
-		return mode, since
+	if carrier == nil then return mode, nil end  -- unknown: hold, count afresh
+	if carrier == (mode == "wired") then return mode, nil end  -- agrees
+	since = tonumber(since) or now
+	local hold = (mode == "wired") and M.DOWN_SECS or M.UP_SECS
+	if now - since >= hold then
+		return (mode == "wired") and "wireless" or "wired", nil
 	end
-	return mode, nil  -- unknown: hold what we have, and start counting afresh
+	return mode, since
 end
 
 -- For the inform loop. The longest it should wait before the next heartbeat,
--- or nil for no limit: until the pending switch is due while the wired
--- carrier is gone and the station not yet up, and FAST_RETRY_S for
--- SWITCH_FAST_S after a switch.
+-- or nil for no limit: until the pending switch is due (the wired carrier
+-- gone and the station not yet up, or back and the station not yet down),
+-- and FAST_RETRY_S for SWITCH_FAST_S after a switch.
 function M.wait_cap(st)
 	local now = M._time()
 	local mode = st and st.backhaul_mode
-	if M._down_since and mode ~= "wireless" then
-		return math.max(1, M.DOWN_SECS - (now - M._down_since))
+	if M._down_since then
+		local hold = (mode == "wireless") and M.UP_SECS or M.DOWN_SECS
+		return math.max(1, hold - (now - M._down_since))
 	end
 	if M._switched_at and now - M._switched_at < M.SWITCH_FAST_S then
 		return M.FAST_RETRY_S
