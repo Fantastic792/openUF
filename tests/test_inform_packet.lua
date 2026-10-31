@@ -7523,6 +7523,39 @@ return {
 		end
 	},
 	{
+		name = "inform: a reboot saves state and the ledger first, and a failed reboot does not exit",
+		fn = function()
+			local o_reboot, o_exit, o_save, o_flush = inform._reboot, inform._exit,
+				inform._state.save, inform._unhandled.flush
+			local order, exited, rc = {}, nil, 1
+			inform._reboot = function() order[#order + 1] = "reboot"; return rc end
+			inform._exit = function(c) exited = c end
+			inform._state.save = function() order[#order + 1] = "save" end
+			inform._unhandled.flush = function(force) order[#order + 1] = "flush:" .. tostring(force) end
+			-- Never the real thing, whatever the code under test calls.
+			local o_osx, o_ose = os.execute, os.exit
+			os.execute = function(c) order[#order + 1] = "os:" .. tostring(c); return 1 end
+			os.exit = function() error("os.exit called") end
+			local res, out, order1
+			local ok, err = pcall(function()
+				out = with_stderr(function()
+					res = inform.handle_response('{"_type":"reboot"}', sample_state())
+				end)
+				order1 = table.concat(order, ",")
+				rc, order = 0, {}
+				with_stderr(function() inform.handle_response('{"_type":"reboot"}', sample_state()) end)
+			end)
+			os.execute, os.exit = o_osx, o_ose
+			inform._reboot, inform._exit, inform._state.save, inform._unhandled.flush =
+				o_reboot, o_exit, o_save, o_flush
+			if not ok then error(err, 0) end
+			assert_eq(order1, "save,flush:true,reboot", "state and ledger written before the reboot")
+			assert_false(res, "a failed reboot carries on")
+			assert_contains(out, "reboot failed", "and says so")
+			assert_eq(exited, 0, "an accepted reboot exits")
+		end
+	},
+	{
 		name = "inform: http_post stops reading a response past HTTP_MAX_RESPONSE",
 		fn = function()
 			local o_sock, o_max, o_hp = package.loaded.socket, inform.HTTP_MAX_RESPONSE, inform._http_post

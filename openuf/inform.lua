@@ -4517,6 +4517,10 @@ function M.reported_version(uap, st, cfg)
 	return uap.fw and uap.fw.ver or "6.6.55"
 end
 
+-- Injectable: the controller's reboot, and the exit after it.
+M._reboot = function() return os.execute("reboot") end
+M._exit = os.exit
+
 function M.handle_response(json_str, st, cfg)
 	-- Tracks the config rather than latching on: a caller that stops passing
 	-- debug_dump_file stops getting dropped-key reports too.
@@ -5031,8 +5035,17 @@ function M.handle_response(json_str, st, cfg)
 
 	if _type == "reboot" then
 		io.stderr:write("inform: controller requested reboot\n")
-		os.execute("reboot")
-		os.exit(0)
+		-- What the reboot would lose goes to disk first: the state and the
+		-- unhandled ledger's unflushed repeat counts.
+		pcall(M._state.save, st)
+		if M._unhandled then pcall(M._unhandled.flush, true) end
+		-- os.execute is true (5.2+) or 0 (5.1) when reboot was accepted.
+		-- Anything else and the inform loop carries on rather than exiting
+		-- into a device that never went down.
+		local r = M._reboot()
+		if r == true or r == 0 then M._exit(0) end
+		io.stderr:write("inform: reboot failed (" .. tostring(r) .. ") -- carrying on\n")
+		return false
 	end
 
 	if _type == "upgrade" then
