@@ -36,6 +36,11 @@ M.DRAIN = 64       -- packets read per wake-up at most
 -- answers on still succeeds, so a send failure alone would never notice a
 -- controller that moved (a new DHCP lease behind the same name).
 M.RESOLVE_AFTER = 3
+-- dns.toip blocks the inform loop for as long as the resolver takes, which
+-- with a dead DNS server is its full timeout. Failed lookups back off
+-- (RETRY, doubling, up to this), and a name that resolved once keeps its
+-- last address meanwhile. An address literal is never looked up.
+M.RESOLVE_BACKOFF_MAX = 300
 
 local T_BINDING_REQUEST  = 0x0001
 local T_BINDING_RESPONSE = 0x0101
@@ -108,6 +113,7 @@ function M.sync(c, url, active)
 	if c.url ~= url then
 		M.close(c)
 		c.url, c.host, c.port = url, host, port
+		c.last_ip, c.resolve_fails, c.resolve_at = nil, 0, nil
 	end
 	if not c.sock then
 		local s, err = c.socket.udp()
@@ -120,6 +126,22 @@ function M.sync(c, url, active)
 	return true
 end
 
+-- The server's address: the host itself when it is an IPv4 literal, else a
+-- lookup, at most once per backoff step while lookups fail. nil when there
+-- is none to use.
+local function resolve(c, now)
+	if c.host:match("^%d+%.%d+%.%d+%.%d+$") then return c.host end
+	if c.resolve_at and now < c.resolve_at then return c.last_ip end
+	local ip = c.socket.dns and c.socket.dns.toip(c.host)
+	if ip then
+		c.last_ip, c.resolve_fails, c.resolve_at = ip, 0, nil
+		return ip
+	end
+	c.resolve_fails = (c.resolve_fails or 0) + 1
+	c.resolve_at = now + math.min(M.RETRY * 2 ^ (c.resolve_fails - 1), M.RESOLVE_BACKOFF_MAX)
+	return c.last_ip
+end
+
 -- Send the Binding Request when due. now is in seconds.
 function M.send_due(c, now)
 	if not c.sock or (c.next_send and now < c.next_send) then return false end
@@ -127,9 +149,9 @@ function M.send_due(c, now)
 		c.ip, c.unanswered = nil, 0
 	end
 	if not c.ip then
-		local ip = c.socket.dns and c.socket.dns.toip(c.host)
+		local ip = resolve(c, now)
 		if not ip then
-			c.next_send = now + M.RETRY
+			c.next_send = math.max(now + M.RETRY, c.resolve_at or 0)
 			return false, "cannot resolve " .. tostring(c.host)
 		end
 		c.ip = ip
