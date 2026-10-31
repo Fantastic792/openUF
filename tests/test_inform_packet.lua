@@ -9289,4 +9289,55 @@ return {
 			assert_eq(inform.reported_version({}, st, on), "6.6.55", "no profile version")
 		end
 	},
+	{
+		-- Lab item 8a (2026-10-31): a host-name inform URL is answered 400
+		-- unless the payload carries inform_ip, the address the name resolves to.
+		name = "inform: inform_ip is the inform host's address, resolved and cached",
+		fn = function()
+			local real_sock, asked = inform._socket, {}
+			inform._inform_ip_cache = {}
+			inform._socket = function() return {dns = {toip = function(h)
+				asked[#asked + 1] = h
+				if h == "unifi" then return "10.0.0.9" end
+				return nil, "host not found"
+			end}} end
+			local ok, err = pcall(function()
+				assert_eq(inform.inform_ip("http://10.0.0.1:8080/inform", 0), "10.0.0.1", "IP URL")
+				assert_eq(#asked, 0, "an IP URL asks no resolver")
+				assert_eq(inform.inform_ip("http://unifi:8080/inform", 0), "10.0.0.9", "name")
+				assert_eq(inform.inform_ip("https://unifi/inform", 10), "10.0.0.9", "cached")
+				assert_eq(#asked, 1, "the second ask is answered from the cache")
+				assert_eq(inform.inform_ip("http://unifi:8080/inform", 1000), "10.0.0.9", "after TTL")
+				assert_eq(#asked, 2, "re-resolved after the TTL")
+				assert_nil(inform.inform_ip("http://nope:8080/inform", 0), "unresolvable")
+				assert_nil(inform.inform_ip("http://nope:8080/inform", 30), "failure cached")
+				assert_eq(#asked, 3, "a failure is cached too")
+				assert_nil(inform.inform_ip(nil, 0), "no URL")
+				assert_nil(inform.inform_ip("garbage", 0), "not a URL")
+
+				local cjson = require("cjson")
+				local d = cjson.decode(inform.build_json(
+					sample_state({inform_url = "http://unifi:8080/inform"}), nil, nil))
+				assert_eq(d.inform_ip, "10.0.0.9", "the payload carries it")
+				d = cjson.decode(inform.build_json(
+					sample_state({inform_url = "http://nope:8080/inform"}), nil, nil))
+				assert_nil(d.inform_ip, "left out when the name does not resolve")
+
+				inform._warned_400 = false
+				local out = with_stderr(function()
+					inform._warn_http_400("HTTP 400", sample_state({adopted = true,
+						inform_url = "http://nope:8080/inform"}), nil)
+				end)
+				assert_true(out:find('"nope", which does not', 1, true) ~= nil,
+					"the 400 hint names an unresolvable host")
+				inform._warned_400 = false
+				out = with_stderr(function()
+					inform._warn_http_400("HTTP 400", sample_state({adopted = true}), nil)
+				end)
+				assert_nil(out:find("does not resolve", 1, true), "no such hint for an IP URL")
+			end)
+			inform._socket, inform._inform_ip_cache, inform._warned_400 = real_sock, {}, false
+			if not ok then error(err, 0) end
+		end
+	},
 }

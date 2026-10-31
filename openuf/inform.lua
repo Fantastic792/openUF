@@ -2386,6 +2386,15 @@ function M.build_json(st, cfg, ufhw)
 		end
 	end
 
+	-- inform_ip: the address the inform URL's host resolves to. A URL that
+	-- names the controller by host name (conf.lua's default does) is answered
+	-- HTTP 400 ("invalid inform_ip <host>") when the field is missing, adopted
+	-- or not; with it the same device informs and adopts (lab, 10.6.106,
+	-- 2026-10-31, as fonix232 reported). For an IP URL it is the address the
+	-- controller derives itself.
+	local iip = M.inform_ip(st.inform_url)
+	if iip then payload.inform_ip = iip end
+
 	-- conf.lua debug_payload_extra: research-only top-level fields merged in
 	-- verbatim (an `uplink` object, say, to see what shape the controller
 	-- accepts) -- same caveat, same log line at startup as debug_caps. A key
@@ -6200,6 +6209,28 @@ function M._reapply_static_ip(st, cfg)
 		st.static_gateway, st.static_dns) and true or false
 end
 
+-- The IPv4 address for an inform URL's host: the host itself when it is one,
+-- else luasocket's resolver, cached per host so a heartbeat does not ask DNS
+-- every time (a failure for a shorter while). nil when it does not resolve.
+M._inform_ip_cache = {}
+M.INFORM_IP_TTL, M.INFORM_IP_FAIL_TTL = 300, 60
+function M.inform_ip(url, now)
+	local host = type(url) == "string" and url:match("^https?://([^:/]+)")
+	if not host or host == "" then return nil end
+	if host:match("^%d+%.%d+%.%d+%.%d+$") then return host end
+	now = now or os.time()
+	local c = M._inform_ip_cache[host]
+	if c and now < c.until_ then return c.ip end
+	local ok, ip = pcall(function()
+		local s = M._socket()
+		return s and s.dns and s.dns.toip(host)
+	end)
+	ip = (ok and type(ip) == "string" and ip:match("^%d+%.%d+%.%d+%.%d+$")) and ip or nil
+	M._inform_ip_cache[host] = {ip = ip,
+		until_ = now + (ip and M.INFORM_IP_TTL or M.INFORM_IP_FAIL_TTL)}
+	return ip
+end
+
 -- An adopted device whose informs are answered 400 is, in every case seen so
 -- far, informing under a MAC the controller has no adoption for -- see
 -- _warn_identity_change, which needs the previous MAC to compare against and
@@ -6219,6 +6250,15 @@ function M._warn_http_400(err, st, cfg)
 		"openuf: different MAC, Forget the device there and re-adopt, or point\n" ..
 		"openuf: lan_cpueth back at the interface it was adopted under.\n",
 		tostring(st.mac), tostring(cfg and cfg.net and cfg.net.lan_cpueth)))
+	-- The other cause: a host-name inform URL sent without inform_ip, which
+	-- the payload only lacks when that name does not resolve here.
+	local host = type(st.inform_url) == "string" and st.inform_url:match("^https?://([^:/]+)")
+	if host and not host:match("^%d+%.%d+%.%d+%.%d+$") and not M.inform_ip(st.inform_url) then
+		io.stderr:write(string.format(
+			"openuf: Or: the inform URL names the controller as %q, which does not\n" ..
+			"openuf: resolve on this device, so no inform_ip is sent. Make the name\n" ..
+			"openuf: resolve, or set the inform URL by IP address.\n", host))
+	end
 	return true
 end
 
