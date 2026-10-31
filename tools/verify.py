@@ -104,6 +104,19 @@ def redact(v):
         return [redact(x) for x in v]
     return v
 
+# A secret's value in router text: `name=value`, `name: "value"` and uci's
+# `option name 'value'`, wherever the NAME looks secret (the word also inside a
+# longer name, so over-redacting is the failure mode, not leaking).
+SECRET_ASSIGN = re.compile(
+    r"""(?imx)
+    (\b\w*(?:key|psk|passw|secret|token|passphrase|auth)\w*['"]?\s*[=:]\s*
+    |^\s*(?:option|list)\s+\w*(?:key|psk|passw|secret|token|passphrase|auth)\w*\s+)
+    ('[^'\n]*'|"[^"\n]*"|[^\s,}]+)""")
+
+def redact_text(text):
+    """router.txt is raw collector output; the same rule as redact() for text."""
+    return SECRET_ASSIGN.sub(lambda m: m.group(1) + "<redacted>", text)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Router side
 # ──────────────────────────────────────────────────────────────────────────────
@@ -678,7 +691,7 @@ def main():
     raw, err = collect_router(a.router, a.timeout)
     if raw is not None:
         with open(os.path.join(out_dir, "router.txt"), "w") as f:
-            f.write(raw)
+            f.write(redact_text(raw))
     if err:
         print("router: " + err, file=sys.stderr)
         if raw is None or "### install" not in raw:

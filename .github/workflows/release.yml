@@ -34,8 +34,10 @@ on:
     tags: ["v[0-9]*", "[0-9]*"]
   release:
     types: [published]
+# Read-only by default: only the jobs that create the release or upload to it
+# ask for write access.
 permissions:
-  contents: write
+  contents: read
 # A release created in the web UI with a NEW tag fires both `push` and
 # `release`; serialise the pair so they do not upload the same files at once.
 concurrency:
@@ -112,6 +114,8 @@ jobs:
     name: Verify, then create the release with the source archive
     needs: version
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release create / upload
     outputs:
       sha256: ${{ steps.meta.outputs.sha256 }}
     env:
@@ -129,11 +133,12 @@ jobs:
           sudo luarocks --lua-version 5.1 install lua-cjson LUA_INCDIR=/usr/include/lua5.1
       - name: Shell syntax, both shells
         run: |
-          for f in setup.sh install.sh update.sh tools/deploy.sh tools/dist.sh \
-              tools/release-archive.sh openuf/etc/init.d/openuf openuf/hook/*.sh \
-              package/openuf/test.sh; do
-            bash -n "$f" && dash -n "$f"
+          # The same list as the Tests workflow: every tracked script.
+          fail=0
+          for f in $(git ls-files '*.sh' 'openuf/etc/init.d/*' 'package/*/root/etc/uci-defaults/*'); do
+            bash -n "$f" && dash -n "$f" || { echo "syntax error: $f"; fail=1; }
           done
+          exit $fail
       # One archive, openuf-<version>.tar.gz: the OpenWrt package builds from
       # it, and it is also a manual install -- unpack and run install.sh
       # inside, or hand it to setup.sh (OPENUF_TARBALL_URL) or openuf-update
@@ -145,6 +150,9 @@ jobs:
         run: |
           sh tools/release-archive.sh "$VERSION"
           echo "sha256=$(cut -d' ' -f1 "openuf-$VERSION.tar.gz.sha256")" >> "$GITHUB_OUTPUT"
+      # setup.sh and update.sh go on the release too: the documented install
+      # downloads setup.sh from releases/latest/download/ (not a moving
+      # branch) and checks it against SHA256SUMS before running it.
       - name: Create the release (and its tag) unless it exists, then attach the source archive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -155,12 +163,14 @@ jobs:
             gh release create "$TAG" --target "$GITHUB_SHA" --title "openUF $TAG" --generate-notes
           fi
           gh release upload "$TAG" --clobber \
-            openuf-"$VERSION".tar.gz openuf-"$VERSION".tar.gz.sha256
+            openuf-"$VERSION".tar.gz openuf-"$VERSION".tar.gz.sha256 setup.sh update.sh
 
   packages:
     name: Build ${{ matrix.format }} with the ${{ matrix.sdk }} SDK
     needs: [version, verify]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload
     env:
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
@@ -182,6 +192,12 @@ jobs:
       - name: Point the Makefiles at this release's archive
         run: |
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$VERSION/" package/openuf/Makefile package/luci-app-openuf/Makefile
+          # The archive's own sha256 from the verify job: nothing else, and
+          # never "skip" (which makes the SDK fetch without checking).
+          case "$SHA256" in
+            *[!0-9a-f]*|"") echo "no valid sha256 for the source archive: '$SHA256'" >&2; exit 1 ;;
+          esac
+          [ "${#SHA256}" = 64 ] || { echo "sha256 is not 64 hex digits: '$SHA256'" >&2; exit 1; }
           sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$SHA256/" package/openuf/Makefile
           # The committed URL says v<version>; a tag made by hand may lack the v.
           sed -i "s|/releases/download/[^/]*/|/releases/download/$TAG/|" package/openuf/Makefile
@@ -189,8 +205,11 @@ jobs:
           # its own archive, not the one the committed URL names.
           sed -i "s|https://github.com/[^/]*/[^/]*/releases/|https://github.com/$GITHUB_REPOSITORY/releases/|" package/openuf/Makefile
           grep -E '^PKG_(VERSION|HASH|SOURCE_URL):=' package/openuf/Makefile
+          grep -qx "PKG_HASH:=$SHA256" package/openuf/Makefile
       - name: Build with the OpenWrt SDK
-        uses: openwrt/gh-action-sdk@main
+        # A commit, not a branch: the action builds what goes on the release
+        # (openwrt/gh-action-sdk main as of 2026-11-01). Raise it by hand.
+        uses: openwrt/gh-action-sdk@f5813d30eeef3534b58ac7e79c5d8842b6035434
         env:
           ARCH: ${{ matrix.sdk }}
           FEEDNAME: openuf
@@ -229,3 +248,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh release upload "$TAG" --clobber out/*
+
+  # One SHA256SUMS over every file on the release, once both package formats
+  # are attached. setup.sh and update.sh check every download against it
+  # (the packages are unsigned, so apk needs --allow-untrusted: the checksum is
+  # what says they are this release's), and refuse a release without one. A
+  # rebuild replaces the files and so recomputes it.
+  checksums:
+    name: SHA256SUMS over the release's files
+    needs: [version, packages]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          mkdir assets && cd assets
+          gh release download "$TAG"
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" --clobber SHA256SUMS

@@ -4,8 +4,8 @@
 # AP" command -- what setup.sh is to a first install, this is to every version
 # after it.
 #
-#   sh tools/deploy.sh 192.168.1.149 192.168.1.22       # build, push, update, verify
-#   sh tools/deploy.sh --check 192.168.1.149            # reachability and what is installed
+#   sh tools/deploy.sh 192.0.2.149 192.0.2.22       # build, push, update, verify
+#   sh tools/deploy.sh --check 192.0.2.149            # reachability and what is installed
 #   sh tools/deploy.sh --no-verify <host>...            # skip the test suite in dist.sh
 #   OPENUF_SSH_PASS='secret' sh tools/deploy.sh <host>  # APs with a root password
 #   OPENUF_SSH='ssh -i ~/.ssh/aps' sh tools/deploy.sh <host>...

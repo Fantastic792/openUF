@@ -1,9 +1,18 @@
 #!/bin/sh
 # openUF setup — turn an OpenWrt router into a UniFi U6-InWall
 #
-# One command, run over SSH on the device itself:
+# Run over SSH on the device itself, from the latest release (not a moving
+# branch), checked against that release's SHA256SUMS before it runs:
 #
-#   wget -qO- https://raw.githubusercontent.com/Fantastic792/openUF/main/setup.sh | sh
+#   cd /tmp
+#   wget -q https://github.com/Fantastic792/openUF/releases/latest/download/setup.sh
+#   wget -q https://github.com/Fantastic792/openUF/releases/latest/download/SHA256SUMS
+#   grep ' setup.sh$' SHA256SUMS | sha256sum -c - && sh setup.sh
+#
+# Everything it downloads after that -- the source archive, the packages --
+# comes from the same release and is checked against the same SHA256SUMS; a
+# mismatch stops it before anything is installed. Piped (`wget -qO- .. | sh`)
+# still works, but nothing can check a script that is already running.
 #
 # It interviews you, converts the router into a pure access point, installs
 # every dependency openUF needs, installs openUF with a hardware profile that
@@ -38,22 +47,43 @@ set -u
 VERSION="1.1"
 
 # ── Where to get openUF from ────────────────────────────────────────────────
-# Overridable so a fork, a branch or a local checkout can be installed without
-# editing this file:
-#   OPENUF_REPO=owner/repo  OPENUF_REF=branch-or-tag  sh setup.sh
+# Overridable so a fork, a release, a branch or a local checkout can be
+# installed without editing this file:
+#   OPENUF_REPO=owner/repo  OPENUF_REF=v0.2.0  sh setup.sh   # a release tag
+#   OPENUF_BRANCH=main sh setup.sh               # a branch: UNVERIFIED
 #   OPENUF_SRC=/root/openUF sh setup.sh          # a tree already on the device
+# A release (the latest one by default) is the only source with a checksum:
+# its SHA256SUMS covers setup.sh, the source archive and every package, and
+# each download is checked against it. A branch (codeload) or an explicit
+# OPENUF_TARBALL_URL has none unless OPENUF_TARBALL_SHA256 gives one, and is
+# announced as unverified -- the caller asked for it by name.
 OPENUF_REPO=${OPENUF_REPO:-Fantastic792/openUF}
-OPENUF_REF=${OPENUF_REF:-main}
+OPENUF_REF=${OPENUF_REF:-}
+OPENUF_BRANCH=${OPENUF_BRANCH:-}
 OPENUF_SRC=${OPENUF_SRC:-}
-OPENUF_TARBALL_URL=${OPENUF_TARBALL_URL:-"https://codeload.github.com/$OPENUF_REPO/tar.gz/$OPENUF_REF"}
-OPENUF_SELF_URL=${OPENUF_SELF_URL:-"https://raw.githubusercontent.com/$OPENUF_REPO/$OPENUF_REF/setup.sh"}
-# The packages (a web install) come from the latest GitHub release: its JSON
-# names the .apk and .ipk files. OPENUF_RELEASE_URL points at another release
-# (.../releases/tags/v0.1.8); OPENUF_PKG_DIR=/path uses package files already
-# on the device instead of downloading any.
-OPENUF_RELEASE_URL=${OPENUF_RELEASE_URL:-"https://api.github.com/repos/$OPENUF_REPO/releases/latest"}
+OPENUF_TARBALL_URL=${OPENUF_TARBALL_URL:-}
+OPENUF_TARBALL_SHA256=${OPENUF_TARBALL_SHA256:-}
+if [ -n "$OPENUF_REF" ]; then
+	_api_rel="releases/tags/$OPENUF_REF"
+	RELEASE_DL="https://github.com/$OPENUF_REPO/releases/download/$OPENUF_REF"
+else
+	_api_rel="releases/latest"
+	RELEASE_DL="https://github.com/$OPENUF_REPO/releases/latest/download"
+fi
+if [ -n "$OPENUF_BRANCH" ]; then
+	OPENUF_SELF_URL=${OPENUF_SELF_URL:-"https://raw.githubusercontent.com/$OPENUF_REPO/$OPENUF_BRANCH/setup.sh"}
+else
+	OPENUF_SELF_URL=${OPENUF_SELF_URL:-"$RELEASE_DL/setup.sh"}
+fi
+# The packages (a web install) come from the same release: its JSON names the
+# .apk and .ipk files and SHA256SUMS. OPENUF_RELEASE_URL points at another
+# release's JSON (.../releases/tags/v0.1.8); OPENUF_PKG_DIR=/path uses package
+# files already on the device instead of downloading any, checked against a
+# SHA256SUMS beside them.
+OPENUF_RELEASE_URL=${OPENUF_RELEASE_URL:-"https://api.github.com/repos/$OPENUF_REPO/$_api_rel"}
 OPENUF_PKG_DIR=${OPENUF_PKG_DIR:-}
-export OPENUF_REPO OPENUF_REF OPENUF_TARBALL_URL OPENUF_SELF_URL OPENUF_RELEASE_URL
+export OPENUF_REPO OPENUF_REF OPENUF_BRANCH OPENUF_TARBALL_URL OPENUF_TARBALL_SHA256 \
+	OPENUF_SELF_URL OPENUF_RELEASE_URL
 
 INSTALL_DIR=/opt/openuf      # the headless (file) install
 PKG_DIR=/usr/lib/openuf      # where the openuf package installs
@@ -79,28 +109,59 @@ die()  { printf "\n${C_R}error${C_0} %s\n" "$*" >&2; exit 1; }
 
 # ─── Download ───────────────────────────────────────────────────────────────
 
-# fetch <url> <dest>. Tries every client an OpenWrt image might have.
-#
-# The retry without certificate validation is for an image built without
-# ca-bundle, which is common on space-tight builds and fails every https fetch
-# with nothing but an exit code. It is announced rather than silent, because it
-# is a real (if small) downgrade -- and the first failure may equally have been
-# DNS or a 404, which the retry will not fix either.
+# fetch <url> <dest>. Tries every client an OpenWrt image might have, always
+# with certificate validation. There used to be a retry without it, for an
+# image built without ca-bundle (common on space-tight builds, where every
+# https fetch fails with nothing but an exit code); that retry is gone: it
+# made the download, and so what runs as root, anyone's on the path. Such an
+# image is told what to install instead.
 fetch() {
 	_url=$1; _dst=$2
 	if command -v uclient-fetch >/dev/null 2>&1; then
 		uclient-fetch -q -O "$_dst" "$_url" 2>/dev/null && return 0
-		warn "download failed; retrying without TLS verification"
-		uclient-fetch -q --no-check-certificate -O "$_dst" "$_url" 2>/dev/null && return 0
 	fi
 	if command -v curl >/dev/null 2>&1; then
 		curl -fsSL -o "$_dst" "$_url" 2>/dev/null && return 0
 	fi
 	if command -v wget >/dev/null 2>&1; then
 		wget -q -O "$_dst" "$_url" 2>/dev/null && return 0
-		wget -q --no-check-certificate -O "$_dst" "$_url" 2>/dev/null && return 0
+	fi
+	if [ ! -s /etc/ssl/certs/ca-certificates.crt ] && ! ls /etc/ssl/certs/*.0 >/dev/null 2>&1; then
+		warn "this image has no CA certificates, so no https download can be verified:"
+		warn "  opkg update && opkg install ca-bundle   (or: apk add ca-bundle), then run again"
 	fi
 	return 1
+}
+
+# sha256_of <file>: the hex digest, by busybox's sha256sum or openssl.
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d' ' -f1
+	elif command -v openssl >/dev/null 2>&1; then
+		openssl dgst -sha256 -r "$1" | cut -d' ' -f1
+	else
+		return 1
+	fi
+}
+
+# check_sha256 <file> <SHA256SUMS>: the file matches its line in the list,
+# found by base name (`sha256sum` writes "hash  name", or "hash *name").
+check_sha256() {
+	_n=$(basename "$1")
+	_want=$(awk -v f="$_n" '$2 == f || $2 == "*" f { print $1; exit }' "$2" 2>/dev/null)
+	[ -n "$_want" ] || { warn "$_n is not listed in $(basename "$2")"; return 1; }
+	_got=$(sha256_of "$1")
+	[ -n "$_got" ] || { warn "no sha256sum or openssl on this image to check $_n with"; return 1; }
+	[ "$_got" = "$_want" ] || { warn "$_n: sha256 $_got, but $(basename "$2") says $_want"; return 1; }
+	return 0
+}
+
+# release_asset <release.json> <file-name BRE>: the asset's download URL. The
+# API serves the JSON on one line to a plain client, so it is split at the
+# commas first (an URL carries none).
+release_asset() {
+	tr ',' '\n' < "$1" \
+		| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\/'"$2"'\)".*/\1/p'
 }
 
 # Can /dev/tty actually be OPENED? `[ -r /dev/tty ]` is not the same question:
@@ -142,9 +203,21 @@ if [ -z "${OPENUF_REEXEC:-}" ] && [ ! -t 0 ]; then
 		if [ -f "$0" ] && head -2 "$0" 2>/dev/null | grep -q 'openUF setup'; then
 			OPENUF_REEXEC=1 exec sh "$0" "$@" < /dev/tty
 		fi
-		_self="/tmp/openuf-setup.$$.sh"
-		if fetch "$OPENUF_SELF_URL" "$_self"; then
-			OPENUF_REEXEC=1 OPENUF_SELF_TMP="$_self" \
+		# In a directory of its own, under its own name: check_sha256 finds
+		# its line in SHA256SUMS by that name.
+		_selfdir="/tmp/openuf-setup.$$"
+		_self="$_selfdir/setup.sh"
+		if mkdir -p "$_selfdir" && fetch "$OPENUF_SELF_URL" "$_self"; then
+			# The copy about to run as root is the release's, by its checksum.
+			if [ -z "$OPENUF_BRANCH" ] && [ "$OPENUF_SELF_URL" = "$RELEASE_DL/setup.sh" ]; then
+				{ fetch "$RELEASE_DL/SHA256SUMS" "$_selfdir/SHA256SUMS" \
+					&& check_sha256 "$_self" "$_selfdir/SHA256SUMS"; } \
+					|| die "the downloaded setup.sh could not be checked against the release's
+       SHA256SUMS; not running it"
+			else
+				warn "running $OPENUF_SELF_URL unverified (a branch has no checksum)"
+			fi
+			OPENUF_REEXEC=1 OPENUF_SELF_TMP="$_selfdir" \
 				exec sh "$_self" "$@" < /dev/tty
 		fi
 		printf "${C_Y}warn${C_0}  could not re-fetch %s to attach a terminal;\n" \
@@ -161,7 +234,7 @@ if [ -z "${OPENUF_REEXEC:-}" ] && [ ! -t 0 ]; then
 		}
 	fi
 fi
-[ -n "${OPENUF_SELF_TMP:-}" ] && trap 'rm -f "$OPENUF_SELF_TMP"' EXIT
+[ -n "${OPENUF_SELF_TMP:-}" ] && trap 'rm -rf "$OPENUF_SELF_TMP"' EXIT
 
 # ─── Options ────────────────────────────────────────────────────────────────
 
@@ -231,9 +304,12 @@ is asked interactively (or takes its default under --yes).
       --keep-work           leave the downloaded tree in /tmp for inspection
   -h, --help                this text
 
-Environment: OPENUF_REPO, OPENUF_REF, OPENUF_SRC, OPENUF_TARBALL_URL,
-             OPENUF_RELEASE_URL (which release the packages come from),
-             OPENUF_PKG_DIR (package files already on the device)
+Environment: OPENUF_REPO, OPENUF_REF (a release tag; default the latest
+             release, checked against its SHA256SUMS), OPENUF_BRANCH (a
+             branch instead, unverified), OPENUF_SRC, OPENUF_TARBALL_URL and
+             OPENUF_TARBALL_SHA256, OPENUF_RELEASE_URL (which release the
+             packages come from), OPENUF_PKG_DIR (package files already on
+             the device, with a SHA256SUMS beside them)
 EOF
 }
 
@@ -501,11 +577,39 @@ else
 	head1 "Downloading openUF"
 	WORK="/tmp/openuf-setup-$$"
 	mkdir -p "$WORK" || die "cannot create $WORK"
-	info "$OPENUF_TARBALL_URL"
-	fetch "$OPENUF_TARBALL_URL" "$WORK/openuf-src.tar.gz" \
-		|| die "download failed. Check the device's internet access and DNS,
+	_dl_fail="download failed. Check the device's internet access and DNS,
        or place a checkout on the device and re-run with
        OPENUF_SRC=/path/to/openUF sh setup.sh"
+	if [ -n "$OPENUF_TARBALL_URL" ] || [ -n "$OPENUF_BRANCH" ]; then
+		# Asked for by name: a branch, or an archive URL of the caller's.
+		_tgz_url=${OPENUF_TARBALL_URL:-"https://codeload.github.com/$OPENUF_REPO/tar.gz/$OPENUF_BRANCH"}
+		info "$_tgz_url"
+		fetch "$_tgz_url" "$WORK/openuf-src.tar.gz" || die "$_dl_fail"
+		if [ -n "$OPENUF_TARBALL_SHA256" ]; then
+			[ "$(sha256_of "$WORK/openuf-src.tar.gz")" = "$OPENUF_TARBALL_SHA256" ] \
+				|| die "the archive does not match OPENUF_TARBALL_SHA256; not installing it"
+			ok "sha256 matches OPENUF_TARBALL_SHA256"
+		else
+			warn "UNVERIFIED source: $_tgz_url has no checksum (OPENUF_TARBALL_SHA256 gives one)"
+		fi
+	else
+		# A release: its source archive, checked against its SHA256SUMS.
+		info "$OPENUF_RELEASE_URL"
+		fetch "$OPENUF_RELEASE_URL" "$WORK/release.json" || die "$_dl_fail"
+		_tgz_url=$(release_asset "$WORK/release.json" 'openuf-[0-9][-.0-9A-Za-z_]*\.tar\.gz' | head -1)
+		_sums_url=$(release_asset "$WORK/release.json" 'SHA256SUMS' | head -1)
+		[ -n "$_tgz_url" ] || die "the release at $OPENUF_RELEASE_URL has no openuf-<version>.tar.gz"
+		[ -n "$_sums_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS to check
+       its files against (a release made before checksums). Use a newer release,
+       or OPENUF_BRANCH=<branch> to install a branch unverified."
+		info "$_tgz_url"
+		fetch "$_tgz_url" "$WORK/$(basename "$_tgz_url")" && fetch "$_sums_url" "$WORK/SHA256SUMS" \
+			|| die "$_dl_fail"
+		check_sha256 "$WORK/$(basename "$_tgz_url")" "$WORK/SHA256SUMS" \
+			|| die "the source archive does not match the release's SHA256SUMS; not installing it"
+		ok "sha256 matches the release's SHA256SUMS"
+		mv "$WORK/$(basename "$_tgz_url")" "$WORK/openuf-src.tar.gz"
+	fi
 	( cd "$WORK" && tar xzf openuf-src.tar.gz ) \
 		|| die "could not extract the downloaded archive"
 	for _c in "$WORK"/*/openuf/conf.lua "$WORK"/openuf/conf.lua; do
@@ -523,7 +627,7 @@ MAPDIR="$SRC/openuf/modelmap"
 
 cleanup() {
 	if [ -n "$WORK" ] && [ "$KEEP_WORK" = 0 ]; then rm -rf "$WORK"; fi
-	[ -n "${OPENUF_SELF_TMP:-}" ] && rm -f "$OPENUF_SELF_TMP"
+	[ -n "${OPENUF_SELF_TMP:-}" ] && rm -rf "$OPENUF_SELF_TMP"
 	return 0
 }
 trap cleanup EXIT
@@ -1217,8 +1321,12 @@ if [ "$HEADLESS" = 1 ]; then
 	# of the two files install.sh deliberately does not comment-strip, and doing it
 	# here means a re-run of setup.sh reproduces the whole configuration rather
 	# than layering edits onto whatever is already on the device.
+	# The value goes into sed's replacement escaped: there `&` is the whole
+	# match, `\` an escape and `|` this command's delimiter, so an inform URL
+	# with a query string (?a=1&b=2) came out mangled or broke the command.
 	conf_set() {   # conf_set <key> <lua value>
-		sed -i "s|^\([[:space:]]*\)$1[[:space:]]*=[[:space:]]*.*|\1$1 = $2,|" "$CONF"
+		_cv=$(printf '%s' "$2" | sed 's/[\\&|]/\\&/g')
+		sed -i "s|^\([[:space:]]*\)$1[[:space:]]*=[[:space:]]*.*|\1$1 = $_cv,|" "$CONF"
 		grep -q "^[[:space:]]*$1[[:space:]]*=[[:space:]]*$(
 			printf '%s' "$2" | sed 's/[].[^$*\\/]/\\&/g')," "$CONF" \
 			|| die "could not set $1 in $CONF (unexpected file layout)"
@@ -1325,6 +1433,10 @@ else
 			info "fetching $_f"
 			fetch "$_u" "$PKG_WORK/$_f" || die "download failed: $_u"
 		done
+		_sums_url=$(release_asset "$PKG_WORK/release.json" 'SHA256SUMS' | head -1)
+		[ -n "$_sums_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS to check
+       its packages against (a release made before checksums); use a newer release"
+		fetch "$_sums_url" "$PKG_WORK/SHA256SUMS" || die "download failed: $_sums_url"
 		SRC_PKG_DIR=$PKG_WORK
 	fi
 
@@ -1338,16 +1450,32 @@ else
 			|| warn "this release ships no luci-theme-halo package; LuCI keeps its current theme"
 	fi
 
+	# The files are unsigned (hence --allow-untrusted for apk below), so the
+	# checksum is the only thing that says they are the release's: every one
+	# is checked against SHA256SUMS -- the release's, or one beside the files
+	# in OPENUF_PKG_DIR -- before the package manager sees it.
+	[ -f "$SRC_PKG_DIR/SHA256SUMS" ] || die "no SHA256SUMS in $SRC_PKG_DIR to check the packages against.
+       For files of your own: (cd $SRC_PKG_DIR && sha256sum *.$PKG_EXT > SHA256SUMS)"
+	for _p in "$P_OPENUF" "$P_APP" ${P_THEME:+"$P_THEME"}; do
+		check_sha256 "$_p" "$SRC_PKG_DIR/SHA256SUMS" \
+			|| die "$(basename "$_p") failed its checksum; not installing anything"
+	done
+	ok "sha256 of every package matches SHA256SUMS"
+
 	# One transaction, so luci-app-openuf's dependency on openuf resolves to
 	# the file beside it; everything else (lua, luci-base...) comes from the
-	# feeds refreshed in the packages phase. The files are unsigned, hence
+	# feeds refreshed in the packages phase. Checked above, hence
 	# --allow-untrusted for apk (opkg takes a local file as it is).
 	info "$PKG_ADD $(basename "$P_OPENUF") $(basename "$P_APP")${P_THEME:+ $(basename "$P_THEME")}"
+	# The package's preinst refuses to land beside a file install; this
+	# marker says the file install goes once the package is in (below).
+	[ "$FILES_INSTALLED" = 1 ] && : > "$INSTALL_DIR/.package-replaces"
 	case "$PKG" in
 		apk)  pkg_add_v --allow-untrusted "$P_OPENUF" "$P_APP" ${P_THEME:+"$P_THEME"} ;;
 		*)    pkg_add_v "$P_OPENUF" "$P_APP" ${P_THEME:+"$P_THEME"} ;;
-	esac || die "the package install failed (its output is above). Nothing about the
-       network has been touched yet, so this device is still a working router."
+	esac || { rm -f "$INSTALL_DIR/.package-replaces"
+		die "the package install failed (its output is above). Nothing about the
+       network has been touched yet, so this device is still a working router."; }
 	[ -f "$PKG_DIR/inform.lua" ] \
 		|| die "the package manager reported success but $PKG_DIR/inform.lua is missing"
 	ok "installed openuf and luci-app-openuf${P_THEME:+ and luci-theme-halo}"
@@ -1430,9 +1558,16 @@ else
 	# A file install left from before: the init script already ignores it in
 	# favour of the package, so all it can do now is confuse. Its state (the
 	# adoption, in $STATE_DIR) is shared with the package and stays.
+	# install.sh's uninstall, not a bare rm -rf: with the package present it
+	# removes only that prefix's own files (the updater, its sysupgrade.conf
+	# line, its adoption shell, moving a bootstrap account onto the package's).
 	if [ "$FILES_INSTALLED" = 1 ]; then
-		rm -rf "$INSTALL_DIR"
-		ok "removed the file install under $INSTALL_DIR (state in $STATE_DIR kept)"
+		if ( cd "$SRC" && sh install.sh uninstall ) >/dev/null 2>&1; then
+			ok "removed the file install under $INSTALL_DIR (state in $STATE_DIR kept)"
+		else
+			rm -rf "$INSTALL_DIR"
+			warn "install.sh uninstall failed; removed $INSTALL_DIR itself (state in $STATE_DIR kept)"
+		fi
 	fi
 
 	# The package's install started the service with the shipped defaults;

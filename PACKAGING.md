@@ -73,7 +73,7 @@ openuf/uciconf.lua                /etc/config/openuf -> the `dev`/`config` table
 | Install prefix | `/usr/lib/openuf/` for the modules, presets and hook; `/usr/bin/syswrapper.sh` symlink (the controller's SSH adoption runs it by name); `/usr/bin/openuf` a tiny CLI (`--version`, `status`, `reset-inform`); `/etc/openuf/` for `state.json` and the ledger | Feed packages do not install under `/opt`. The cwd-relative `dofile` design stays: only the init script and the hook name the directory |
 | Configuration | `/etc/config/openuf` (UCI). `conf.lua` becomes a loader that builds today's `config`/`dev` tables from UCI; presets stay Lua files under `modelmap/` and `ufmodel/`; a custom map is UCI sections (`device`, `port`, `vlan`, `radio`, `identity`) turned into the same `dev` table by one loader that applies `test_modelmap.lua`'s invariants as refusals | LuCI forms edit UCI; the presets are tried and true and keep their tests |
 | Backend | ucode rpcd plugin `luci.openuf` under `/usr/share/rpcd/ucode/` (`rpcd-mod-ucode`, which `luci-base` already depends on) | Every current LuCI app with a backend is ucode or shell; Lua rpcd plugins are not what upstream takes |
-| Daemon deps | Hard: `+lua +luabitop +lua-cjson +luasocket +lua-openssl +libuci-lua +iw +lldpd +ip-bridge +hostapd-utils +usteer +nftables +kmod-nft-bridge +tc-tiny +kmod-sched-act-police` (2026-09-29: the feature packages were optional at first; the user found the package install leaving features off and made them hard). Not expressible: a **full wpad build**, so `openuf deps --install` (hook/openuf-deps.sh, `/usr/sbin/openuf-deps`) swaps a `wpad-basic-*` for the full build of the same crypto library, the init script refuses to start without one, the package's postinst-pkg says so, and the LuCI overview has the button | Every wpad variant PROVIDES the same names, so no virtual package tells full from basic; naming one variant would CONFLICT with the stock `wpad-basic-*` and make the package uninstallable; a postinst cannot swap under the package manager's own lock |
+| Daemon deps | Hard: `+lua +luabitop +lua-cjson +luasocket +lua-openssl +libuci-lua +iw +lldpd +ip-bridge +hostapd-utils +usteer +nftables +kmod-nft-bridge +tc-tiny +kmod-ifb +kmod-sched-act-police +ucode-mod-socket +kmod-veth` (2026-09-29: the feature packages were optional at first; the user found the package install leaving features off and made them hard). Conditional, as in `install.sh` and `setup.sh`: `luasec` (only an `https://` inform URL needs it) and `kmod-leds-gpio` (only a board whose gpio LEDs the kernel cannot drive); the postinst-pkg names either one when the device needs it. Not expressible: a **full wpad build**, so `openuf deps --install` (hook/openuf-deps.sh, `/usr/sbin/openuf-deps`) swaps a `wpad-basic-*` for the full build of the same crypto library, the init script refuses to start without one, the package's postinst-pkg says so, and the LuCI overview has the button | Every wpad variant PROVIDES the same names, so no virtual package tells full from basic; naming one variant would CONFLICT with the stock `wpad-basic-*` and make the package uninstallable; a postinst cannot swap under the package manager's own lock |
 | Package source | `PKG_SOURCE_URL` = the GitHub release archive `openuf-<ver>.tar.gz` (gzip, not xz: busybox tar on a device cannot unpack xz, and the same archive serves a manual install), which the release workflow produces from `tools/dist.sh --verify` (comment-stripped, proven bytecode-identical, tests passed) | Feed rules want an official release archive; the stripped tree halves the installed size, and the proof stays in CI logs |
 | Version | `PKG_VERSION` from the tag `vX.Y.Z`; `PKG_RELEASE` reset to 1 on a version change; `BUILD` stamp kept | Feed convention |
 | Minimum target | LuCI app: OpenWrt 24.10 and later (ucode rpcd, JS LuCI); daemon: unchanged reach | Both package formats the release builds (`opkg` on 24.10, `apk` on 25.12) |
@@ -353,13 +353,22 @@ MAC. `setup.sh` is therefore the one entry point and never mixes the two:
   files of the latest GitHub release (`OPENUF_RELEASE_URL`, or `OPENUF_PKG_DIR` for files
   already on the device), installs `openuf` + `luci-app-openuf` (+ `luci-theme-halo` when
   wanted and present in the release) in one transaction with `apk add --allow-untrusted` /
-  `opkg install`, writes the answers to `/etc/config/openuf` (a generated profile as the
+  `opkg install` once each file matches the release's `SHA256SUMS` (the release
+  workflow's `checksums` job writes it over every attached file; no list, no install), writes the answers to `/etc/config/openuf` (a generated profile as the
   `custom` device + `port` sections), creates the adoption account through the new
   `openuf bootstrap-account` (`hook/openuf-bootstrap.sh`) and removes a leftover
   `/opt/openuf`; headless is the file install as before;
 - `install.sh install` refuses when `/usr/lib/openuf/inform.lua` exists;
 - the package's `postinst-pkg` warns when `/opt/openuf/inform.lua` exists and says how to
-  carry the configuration over.
+  carry the configuration over;
+- the package's `preinst` refuses when `/opt/openuf/inform.lua` exists, unless
+  `/opt/openuf/.package-replaces` is there (setup.sh leaves it while it replaces the file
+  install, and removes it if the package install fails);
+- the package's `prerm-pkg` (removal only, not an upgrade) undoes what `install.sh uninstall`
+  does beyond the package's own files: the translator's veth pair, the controller's cron
+  block, and the `ubnt` account with its group and `/etc/shells` line -- only the account
+  whose gecos is `openuf bootstrap adoption`, and nothing while a file install still
+  shares them. `tools/test-packaging.sh` runs both scripts against a scratch root.
 
 Testing this in the VM found a second bug: on apk, `apk info -e hostapd` is true for
 `wpad-basic-mbedtls` (it PROVIDES hostapd), so `setup.sh`'s packages phase believed a full

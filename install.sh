@@ -161,11 +161,14 @@ case "$ACTION" in
 		# When installing from a git clone, strip on the way in using the same
 		# tool so the device gets the same lean tree -- roughly half the bytes,
 		# and flash is scarce. conf.lua and the modelmaps keep their comments:
-		# they are the files meant to be hand-edited on the device.
+		# they are the files meant to be hand-edited on the device. The
+		# identities (ufmodel/*) keep theirs too, as in dist.sh's keep_comments:
+		# the web UI lists them by their header title, which hook/probe.lua
+		# reads off the installed file.
 		if [ -f tools/strip.lua ] && command -v lua >/dev/null 2>&1; then
 			echo "Stripping comments from installed Lua ..."
-			for f in $(find "$INSTALL_DIR" -name '*.lua' \
-				! -name conf.lua ! -path "$INSTALL_DIR/modelmap/*"); do
+			for f in $(find "$INSTALL_DIR" -name '*.lua' ! -name conf.lua \
+				! -path "$INSTALL_DIR/modelmap/*" ! -path "$INSTALL_DIR/ufmodel/*"); do
 				lua tools/strip.lua "$f" > "$f.stripped" \
 					&& mv "$f.stripped" "$f"
 			done
@@ -430,55 +433,83 @@ case "$ACTION" in
 	uninstall)
 		echo "Uninstalling openUF ..."
 
-		# Stop and disable service
-		if [ -f "$INIT_SCRIPT" ]; then
-			"$INIT_SCRIPT" stop  2>/dev/null
-			"$INIT_SCRIPT" disable 2>/dev/null
-			rm -f "$INIT_SCRIPT"
-		fi
-		# The 802.11r translator's service, and the veth pair openUF wrote
-		# into /etc/config/network for it (ucihelper.ensure_ft_veth).
-		if [ -f /etc/init.d/openuf-rrb ]; then
-			/etc/init.d/openuf-rrb stop 2>/dev/null
-			/etc/init.d/openuf-rrb disable 2>/dev/null
-			rm -f /etc/init.d/openuf-rrb
-		fi
-		if command -v uci >/dev/null 2>&1 && uci -q get network.openuf_ftveth >/dev/null 2>&1; then
-			for _s in openuf_ftveth openuf_ftlink openuf_ftpeer; do uci -q delete network.$_s; done
-			uci commit network
-			/etc/init.d/network reload 2>/dev/null
-			echo "Removed the translator's veth pair from /etc/config/network."
-		fi
+		# The openuf package beside this file install (setup.sh's switch to
+		# the package, or a device left with both): the init scripts, the
+		# links, the cron block, the veth pair and the bootstrap account are
+		# the running package's now. Only this prefix's own files go.
+		if [ -f /usr/lib/openuf/inform.lua ]; then
+			echo "The openuf package is installed: removing only the file install under $INSTALL_DIR."
+			rm -f /usr/bin/openuf-update
+			# A bootstrap account made by this file install has its forced shell
+			# under $INSTALL_DIR, about to go: point it at the package's copy,
+			# registered in /etc/shells the way hook/openuf-bootstrap.sh does.
+			_pkg_shell=/usr/lib/openuf/hook/adopt-shell.sh
+			if awk -F: -v d="$INSTALL_DIR/" '$1=="ubnt" && $5=="openuf bootstrap adoption" && index($7, d) == 1 {f=1} END {exit !f}' /etc/passwd 2>/dev/null; then
+				sed -i "s#^\(ubnt:.*:\)$INSTALL_DIR/hook/adopt-shell\.sh\$#\1$_pkg_shell#" /etc/passwd
+				if ! grep -qxF "$_pkg_shell" /etc/shells 2>/dev/null; then
+					[ -s /etc/shells ] && [ -n "$(tail -c1 /etc/shells)" ] && echo >> /etc/shells
+					echo "$_pkg_shell" >> /etc/shells
+				fi
+				echo "The 'ubnt' bootstrap account now uses the package's $_pkg_shell."
+			fi
+			[ -f /etc/shells ] && sed -i "\#^$INSTALL_DIR/hook/adopt-shell\.sh\$#d" /etc/shells
+		else
 
-		# Remove symlink, and the updater command
-		rm -f "$BIN_LINK" /usr/bin/openuf-update /usr/bin/openuf /usr/sbin/openuf-convert /usr/sbin/openuf-deps
+			# Stop and disable service
+			if [ -f "$INIT_SCRIPT" ]; then
+				"$INIT_SCRIPT" stop  2>/dev/null
+				"$INIT_SCRIPT" disable 2>/dev/null
+				rm -f "$INIT_SCRIPT"
+			fi
+			# The 802.11r translator's service, and the veth pair openUF wrote
+			# into /etc/config/network for it (ucihelper.ensure_ft_veth).
+			if [ -f /etc/init.d/openuf-rrb ]; then
+				/etc/init.d/openuf-rrb stop 2>/dev/null
+				/etc/init.d/openuf-rrb disable 2>/dev/null
+				rm -f /etc/init.d/openuf-rrb
+			fi
+			if command -v uci >/dev/null 2>&1 && uci -q get network.openuf_ftveth >/dev/null 2>&1; then
+				for _s in openuf_ftveth openuf_ftlink openuf_ftpeer; do uci -q delete network.$_s; done
+				uci commit network
+				/etc/init.d/network reload 2>/dev/null
+				echo "Removed the translator's veth pair from /etc/config/network."
+			fi
 
-		# The controller's cron jobs (sysconf.lua) call the symlink just
-		# removed; take openUF's marked block out of root's crontab so crond
-		# does not fail on it every night. Lines outside the markers stay.
-		if grep -q '^# openuf-cron-begin' /etc/crontabs/root 2>/dev/null; then
-			sed -i '/^# openuf-cron-begin/,/^# openuf-cron-end$/d' /etc/crontabs/root
-			/etc/init.d/cron restart 2>/dev/null
-			echo "Removed openUF's controller cron jobs from /etc/crontabs/root."
-		fi
+			# Remove symlink, and the updater command
+			rm -f "$BIN_LINK" /usr/bin/openuf-update /usr/bin/openuf /usr/sbin/openuf-convert /usr/sbin/openuf-deps
 
-		# Remove the SSH bootstrap account/group if present (hygiene --
-		# symmetric with what install --bootstrap-adopt added, regardless of
-		# whether that flag is passed here).
-		if grep -q "^ubnt:" /etc/passwd 2>/dev/null; then
-			sed -i '/^ubnt:/d' /etc/passwd
-			sed -i '/^ubnt:/d' /etc/shadow
-			echo "Removed SSH bootstrap account 'ubnt'."
-		fi
-		# The shell that account was registered with in /etc/shells (dropbear
-		# refuses a login whose shell is not listed there) goes with it --
-		# whichever prefix made the account, since the entry is the path.
-		if grep -q '/hook/adopt-shell\.sh$' /etc/shells 2>/dev/null; then
-			sed -i '/\/hook\/adopt-shell\.sh$/d' /etc/shells
-			echo "Removed the bootstrap shell from /etc/shells."
-		fi
-		if grep -q "^openuf:" /etc/group 2>/dev/null; then
-			sed -i '/^openuf:/d' /etc/group
+			# The controller's cron jobs (sysconf.lua) call the symlink just
+			# removed; take openUF's marked block out of root's crontab so crond
+			# does not fail on it every night. Lines outside the markers stay.
+			if grep -q '^# openuf-cron-begin' /etc/crontabs/root 2>/dev/null; then
+				sed -i '/^# openuf-cron-begin/,/^# openuf-cron-end$/d' /etc/crontabs/root
+				/etc/init.d/cron restart 2>/dev/null
+				echo "Removed openUF's controller cron jobs from /etc/crontabs/root."
+			fi
+
+			# Remove the SSH bootstrap account/group if present (hygiene --
+			# symmetric with what install --bootstrap-adopt added, regardless of
+			# whether that flag is passed here). Only the account openUF made:
+			# hook/openuf-bootstrap.sh writes "openuf bootstrap adoption" as its
+			# gecos. A ubnt login the admin made before openUF is theirs, and
+			# deleting it would lock them out.
+			_ubnt_gid=$(awk -F: '$1=="ubnt" && $5=="openuf bootstrap adoption" {print $4}' /etc/passwd 2>/dev/null)
+			if [ -n "$_ubnt_gid" ]; then
+				sed -i '/^ubnt:/d' /etc/passwd
+				sed -i '/^ubnt:/d' /etc/shadow
+				echo "Removed SSH bootstrap account 'ubnt'."
+				# Its group, by the gid the account had -- not any "openuf".
+				sed -i "/^openuf:[^:]*:$_ubnt_gid:/d" /etc/group
+			elif grep -q "^ubnt:" /etc/passwd 2>/dev/null; then
+				echo "Left the 'ubnt' account alone: openUF did not create it."
+			fi
+			# The shell that account was registered with in /etc/shells (dropbear
+			# refuses a login whose shell is not listed there) goes with it --
+			# whichever prefix made the account, since the entry is the path.
+			if grep -q '/hook/adopt-shell\.sh$' /etc/shells 2>/dev/null; then
+				sed -i '/\/hook\/adopt-shell\.sh$/d' /etc/shells
+				echo "Removed the bootstrap shell from /etc/shells."
+			fi
 		fi
 
 		# Drop the sysupgrade keep-list entry for conf.lua: that file goes

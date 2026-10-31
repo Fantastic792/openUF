@@ -14,11 +14,14 @@ PKG_RELEASE:=1
 # The release archive tools/release-archive.sh produces from a tag: the
 # comment-stripped tree tools/dist.sh --verify proved bytecode-identical to the
 # source, under a single openuf-<version>/ directory. The release workflow
-# substitutes PKG_VERSION and PKG_HASH from the tag it is building; a feed
-# submission carries the real hash.
+# substitutes PKG_VERSION and PKG_HASH from the tag it is building and refuses
+# to build with anything but the archive's own sha256. The committed hash is an
+# all-zero placeholder, not "skip": a build straight from this tree fails the
+# hash check instead of installing an unchecked download. A feed submission
+# carries the real hash.
 PKG_SOURCE:=openuf-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/Fantastic792/openUF/releases/download/v$(PKG_VERSION)/
-PKG_HASH:=skip
+PKG_HASH:=0000000000000000000000000000000000000000000000000000000000000000
 
 PKG_MAINTAINER:=Yesrab Ali <yesrab.ali111@gmail.com>
 # The whole tree, the vendored 802.11r translator included (NOTICE lists the
@@ -35,6 +38,10 @@ define Package/openuf
   SUBMENU:=Wireless
   TITLE:=UniFi access point emulation
   URL:=https://github.com/Fantastic792/openUF
+  # luasec and kmod-leds-gpio are conditional, as in install.sh and setup.sh:
+  # luasec only for an https:// inform URL (the UniFi default is plain http),
+  # kmod-leds-gpio only on a board whose gpio LEDs the kernel cannot drive.
+  # postinst-pkg names either one when this device needs it.
   DEPENDS:=+lua +luabitop +lua-cjson +luasocket +lua-openssl +libuci-lua +iw \
 	+lldpd +ip-bridge +hostapd-utils +usteer +nftables +kmod-nft-bridge \
 	+tc-tiny +kmod-ifb +kmod-sched-act-police +ucode-mod-socket +kmod-veth
@@ -89,12 +96,70 @@ if [ -z "$${IPKG_INSTROOT}" ] && [ -f /opt/openuf/inform.lua ]; then
 	echo "openuf: 'rm -rf /opt/openuf'. Two copies have shown up in a controller as two devices." >&2
 fi
 if [ -z "$${IPKG_INSTROOT}" ]; then
+	_openuf_pm="opkg install"; command -v apk >/dev/null 2>&1 && _openuf_pm="apk add"
+	_openuf_url=$$(sed -n 's/.*"inform_url":"\([^"]*\)".*/\1/p' /etc/openuf/state.json 2>/dev/null | head -1)
+	[ -n "$$_openuf_url" ] || _openuf_url=$$(uci -q get openuf.main.inform_url)
+	case "$$_openuf_url" in
+		https*) [ -f /usr/lib/lua/ssl.lua ] \
+			|| echo "openuf: the inform URL is https:// and luasec is missing: $$_openuf_pm luasec" >&2 ;;
+	esac
+	if [ -d /sys/bus/platform/devices/leds ] \
+		&& ! ls /sys/class/leds 2>/dev/null | grep -qv '^mt76-'; then
+		echo "openuf: this board's gpio LEDs have no driver (Locate cannot light them): $$_openuf_pm kmod-leds-gpio" >&2
+	fi
+fi
+if [ -z "$${IPKG_INSTROOT}" ]; then
 	for _openuf_svc in openuf openuf-rrb; do
 		if [ -x "/etc/init.d/$$_openuf_svc" ] && "/etc/init.d/$$_openuf_svc" running >/dev/null 2>&1; then
 			"/etc/init.d/$$_openuf_svc" restart >/dev/null 2>&1 \
 				&& echo "openuf: restarted $$_openuf_svc on the new version" >&2
 		fi
 	done
+fi
+endef
+
+# A file install (install.sh's /opt/openuf) is no package, so CONFLICTS cannot
+# name it: refuse here instead, before a second copy lands. setup.sh, which
+# removes the file install itself once the package is in, leaves the marker.
+define Package/openuf/preinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+if [ -f /opt/openuf/inform.lua ] && [ ! -f /opt/openuf/.package-replaces ]; then
+	echo "openuf: a file install of openUF is present under /opt/openuf. Remove it first" >&2
+	echo "openuf: (sh install.sh uninstall; its state in /etc/openuf stays), then install the" >&2
+	echo "openuf: package: two copies have shown up in a controller as two devices." >&2
+	exit 1
+fi
+exit 0
+endef
+
+# Removal only (apk runs no pre-deinstall on an upgrade, opkg sets
+# PKG_UPGRADE): what install.sh uninstall also undoes beyond the package's own
+# files -- the veth pair ucihelper.ensure_ft_veth wrote, the controller's cron
+# block, and the bootstrap account, only the one openUF made (its gecos says
+# so). default_prerm sources this in a subshell, then stops and disables the
+# init scripts. With a file install still present those belong to it.
+define Package/openuf/prerm-pkg
+if [ -z "$${IPKG_INSTROOT}" ] && [ "$${PKG_UPGRADE}" != 1 ] && [ ! -f /opt/openuf/inform.lua ]; then
+	if uci -q get network.openuf_ftveth >/dev/null 2>&1; then
+		for _s in openuf_ftveth openuf_ftlink openuf_ftpeer; do uci -q delete network.$$_s; done
+		uci commit network
+		/etc/init.d/network reload 2>/dev/null
+	fi
+	if grep -q '^# openuf-cron-begin' /etc/crontabs/root 2>/dev/null; then
+		sed -i '/^# openuf-cron-begin/,/^# openuf-cron-end$$/d' /etc/crontabs/root
+		/etc/init.d/cron restart 2>/dev/null
+	fi
+	_gid=$$(awk -F: '$$1=="ubnt" && $$5=="openuf bootstrap adoption" {print $$4}' /etc/passwd 2>/dev/null)
+	if [ -n "$$_gid" ]; then
+		sed -i '/^ubnt:/d' /etc/passwd /etc/shadow
+		sed -i "/^openuf:[^:]*:$$_gid:/d" /etc/group
+	fi
+	# Not `[ ] && sed` last: a false test would be this file's status, and a
+	# failing prerm aborts the removal.
+	if [ -f /etc/shells ]; then
+		sed -i '/^\/usr\/lib\/openuf\/hook\/adopt-shell\.sh$$/d' /etc/shells
+	fi
 fi
 endef
 
@@ -126,7 +191,7 @@ define Package/openuf/install
 	$(LN) ../lib/openuf/hook/openuf-deps.sh $(1)/usr/sbin/openuf-deps
 	$(INSTALL_DIR) $(1)/usr/lib/openuf/rrb
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/rrb/rrb-unifi.uc $(1)/usr/lib/openuf/rrb/
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/openuf/rrb/README.md $(1)/usr/lib/openuf/rrb/
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/openuf/rrb/README.md $(PKG_BUILD_DIR)/openuf/rrb/LICENSE $(1)/usr/lib/openuf/rrb/
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/etc/init.d/openuf $(1)/etc/init.d/openuf
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/etc/init.d/openuf-rrb $(1)/etc/init.d/openuf-rrb
