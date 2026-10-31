@@ -1321,8 +1321,12 @@ if [ "$HEADLESS" = 1 ]; then
 	# of the two files install.sh deliberately does not comment-strip, and doing it
 	# here means a re-run of setup.sh reproduces the whole configuration rather
 	# than layering edits onto whatever is already on the device.
+	# The value goes into sed's replacement escaped: there `&` is the whole
+	# match, `\` an escape and `|` this command's delimiter, so an inform URL
+	# with a query string (?a=1&b=2) came out mangled or broke the command.
 	conf_set() {   # conf_set <key> <lua value>
-		sed -i "s|^\([[:space:]]*\)$1[[:space:]]*=[[:space:]]*.*|\1$1 = $2,|" "$CONF"
+		_cv=$(printf '%s' "$2" | sed 's/[\\&|]/\\&/g')
+		sed -i "s|^\([[:space:]]*\)$1[[:space:]]*=[[:space:]]*.*|\1$1 = $_cv,|" "$CONF"
 		grep -q "^[[:space:]]*$1[[:space:]]*=[[:space:]]*$(
 			printf '%s' "$2" | sed 's/[].[^$*\\/]/\\&/g')," "$CONF" \
 			|| die "could not set $1 in $CONF (unexpected file layout)"

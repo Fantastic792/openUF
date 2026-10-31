@@ -290,5 +290,17 @@ check "rollback keeps the old rc.d link" test -L "$R/etc/rc.d/S95openuf"
 check "rollback keeps the command link" test -L "$R/usr/bin/syswrapper.sh"
 check "rollback keeps the state" grep -qx state "$R/etc/openuf/state.json"
 
+# ── B14: setup.sh's conf_set writes values with & | \ intact ───────────────
+newroot confset
+CONF=$R/conf.lua
+printf 'config = {\n\tinform_url = "http://unifi:8080/inform",\n\tl2_announce = true,\n}\n' > "$CONF"
+awk '/^\tconf_set\(\) \{/ { f = 1 } f { print } f && /^\t\}$/ { exit }' setup.sh > "$R/cs.sh"
+cset() { ( die() { echo "die: $*"; exit 1; }; . "$R/cs.sh"; conf_set "$@" ) > "$R/out" 2>&1; }
+for v in 'http://a/inform?x=1&y=2' 'http://a|b/inform' 'http://a/in\form' 'http://a/&&|\\'; do
+	check "conf_set keeps $v" cset inform_url "\"$v\""
+	check "conf_set wrote $v exactly" grep -qxF "	inform_url = \"$v\"," "$CONF"
+done
+check "conf_set leaves the other keys" grep -qxF '	l2_announce = true,' "$CONF"
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
