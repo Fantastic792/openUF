@@ -363,5 +363,15 @@ sh "$R/f.sh" > "$R/out" 2>&1
 check "check.sh shows state.json" grep -q adopted "$R/out"
 check "check.sh hides the authkey" eval '! grep -q 0123456789abcdef "$R/out"'
 
+# ── B17: openuf-rrb.sh's pick_ssid keeps SSIDs with spaces whole ───────────
+newroot b17
+{ echo 'die() { echo "die: $*"; exit 2; }'
+  echo 'unifi_records() { printf "h\tHome Wifi\nh\tOther\n"; }'
+  echo 'owrt_sections() { [ "$1" = "Home Wifi" ] && echo s1; }'
+  echo 'SSID='
+  mkfunc openuf/hook/openuf-rrb.sh pick_ssid
+  echo 'pick_ssid; echo "[$SSID]"'; } > "$R/f.sh"
+check "pick_ssid picks 'Home Wifi' whole" eval '[ "$(sh "$R/f.sh")" = "[Home Wifi]" ]'
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

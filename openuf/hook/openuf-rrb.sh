@@ -200,7 +200,11 @@ desired() {	# desired SECTION BSSID -> lines "option value" / "list option value
 pick_ssid() {
 	[ -n "$SSID" ] && return
 	ssids=$(unifi_records | cut -f2 | sort -u)
-	n=0; for x in $ssids; do [ -n "$(owrt_sections "$x")" ] && { SSID=$x; n=$((n + 1)); }; done
+	# One SSID per line: an SSID may hold spaces, so no word splitting.
+	n=0; _ifs=$IFS; IFS='
+'
+	for x in $ssids; do [ -n "$(owrt_sections "$x")" ] && { SSID=$x; n=$((n + 1)); }; done
+	IFS=$_ifs
 	[ $n -eq 1 ] || die "use --ssid NAME (UniFi fast-roaming SSIDs: $(echo $ssids))"
 }
 
