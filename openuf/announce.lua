@@ -442,6 +442,24 @@ end
 
 -- Last reply time per asker address and request type, for REPLY_MIN_GAP.
 M._last_reply = {}
+M._last_refresh = nil
+M.REPLY_MAX_KEYS = 64
+
+-- Room for one more (asker, type) key? Entries older than the gap no longer
+-- limit anything and are dropped first; when the table is still full the
+-- request is not answered (a flood of distinct askers gets at most
+-- REPLY_MAX_KEYS replies per gap, and live keys are never forgotten).
+function M._admit(key, now)
+	local t = M._last_reply
+	if t[key] then return true end
+	local n = 0
+	for _ in pairs(t) do n = n + 1 end
+	if n < M.REPLY_MAX_KEYS then return true end
+	for k, last in pairs(t) do
+		if now - last >= M.REPLY_MIN_GAP then t[k] = nil; n = n - 1 end
+	end
+	return n < M.REPLY_MAX_KEYS
+end
 
 -- Wait out `interval` seconds on the listener, answering each request that
 -- arrives meanwhile: unicast to the asker's address and port, from port 10001
@@ -459,13 +477,14 @@ function M._serve_requests(udpl, cfg, interval, socket)
 				local key = ip .. "/" .. tostring(data:byte(1)) .. "." .. tostring(data:byte(2))
 				local last = M._last_reply[key]
 				if not (last and now - last < M.REPLY_MIN_GAP)
-						and M.reply_for(data, cfg) then
-					-- Fresh figures (IP, uptime, adoption) for the reply itself.
-					M._refresh(cfg)
+						and M.reply_for(data, cfg) and M._admit(key, now) then
+					-- Fresh figures (IP, uptime, adoption) for the reply itself,
+					-- re-read at most once per gap however many askers there are.
+					if not M._last_refresh or now - M._last_refresh >= M.REPLY_MIN_GAP then
+						M._refresh(cfg)
+						M._last_refresh = now
+					end
 					local reply = M.reply_for(data, cfg)
-					local n = 0
-					for _ in pairs(M._last_reply) do n = n + 1 end
-					if n > 64 then M._last_reply = {} end
 					M._last_reply[key] = now
 					local sent, serr = udpl:sendto(reply, ip, port)
 					if not sent then

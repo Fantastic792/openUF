@@ -777,6 +777,40 @@ return {
 		end
 	},
 	{
+		name = "announce: the reply limiter keeps live keys past 64 askers and refreshes once per gap",
+		fn = function()
+			local now = 0
+			local queue = {}
+			for i = 1, 70 do queue[#queue + 1] = {string.char(1, 0, 0, 0), "192.0.2." .. i, 40000} end
+			local sent, refreshes = {}, 0
+			local udpl = {
+				receivefrom = function() local q = table.remove(queue, 1); return q[1], q[2], q[3] end,
+				sendto = function(_, data, ip) sent[#sent + 1] = ip; return 1 end,
+			}
+			local fake = {
+				gettime = function() now = now + 0.001; return now end,
+				select = function() if #queue > 0 then return {udpl} end; now = now + 100; return {} end,
+			}
+			local saved = {announce._refresh, announce._last_reply, announce._last_refresh}
+			announce._refresh = function(c) refreshes = refreshes + 1; return c end
+			announce._last_reply, announce._last_refresh = {}, nil
+			announce._serve_requests(udpl, sample_cfg(), 10, fake)
+			local kept = announce._last_reply["192.0.2.1/1.0"]
+			announce._refresh, announce._last_reply, announce._last_refresh = saved[1], saved[2], saved[3]
+			assert_eq(#sent, 64, "a flood of distinct askers gets 64 replies within one gap")
+			assert_true(kept ~= nil, "an early asker's limit entry survives the flood")
+			assert_eq(refreshes, 1, "one /proc + ip refresh for all of them, not one per request")
+			-- Expired entries are pruned to make room.
+			announce._last_reply = {}
+			for i = 1, 64 do announce._last_reply["k" .. i] = 0 end
+			assert_true(announce._admit("new", 10), "stale entries make room")
+			announce._last_reply = {}
+			for i = 1, 64 do announce._last_reply["k" .. i] = 10 end
+			assert_false(announce._admit("new", 10.1), "live entries do not")
+			announce._last_reply = saved[2]
+		end
+	},
+	{
 		name = "announce: the discovery multicast group is joined on the LAN address, once, and again when the address moves",
 		fn = function()
 			local calls = {}
