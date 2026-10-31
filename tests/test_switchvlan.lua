@@ -721,6 +721,54 @@ return {
 		end
 	},
 	{
+		name = "switchvlan: a port moved back to stock is re-added to its stock section on that push",
+		fn = function()
+			with_capture(function(cmds)
+				local u = swconfig_board()
+				u.cursor:set("network", "stock_vlan30", "switch_vlan")
+				u.cursor:set("network", "stock_vlan30", "vlan", "30")
+				u.cursor:set("network", "stock_vlan30", "ports", "0t 1t 2t")
+				switchvlan._uci = u.mock
+				local st = {}
+				local sw = override()
+				sw.ports[2].vlans[30] = "exclude"
+				switchvlan.apply(sw, CFG, st)
+				assert_eq(u.db.network.stock_vlan1.ports, "0t 2 3 4", "stripped from VLAN 1")
+				assert_eq(u.db.network.stock_vlan30.ports, "0t 2t", "stripped from VLAN 30")
+				-- The override is removed in the controller: the port goes home.
+				assert_true(switchvlan.apply({enabled = true, vlans = {}, ports = {}}, CFG, st),
+					"the move back is a change")
+				assert_nil(u.db.network.openuf_swvlan20, "openUF's section removed")
+				assert_eq(u.db.network.stock_vlan1.ports, "0t 1 2 3 4",
+					"untagged home restored in ledger order")
+				assert_eq(u.db.network.stock_vlan30.ports, "0t 1t 2t",
+					"tagged membership restored too")
+				local n = #cmds
+				assert_false(switchvlan.apply({enabled = true, vlans = {}, ports = {}}, CFG, st),
+					"steady state stays a no-op")
+				assert_eq(#cmds, n, "no further reload")
+			end)
+		end
+	},
+	{
+		name = "switchvlan: a port still claimed elsewhere is not re-added to stock",
+		fn = function()
+			with_capture(function()
+				local u = swconfig_board()
+				switchvlan._uci = u.mock
+				local st = {}
+				switchvlan.apply(override(), CFG, st)
+				-- Same port, now native VLAN 30 instead of 20.
+				local sw = override()
+				sw.vlans[30] = {mode = "tagged", enabled = true}
+				sw.ports[2] = {pvid = 30, vlans = {[1] = "exclude", [30] = "untagged"}}
+				switchvlan.apply(sw, CFG, st)
+				assert_eq(u.db.network.stock_vlan1.ports, "0t 2 3 4", "stays out of VLAN 1")
+				assert_eq(u.db.network.openuf_swvlan30.ports, "0t 1", "untagged in VLAN 30")
+			end)
+		end
+	},
+	{
 		name = "switchvlan: a dynamic-uplink board strips the moved port from stock VLAN 1",
 		fn = function()
 			-- No static uplink: the stock-strip pass must use the runtime

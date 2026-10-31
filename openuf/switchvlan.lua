@@ -392,6 +392,8 @@ function M.apply(sw, cfg, st, wireless_vlans, uplink_phys, uplink_ifname)
 	--     port_idx is unmappable by design).
 	--   * The management VLAN is never stripped of its last downstream
 	--     port (same survival principle as the members_by_vlan guard).
+	--   * A port the ledger has in V that is gone from V and that neither rule
+	--     above claims any more is put back (see `backup` below).
 	local untagged_home = {}  -- phys -> vlan_id it becomes untagged in
 	local excluded      = {}  -- vlan_id -> { [phys] = true }
 	for port_idx, p in pairs((sw and sw.enabled and sw.ports) or {}) do
@@ -413,43 +415,85 @@ function M.apply(sw, cfg, st, wireless_vlans, uplink_phys, uplink_ifname)
 	local cpu_ports = {[tostring(cfg.vlan.cpu_lan)] = true}
 	if cfg.vlan.cpu_wan then cpu_ports[tostring(cfg.vlan.cpu_wan)] = true end
 
+	-- Whether this push lets token `tok` stay in stock VLAN `vid`.
+	local function stock_keeps(vid, tok)
+		local num, tag = tok:match("^(%d+)(t?)$")
+		if not num or cpu_ports[num] then return true end
+		local phys = tonumber(num)
+		local home = untagged_home[phys]
+		if excluded[vid] and excluded[vid][phys] then
+			return not (tag == "t" or (home and home ~= vid))
+		end
+		return not (tag == "" and home and home ~= vid)
+	end
+
+	-- The reverse direction: a port the ledger shows in stock VLAN V, missing
+	-- from V now (an earlier push stripped it), and that this push no longer
+	-- claims elsewhere goes back in, from st.swvlan_backup, on this push --
+	-- not at restore(), or it sits with no untagged VLAN at all meanwhile.
+	local backup = st and st.swvlan_backup
 	local stock_edits = {}  -- section name -> new ports string
 	cursor:foreach("network", "switch_vlan", function(s)
 		local name = s[".name"]
 		if not name or name:match("^" .. OPENUF_VLAN_PREFIX) then return end
 		local vid = tonumber(s.vlan)
 		if not vid or not s.ports then return end
-		local out, changed_here, non_cpu_left = {}, false, false
+		local cur, out, changed_here, non_cpu_left = {}, {}, false, false
 		for tok in tostring(s.ports):gmatch("%S+") do
-			local num, tag = tok:match("^(%d+)(t?)$")
-			local keep = true
-			if num and not cpu_ports[num] then
-				local phys = tonumber(num)
-				local home = untagged_home[phys]
-				if excluded[vid] and excluded[vid][phys] then
-					if tag == "t" or (home and home ~= vid) then
-						keep = false
-					end
-				elseif tag == "" and home and home ~= vid then
-					keep = false
-				end
-			end
-			if keep then
+			cur[#cur + 1] = tok
+			local num = tok:match("^(%d+)t?$")
+			if stock_keeps(vid, tok) then
 				out[#out + 1] = tok
 				if num and not cpu_ports[num] then non_cpu_left = true end
 			else
 				changed_here = true
 			end
 		end
-		if changed_here then
-			if vid == mgmt_vlan and not non_cpu_left then
-				io.stderr:write(("switchvlan: not stripping %s (management "
-					.. "VLAN %d) -- it would lose its last downstream port\n")
-					:format(name, vid))
-			else
-				stock_edits[name] = table.concat(out, " ")
+		if changed_here and vid == mgmt_vlan and not non_cpu_left then
+			io.stderr:write(("switchvlan: not stripping %s (management "
+				.. "VLAN %d) -- it would lose its last downstream port\n")
+				:format(name, vid))
+			out = cur
+		end
+
+		local saved = backup and backup[tostring(vid)]
+		if saved then
+			local have, readd = {}, {}
+			for _, tok in ipairs(cur) do
+				local num = tok:match("^(%d+)t?$")
+				if num then have[num] = true end
+			end
+			for tok in tostring(saved):gmatch("%S+") do
+				local num = tok:match("^(%d+)t?$")
+				if num and not have[num] and stock_keeps(vid, tok) then
+					readd[num] = tok
+				end
+			end
+			if next(readd) then
+				-- Ledger order for the ports it knows, then anything else.
+				local by_num, merged, placed = {}, {}, {}
+				for _, tok in ipairs(out) do
+					local num = tok:match("^(%d+)t?$")
+					if num then by_num[num] = tok end
+				end
+				for tok in tostring(saved):gmatch("%S+") do
+					local num = tok:match("^(%d+)t?$")
+					local t = num and (by_num[num] or readd[num])
+					if t and not placed[num] then
+						merged[#merged + 1] = t
+						placed[num] = true
+					end
+				end
+				for _, tok in ipairs(out) do
+					local num = tok:match("^(%d+)t?$")
+					if not (num and placed[num]) then merged[#merged + 1] = tok end
+				end
+				out = merged
 			end
 		end
+
+		local ports = table.concat(out, " ")
+		if ports ~= table.concat(cur, " ") then stock_edits[name] = ports end
 	end)
 
 	-- Reconcile: drop every openuf_swvlan* section this push no longer
