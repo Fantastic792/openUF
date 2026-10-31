@@ -21,7 +21,7 @@
 	⚠️ Confirm with: `iw phy phy0 info | grep -m1 '\* [0-9].* MHz'` (a bare `grep -m1 MHz`
 	hits the HE capability line "STBC Tx <= 80MHz" first on an 802.11ax radio).
 
-	Unlike every other map here this is a **DSA** board, not swconfig, and that
+	Like the AX3000T (and unlike the ath79 maps) this is a **DSA** board, not swconfig, and that
 	changes which of openUF's two port-reporting shapes applies -- see
 	dev.conf.net.ports and the dev.conf.vlan note at the bottom.
 
@@ -34,7 +34,7 @@
 local dev = {}
 dev.conf = {}
 
--- OpenWrt board names this profile is for. Read by tools/openuf-setup.sh to
+-- OpenWrt board names this profile is for. Read by setup.sh (map_boards) to
 -- preselect the right map from `ubus call system board`; openUF itself never
 -- looks at it, so a map without this field is still perfectly valid.
 dev.openwrt_boards = {"jiorouter,ax6000-jidu6101"}

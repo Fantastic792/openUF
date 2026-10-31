@@ -13,15 +13,16 @@
 
 	  archer-c5-v1.lua                   TP-Link Archer C5 v1   (swconfig, 2-band)
 	  tl-wdr3500-v1.lua                  TP-Link TL-WDR3500 v1  (swconfig, 2-band)
-	  tl-wr1043ndv2.lua                  TP-Link WR1043ND v2    (swconfig, 1-band)
+	  tl-wr1043ndv2.lua                  TP-Link WR1043ND v2    (swconfig, 1-band; ⚠️ unverified)
 	  archer-a7-v5.lua                   TP-Link Archer A7 v5 / C7 v4 / C7 v5 (swconfig, 2-band; ⚠️ unverified)
 	  deco-m5.lua                        TP-Link Deco M5 v1 / v2 / v3 (DSA, 2-band, 2 sockets; ⚠️ unverified)
 	  deco-m4r-v1.lua                    TP-Link Deco M4R v1 / v2 (swconfig, 2-band, 2 sockets, no WAN role; ⚠️ unverified)
 	  deco-m4r-v4.lua                    TP-Link Deco M4R v4 (DSA, 2-band, 2 sockets named eth0/eth1; ⚠️ unverified)
-	  jiorouter-ax6000-jidu6101.lua      JioRouter AX6000       (DSA, 2-band)
-	  jiorouter-ax6000-jidu6j01.lua      JioRouter AX6000 J-fam (DSA, 2-band)
+	  jiorouter-ax6000-jidu6101.lua      JioRouter AX6000       (DSA, 2-band; ⚠️ unverified)
+	  jiorouter-ax6000-jidu6j01.lua      JioRouter AX6000 J-fam (DSA, 2-band; ⚠️ unverified)
 	  dynalink-dl-wrx36.lua              Dynalink DL-WRX36      (DSA, 2-band, 5 sockets; ⚠️ unverified)
 	  xiaomi-ax3000t.lua                 Xiaomi Mi Router AX3000T (DSA, 2-band)
+	  bt-homehub-v5a.lua                 BT Home Hub 5 Type A   (DSA, 2-band, 5 sockets)
 	  generic-dualband-ap.lua            any other dual-band swconfig board
 	  generic-singleband-ap.lua          any other single-band swconfig board
 
@@ -42,8 +43,10 @@
 	              same five sockets ← the Archer A7/C7 map; ⚠️ not yet adopted
 	  u7hd.lua  — presents as UAP-AC-HD (U7HD), the WiFi 5 ceiling AP with
 	              two sockets ← the Deco M5 and M4R maps; ⚠️ adopted once (M4R v1)
-	  uapg1.lua — presents as UAP Gen1
-	  uapg2-ac-lr.lua — presents as UAP-AC-LR
+	  uapg1-lr.lua — presents as UAP-LR (BZ2LR), single-radio 2.4 GHz ← the
+	              WR1043ND v2 and generic single-band maps; ⚠️ BZ2-era model
+	  uapg1.lua — presents as UAP Gen1 (BZ2); ⚠️ BZ2-era model
+	  uapg2-ac-lr.lua — presents as UAP-AC-LR (U7LR); ⚠️ not yet adopted
 
 	openUF emulates a UniFi AP only. Gateway (USG) and switch (USW) emulation
 	are not implemented and are not planned.
@@ -69,13 +72,14 @@ config = {
 	keep_wlan_sections = {},
 
 	-- 802.11r fast roaming with genuine UniFi APs (ftinterop.lua). Needs the
-	-- rrb-unifi translator (github.com/d-malinowski/unifi-openwrt-roaming),
-	-- which converts between OpenWrt's and UniFi's inter-AP key-exchange
-	-- framing on a veth pair, and its /etc/config/rrb-unifi peer list
-	-- (`rrb-unifi-setup peers`). When on, every FT WLAN uses UniFi's
-	-- mobility domain, ft_psk_generate_local=0 with explicit key holders for
-	-- the listed UniFi peers, nas_identifier = BSSID, and hostapd's ft_iface
-	-- on the translator's veth (only when that veth exists). On by default
+	-- RRB translator openUF ships as the openuf-rrb service (rrb/rrb-unifi.uc,
+	-- vendored from d-malinowski's rrb-unifi; `openuf rrb status`), which
+	-- converts between OpenWrt's and UniFi's inter-AP key-exchange framing on
+	-- a veth pair. When on, every FT WLAN uses UniFi's mobility domain,
+	-- ft_psk_generate_local=0 with explicit key holders for the UniFi peers
+	-- the translator heard (or listed by hand as openuf.rrb `list peer`),
+	-- nas_identifier = BSSID without colons, and hostapd's ft_iface on the
+	-- translator's veth (only when that veth exists). On by default
 	-- for new installations: without the translator openUF APs still roam
 	-- among themselves, and a site with no UniFi AP notices nothing. Set
 	-- false on a site that has genuine UniFi APs but no translator: openUF's

@@ -64,8 +64,10 @@ local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
 -- Line 2 of a preset's header comment is its title, the way setup.sh's menu
 -- shows it: "JioRouter AX6000 JIDU6101 hardware profile." / "U6-InWall
--- device identity." The suffix is dropped, the ⚠ anywhere in the header
--- means "not verified on real hardware".
+-- device identity." The suffix is dropped. A ⚠ anywhere in the header is
+-- read as "not verified on real hardware", which is what most headers mean
+-- by it; a few carry one for another warning (tl-wdr3500-v1's 8 MB flash)
+-- and are shown as unverified too -- the cautious reading.
 local function header_of(src)
 	local title, unverified = nil, false
 	if type(src) ~= "string" then return nil, false end

@@ -8,9 +8,9 @@
 	Real 802.11ax on both bands, so unlike the ath79 boards here nothing is
 	clamped down except the 2.4 GHz width the band itself does not have.
 
-	=== The first DSA board in this project — read this before copying it ===
+	=== This project's first DSA board — read this before copying it ===
 
-	Every other modelmap describes an ath79/swconfig board, where the kernel
+	The maps before it described ath79/swconfig boards, where the kernel
 	sees one CPU netdev per switch and openUF has to interrogate the switch
 	ASIC for anything socket-shaped. This board has NO `swconfig` binary at
 	all. Its switch is DSA, which is simpler in exactly the way that matters:
