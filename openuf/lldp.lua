@@ -30,10 +30,13 @@ M._time = os.time
 -- Returns the local port's kernel ifindex (an integer), or nil if the
 -- interface doesn't exist / /sys is unavailable (e.g. off-target tests).
 --
--- Memoized for the life of the process: a netdev's ifindex is fixed for as
--- long as that netdev exists. This is read from the per-NEIGHBOUR record
--- builder, not the per-interface loop, so a port with two neighbours on it was
--- opening the same file twice for the same answer.
+-- Memoized for one neighbour read (_neighbors_uncached empties the cache):
+-- this is called from the per-NEIGHBOUR record builder, not the
+-- per-interface loop, so a port with two neighbours on it was opening the
+-- same file twice for the same answer. Not for the life of the process: a
+-- netdev that is recreated (a wifi or network reload, a DSA port coming
+-- back) gets a new ifindex, and a port that did not exist yet has to be
+-- found once it does.
 M._port_idx_cache = {}
 function M._local_port_idx(port_name)
 	local hit = M._port_idx_cache[port_name]
@@ -68,6 +71,7 @@ end
 
 -- Returns the neighbour list and whether lldpd actually answered.
 function M._neighbors_uncached()
+	M._port_idx_cache = {}
 	local output = M._run_cmd("lldpctl -f json")
 	if not output or output == "" then return {}, false end
 
