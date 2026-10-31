@@ -916,7 +916,7 @@ netconf.1.ip=172.19.0.50
 netconf.1.netmask=255.255.255.0
 netconf.1.autoip.status=disabled
 route.1.gateway=172.19.0.1
-resolv.nameserver.1.ip=192.168.1.1
+resolv.nameserver.1.ip=192.0.2.1
 resolv.host.1.name=<device name>      # also the source for wps_device_name
 dhcpc.status=enabled
 dhcpc.1.status / dhcpc.1.devname      # the actual DHCP-vs-static signal
@@ -1452,7 +1452,7 @@ claiming `wifi_caps` `0x1`, and the controller turns it **on by itself** once a 
 that bit. The parent dropdown is the device's `uplink_table`, which the controller derives from
 the uplink VAP's resolved station.
 
-**What arrives** (child = AP2, parent `78:bb:c1:fe:3f:c9` = AP1, 5 GHz radio is `radio.2`):
+**What arrives** (child = AP2, parent `00:00:5e:00:53:c9` = AP1, 5 GHz radio is `radio.2`):
 
 ```
 # mesh                                       (needs 0x1 + 0x800)
@@ -1460,7 +1460,7 @@ mesh.status=enabled
 mesh.version=3
 mesh.essid=vwire-5f3369181f7fbab5             ← site setting connectivity.x_mesh_essid
 mesh.psk=<32 chars>                           ← site setting connectivity.x_mesh_psk
-mesh.serial1=78:bb:c1:fe:3f:c9                ← priority-1 parent (mesh_uplink_1)
+mesh.serial1=00:00:5e:00:53:c9                ← priority-1 parent (mesh_uplink_1)
 # connectivity                               (needs 0x1)
 connectivity.status=enabled
 connectivity.uplink_wds=ath4
@@ -2851,7 +2851,7 @@ through the real UI with the resulting wire payload captured or the effect verif
 | 63 | WiFi Experience, the firmware's formula | `sta_table[].satisfaction`/`satisfaction_reason`/`anomalies`, `vap_table[].anomalies_bar_chart`/`reasons_bar_chart`, `radio_table[].athstats.satisfaction`, device `satisfaction` (−1 with no clients) | ⚠️ Adopted 2026-10-18 (`satisfaction.lua`, ported by upstream from `libubnt.so` 4.0.15). Replaces this tree's estimate; the Experience column on AP1/AP2 not yet compared against the previous build |
 | 64 | Client fields as the firmware sends them | `rssi` (SNR), `noise`, `state` `0x10`, `is_11r`, `tx_retries`, `wifi_tx_dropped`; `wifi_tx_attempts` = frames sent; no `capacity`/`throughput`/`linkscore`/`multicast` | ⚠️ Adopted 2026-10-18. Power save is absent on mt76 (the driver takes PS tracking over). The `linkscore`/`multicast` open question is closed: the firmware never sends them |
 | 65 | `sys_stats`, vap `extchannel`, windowed channel utilisation | `sys_stats.loadavg_1/5/15` + `mem_*` bytes; `vap_table[].extchannel` (±1); `cu_*` over the last inform | ⚠️ Adopted 2026-10-18: the UI's Load Average and the 40 MHz side come from these; utilisation no longer reports a lifetime average |
-| 66 | STUN wake-up | `mgmt_cfg stun_url` → `stun.lua` (RFC 3489 Binding Request with CHANGE-REQUEST every 30 s); `connect_request_ip`/`connect_request_port` in the inform; a type `0x8888` datagram ends the sleep | ⚠️ Adopted 2026-10-18; upstream confirmed it against their 10.6 controller (commands land within a second). Resolves REVERSE-ENGINEERING.md Investigation 3. **AP2, 2026-10-18: this UCG Ultra answered the first Binding Request** -- a 56-byte Binding Response from `192.168.1.1:3478` to AP2's port on the wire, and the next inform carried `connect_request_ip` = AP2's own address and port 32777 (so the 2026-09-15 silence was the missing CHANGE-REQUEST attribute, as upstream said). The wake datagram itself not yet watched |
+| 66 | STUN wake-up | `mgmt_cfg stun_url` → `stun.lua` (RFC 3489 Binding Request with CHANGE-REQUEST every 30 s); `connect_request_ip`/`connect_request_port` in the inform; a type `0x8888` datagram ends the sleep | ⚠️ Adopted 2026-10-18; upstream confirmed it against their 10.6 controller (commands land within a second). Resolves REVERSE-ENGINEERING.md Investigation 3. **AP2, 2026-10-18: this UCG Ultra answered the first Binding Request** -- a 56-byte Binding Response from `192.0.2.1:3478` to AP2's port on the wire, and the next inform carried `connect_request_ip` = AP2's own address and port 32777 (so the 2026-09-15 silence was the missing CHANGE-REQUEST attribute, as upstream said). The wake datagram itself not yet watched |
 | 67 | AirView Connectivity | `capability=notif,notif-assoc-stat` → `STA_ASSOC_TRACKER` notif informs (`assoctrack.lua`, passive `bridge openuf_assoc`) | ⚠️ Adopted 2026-10-18; upstream's lab and hardware. `conf.lua` `assoc_tracker = false` switches it off |
 | 68 | AirView Roaming | `wifi_caps2` `0x2000` (only while reporting) → `association`/`sta_leave`/`sta_roam` notifs within ~250 ms, departures tagged Minimum RSSI / Roaming Assistant | ⚠️ Adopted 2026-10-18; upstream hardware-confirmed (the Minimum RSSI tag lab-only). Needs both APs on this build to change what the controller shows |
 | 69 | `cmd: scan` | `{type, mode, freq?, radio_name?}` from the controller's scan request | ⚠️ Adopted 2026-10-18 (upstream's cmd audit), mapped onto this tree's chunked sweep: the named radio, the band of the frequency, or every radio |

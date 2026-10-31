@@ -114,7 +114,7 @@ default answer for everything.
 |---|---|---|
 | `--ap-mode` / `--no-ap-mode` | convert to a pure AP? | yes |
 | `--absorb-wan` / `--no-absorb-wan` | WAN socket into the LAN bridge? | yes |
-| `--lan-address ADDR` | `dhcp`, `192.168.1.20/24`, or `192.168.1.20,255.255.255.0` | `dhcp` |
+| `--lan-address ADDR` | `dhcp`, `192.0.2.20/24`, or `192.0.2.20,255.255.255.0` | `dhcp` |
 | `--lan-gateway IP`, `--lan-dns "IP [IP]"` | for a static address | — |
 | `--modelmap NAME` | hardware profile, or `auto` to generate one | detected board, else a generic by radio count |
 | `--controller HOST` | IP, hostname, or a full inform URL | none (L2 discovery) |
@@ -402,9 +402,9 @@ over ssh and runs the same updater there, one AP at a time — a failure stops b
 next host:
 
 ```sh
-sh tools/deploy.sh --check 192.168.1.22 192.168.1.149   # what each AP runs; nothing changes
-sh tools/deploy.sh 192.168.1.22 192.168.1.149           # build, push, update, verify
-OPENUF_SSH_PASS='...' sh tools/deploy.sh 192.168.1.22   # an AP whose root has a password
+sh tools/deploy.sh --check 192.0.2.22 192.0.2.149   # what each AP runs; nothing changes
+sh tools/deploy.sh 192.0.2.22 192.0.2.149           # build, push, update, verify
+OPENUF_SSH_PASS='...' sh tools/deploy.sh 192.0.2.22   # an AP whose root has a password
 ```
 
 By default ssh runs non-interactively (a key in `/etc/dropbear/authorized_keys`, or a root
