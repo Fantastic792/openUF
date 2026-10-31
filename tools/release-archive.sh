@@ -32,10 +32,13 @@ printf '%s\n' "$VER" > "$OUT/openuf/VERSION"
 cp install.sh setup.sh update.sh LICENSE NOTICE README.md REFERENCE.md USAGE.md "$OUT/"
 
 rm -f "$NAME.tar.gz" "$NAME.tar.gz.sha256"
+# The same tag gives the same bytes: the member mtime is SOURCE_DATE_EPOCH, else
+# the commit's time, never "now" (a rebuild would change PKG_HASH).
+MTIME=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || date +%s)}
 # --owner/--group are GNU tar; a BSD tar (macOS) has no such flags. The
 # archive contents are the same either way; the workflow runs GNU tar.
 if tar --version 2>/dev/null | grep -q GNU; then
-	tar -C build/release --owner=0 --group=0 --sort=name --mtime="@$(date +%s)" \
+	tar -C build/release --owner=0 --group=0 --sort=name --mtime="@$MTIME" \
 		-czf "$NAME.tar.gz" "$NAME"
 else
 	tar -C build/release -czf "$NAME.tar.gz" "$NAME"

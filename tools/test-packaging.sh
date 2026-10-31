@@ -373,5 +373,12 @@ newroot b17
   echo 'pick_ssid; echo "[$SSID]"'; } > "$R/f.sh"
 check "pick_ssid picks 'Home Wifi' whole" eval '[ "$(sh "$R/f.sh")" = "[Home Wifi]" ]'
 
+# ── B12: release-archive.sh stamps a fixed mtime, not "now" ────────────────
+_line=$(grep '^MTIME=' tools/release-archive.sh)
+check "release-archive.sh sets MTIME" test -n "$_line"
+check "release-archive.sh passes MTIME to tar" grep -q -- '--mtime="@\$MTIME"' tools/release-archive.sh
+check "MTIME honours SOURCE_DATE_EPOCH" eval '[ "$(SOURCE_DATE_EPOCH=12345; eval "$_line"; echo $MTIME)" = 12345 ]'
+check "MTIME without it is the commit time, stable" eval '[ "$(unset SOURCE_DATE_EPOCH; eval "$_line"; echo $MTIME)" = "$(git log -1 --format=%ct)" ]'
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
