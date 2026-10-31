@@ -34,8 +34,10 @@ on:
     tags: ["v[0-9]*", "[0-9]*"]
   release:
     types: [published]
+# Read-only by default: only the jobs that create the release or upload to it
+# ask for write access.
 permissions:
-  contents: write
+  contents: read
 # A release created in the web UI with a NEW tag fires both `push` and
 # `release`; serialise the pair so they do not upload the same files at once.
 concurrency:
@@ -112,6 +114,8 @@ jobs:
     name: Verify, then create the release with the source archive
     needs: version
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release create / upload
     outputs:
       sha256: ${{ steps.meta.outputs.sha256 }}
     env:
@@ -164,6 +168,8 @@ jobs:
     name: Build ${{ matrix.format }} with the ${{ matrix.sdk }} SDK
     needs: [version, verify]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload
     env:
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
@@ -193,7 +199,9 @@ jobs:
           sed -i "s|https://github.com/[^/]*/[^/]*/releases/|https://github.com/$GITHUB_REPOSITORY/releases/|" package/openuf/Makefile
           grep -E '^PKG_(VERSION|HASH|SOURCE_URL):=' package/openuf/Makefile
       - name: Build with the OpenWrt SDK
-        uses: openwrt/gh-action-sdk@main
+        # A commit, not a branch: the action builds what goes on the release
+        # (openwrt/gh-action-sdk main as of 2026-11-01). Raise it by hand.
+        uses: openwrt/gh-action-sdk@f5813d30eeef3534b58ac7e79c5d8842b6035434
         env:
           ARCH: ${{ matrix.sdk }}
           FEEDNAME: openuf
@@ -242,6 +250,8 @@ jobs:
     name: SHA256SUMS over the release's files
     needs: [version, packages]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload
     env:
       TAG: ${{ needs.version.outputs.tag }}
     steps:

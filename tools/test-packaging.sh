@@ -428,5 +428,12 @@ check "field_report refuses a hostname" eval '! _fr "hostname: myrouter"'
 check "field_report refuses a .lan name" eval '! _fr "ssh to ap1.lan"'
 check "the shipped field reports still validate" python3 tools/field_report.py check field-reports/*.toml
 
+# ── B11: release.yml pins the SDK action and limits contents: write ────────
+_rel=.github/workflows/release.yml
+check "release.yml pins gh-action-sdk to a commit" grep -qE 'uses: openwrt/gh-action-sdk@[0-9a-f]{40}$' $_rel
+check "release.yml: workflow permissions are read-only" eval "awk '/^permissions:/ { getline; print; exit }' $_rel | grep -q 'contents: read'"
+check "release.yml: contents: write only inside jobs (3 upload jobs)" eval '[ "$(grep -c "contents: write" '$_rel')" = 3 ] && ! grep -q "^  contents: write" '$_rel
+check "release.yml: the version job asks for no write" eval "! awk '/^  version:/,/^  verify:/' $_rel | grep -q 'contents: write'"
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
