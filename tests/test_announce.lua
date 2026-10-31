@@ -65,6 +65,40 @@ local PROC_NET_DEV = table.concat({
 
 return {
 	{
+		name = "announce: without its own MAC or IP nothing is announced or answered",
+		fn = function()
+			-- There used to be a fixed fallback MAC and 192.168.1.1: a device
+			-- that does not exist, broadcast to the whole LAN.
+			local sent = {}
+			local udpb = {sendto = function(_, pkt, ip, port)
+				sent[#sent + 1] = {pkt = pkt, to = ip .. ":" .. port}
+				return #pkt
+			end}
+			local o_mac, o_ip, o_err = announce.get_mac, announce.get_ip, io.stderr
+			local said = {}
+			io.stderr = {write = function(_, m) said[#said + 1] = m end}
+			local ok, err = pcall(function()
+				local cfg = sample_cfg({mac = nil, ip = nil, iface = "br-lan"})
+				cfg.mac, cfg.ip = nil, nil
+				assert_false(announce._announce_once(cfg, udpb), "no MAC, no IP: not sent")
+				assert_false(announce._announce_once(cfg, udpb), "still not")
+				assert_eq(#sent, 0, "nothing broadcast")
+				assert_eq(#said, 1, "said once, not every tick")
+				assert_nil(announce.reply_for(string.char(1, 0, 0, 0), cfg), "and no reply either")
+				-- The netdev comes up: _refresh finds both, announcing starts.
+				announce.get_mac = function() return {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01} end
+				announce.get_ip = function() return {192, 0, 2, 1} end
+				announce._refresh(cfg)
+				assert_true(announce._announce_once(cfg, udpb), "sent once both are known")
+				assert_eq(sent[1].to, announce.BROADCAST_ADDR .. ":" .. announce.PORT, "broadcast")
+				assert_true(sent[1].pkt:find(string.char(0x00, 0x00, 0x5e, 0x00, 0x53, 0x01,
+					192, 0, 2, 1), 1, true) ~= nil, "with the real MAC and IP")
+			end)
+			announce.get_mac, announce.get_ip, io.stderr = o_mac, o_ip, o_err
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "announce: _refresh keeps the previous values when a source cannot be read",
 		fn = function()
 			local o_popen, o_read, o_state = announce._popen, announce._read_file, announce._state
