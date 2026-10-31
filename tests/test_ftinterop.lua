@@ -412,6 +412,9 @@ return {
 			inform._state = {save = function() saved = saved + 1 end}
 			local now = 1000
 			inform._time = function() return now end
+			local orig_sta = inform._rrbguard.station_count
+			inform._rrbguard.station_count = function() return 0 end
+			inform._clock_trusted = function() return false end
 			local peers_json = PEERS_JSON
 			fti._read_file = function(path)
 				if path == fti.PEERS_FILE then return peers_json end
@@ -448,6 +451,62 @@ return {
 				assert_nil(st2.cfgversion, "nothing to forget")
 			end)
 			inform._state, inform._time, fti._read_file = orig_state, orig_time, orig_read
+			inform._rrbguard.station_count = orig_sta
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "ftinterop: a learned peer waits for no client, or the night hour, before the re-push",
+		fn = function()
+			-- A re-push while clients were connected reloaded Wi-Fi mid-use
+			-- and left a mesh child's AP silent (Router B, 2026-10-29).
+			dofile("openuf/lib/lib.lua")
+			local inform = dofile("openuf/inform.lua")
+			local fti = inform._ftinterop
+			local orig_read, orig_stderr = fti._read_file, io.stderr
+			local orig_sta = inform._rrbguard.station_count
+			inform._state = {save = function() end}
+			local now = os.time({year = 2026, month = 10, day = 29, hour = 13, min = 0})
+			inform._time = function() return now end
+			inform._clock_trusted = function() return true end
+			local stas, looks = 2, 0
+			inform._rrbguard.station_count = function() looks = looks + 1; return stas end
+			fti._read_file = function(path)
+				if path == fti.PEERS_FILE then return PEERS_JSON end
+				return nil
+			end
+			local logged = {}
+			io.stderr = {write = function(_, s) logged[#logged + 1] = s end}
+			local ok, err = pcall(function()
+				local cfg = {config = {unifi_ft_interop = true}}
+				local st = {adopted = true, cfgversion = "abc"}
+				assert_eq(inform._rrb_peers_tick(st, cfg), "learned", "clients on: kept, no re-push")
+				assert_eq(st.cfgversion, "abc", "no push while clients are connected")
+				assert_contains(table.concat(logged), "deferred", "said why")
+				now = now + 10
+				assert_nil(inform._rrb_peers_tick(st, cfg), "no new look inside a minute")
+				assert_eq(looks, 1, "one station count so far")
+				now = now + inform.RRB_PEERS_QUIET_CHECK
+				assert_eq(inform._rrb_peers_tick(st, cfg), "deferred", "still busy")
+				assert_eq(st.cfgversion, "abc", "still untouched")
+				stas = 0
+				now = now + inform.RRB_PEERS_QUIET_CHECK
+				assert_eq(inform._rrb_peers_tick(st, cfg), "repush", "no client: re-push")
+				assert_eq(st.cfgversion, "", "forgotten")
+				assert_nil(inform._rrb_peers_tick(st, cfg), "nothing pending after it")
+				-- the night hour re-pushes with clients connected
+				st.cfgversion, stas = "def", 3
+				local peers2 = PEERS_JSON:gsub("}}$", '},"00:00:5e:00:53:35":{"md":"5de5","seen":1100,"via":"roam"}}')
+				fti._read_file = function(path)
+					if path == fti.PEERS_FILE then return peers2 end
+					return nil
+				end
+				now = os.time({year = 2026, month = 10, day = 30, hour = inform._rrbguard.NIGHT_HOUR, min = 5})
+				assert_eq(inform._rrb_peers_tick(st, cfg), "repush", "night hour: re-push")
+				assert_eq(st.cfgversion, "", "forgotten at night")
+			end)
+			io.stderr, fti._read_file = orig_stderr, orig_read
+			inform._rrbguard.station_count = orig_sta
 			if not ok then error(err, 0) end
 		end
 	},

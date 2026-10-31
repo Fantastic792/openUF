@@ -6876,16 +6876,29 @@ end
 -- keeps it) and, on an adopted AP, cfgversion is forgotten so the controller
 -- pushes the full config again and apply_config writes the new r0kh/r1kh
 -- lines. At most one such re-push every RRB_PEERS_REPUSH_GAP, since a push
--- reloads the FT WLANs' BSSes. Returns nil (nothing new), "learned" (kept,
--- no re-push yet) or "repush".
+-- reloads the FT WLANs' BSSes, and only at a quiet moment, rrbguard's: no
+-- client connected, or the 04:00 local hour. A re-push while clients were
+-- connected reloaded Wi-Fi mid-use and once left a mesh child's AP silent
+-- (Router B, 2026-10-29). Until then the new peers wait in st.rrb_peers,
+-- which any other push also writes; they are not needed to roam, only for
+-- this AP to push keys to them (an unlisted peer still pulls them).
+--
+-- Other openUF APs are learned too, by design: their own translator sends
+-- UniFi-framed RRB frames and roam announcements under the WLAN's key, so
+-- on the LAN they are UniFi APs, and listing them as key holders is right.
+--
+-- Returns nil (nothing new or pending), "learned" (kept, no re-push yet),
+-- "deferred" (clients connected) or "repush".
 M.RRB_PEERS_REPUSH_GAP = 600
+-- How often a pending re-push looks for a quiet moment (one `iw` per radio).
+M.RRB_PEERS_QUIET_CHECK = 60
 M._rrb_peers_next_repush = 0
+M._rrb_peers_pending = false
 function M._rrb_peers_tick(st, cfg)
 	if not (st and cfg and cfg.config and cfg.config.unifi_ft_interop) then return nil end
 	local fti = M._ftinterop
 	if not (fti and fti.learned) then return nil end
 	local learned = fti.learned(fti._read_file)
-	if #learned == 0 then return nil end
 	st.rrb_peers = st.rrb_peers or {}
 	local new = {}
 	for _, p in ipairs(learned) do
@@ -6894,19 +6907,40 @@ function M._rrb_peers_tick(st, cfg)
 			new[#new + 1] = p.bssid .. " (" .. p.md .. ")"
 		end
 	end
-	if #new == 0 then return nil end
-	io.stderr:write("openuf: rrb: UniFi peer(s) learned: " .. table.concat(new, ", ") .. "\n")
-	local now = M._time()
-	if st.adopted and now >= M._rrb_peers_next_repush then
-		st.cfgversion = ""
-		M._rrb_peers_next_repush = now + M.RRB_PEERS_REPUSH_GAP
-		M._state.save(st)
-		io.stderr:write("openuf: rrb: cfgversion forgotten so the controller pushes the "
-			.. "full config again; the new peer(s) become key holders then\n")
-		return "repush"
+	local kept = nil
+	if #new > 0 then
+		io.stderr:write("openuf: rrb: UniFi peer(s) learned: " .. table.concat(new, ", ") .. "\n")
+		M._rrb_peers_pending = st.adopted == true
+		kept = "learned"
 	end
+	-- one save per tick: the re-push below saves the new peers with it
+	local function keep(r)
+		if kept then M._state.save(st) end
+		return r
+	end
+	if not M._rrb_peers_pending then return keep(kept) end
+	local now = M._time()
+	if now < M._rrb_peers_next_repush then return keep(kept) end
+	local g = M._rrbguard
+	local hour = M._clock_trusted() and os.date("*t", now).hour or nil
+	if not (g and hour == g.NIGHT_HOUR) then
+		local n = g and g.station_count and g.station_count()
+		if n ~= 0 then
+			if kept then
+				io.stderr:write("openuf: rrb: re-push deferred while clients are connected; "
+					.. "it waits for none, or the 0" .. tostring(g and g.NIGHT_HOUR) .. ":00 hour\n")
+			end
+			M._rrb_peers_next_repush = now + M.RRB_PEERS_QUIET_CHECK
+			return keep(kept or "deferred")
+		end
+	end
+	st.cfgversion = ""
+	M._rrb_peers_pending = false
+	M._rrb_peers_next_repush = now + M.RRB_PEERS_REPUSH_GAP
 	M._state.save(st)
-	return "learned"
+	io.stderr:write("openuf: rrb: cfgversion forgotten so the controller pushes the "
+		.. "full config again; the new peer(s) become key holders then\n")
+	return "repush"
 end
 
 -- ─── WiFi Blackout Schedule ─────────────────────────────────────────────────
