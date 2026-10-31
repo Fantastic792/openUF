@@ -199,5 +199,60 @@ check "install.sh keeps an identity's title (probe.lua reads it)" has title "$D/
 # Every file dist.sh keeps, install.sh keeps: same three patterns.
 check "dist.sh keep_comments still lists ufmodel" grep -q 'openuf/ufmodel/\*' tools/dist.sh
 
+# ── B2: downloads are verified, never insecure ─────────────────────────────
+# A shell function, as the file defines it.
+mkfunc() { # file, function name
+	awk -v s="$2() {" '$0 == s { f = 1 } f { print } f && $0 == "}" { exit }' "$1"
+}
+for f in setup.sh update.sh; do
+	check "$f has no --no-check-certificate fetch" eval "! grep -q -- '--no-check-certificate' $f"
+	check "$f's verify helpers match setup.sh's" eval '[ "$(mkfunc '$f' check_sha256; mkfunc '$f' release_asset)" = "$(mkfunc setup.sh check_sha256; mkfunc setup.sh release_asset)" ]'
+done
+check "setup.sh never defaults to a moving branch" eval "! grep -q 'OPENUF_REF:-main' setup.sh"
+check "update.sh never defaults to a moving branch" eval "! grep -q 'OPENUF_REF:-main' update.sh"
+check "the documented install is a release, checked" grep -q "grep ' setup.sh\$' SHA256SUMS | sha256sum -c -" setup.sh
+
+newroot sha
+{ echo 'warn() { echo "warn: $*"; }'; mkfunc setup.sh sha256_of; mkfunc setup.sh check_sha256
+  mkfunc setup.sh release_asset; } > "$R/f.sh"
+mkdir -p "$R/rel"; echo good > "$R/rel/openuf-1.2.3.tar.gz"; echo pkg > "$R/rel/openuf_1.2.3-r1_all.ipk"
+( cd "$R/rel" && sha256sum openuf-1.2.3.tar.gz openuf_1.2.3-r1_all.ipk > SHA256SUMS )
+sumcheck() { ( . "$R/f.sh"; check_sha256 "$@" ) >/dev/null 2>&1; }
+check "check_sha256 accepts a listed, matching file" sumcheck "$R/rel/openuf-1.2.3.tar.gz" "$R/rel/SHA256SUMS"
+echo evil > "$R/rel/openuf_1.2.3-r1_all.ipk"
+check "check_sha256 refuses a changed file" eval '! sumcheck "$R/rel/openuf_1.2.3-r1_all.ipk" "$R/rel/SHA256SUMS"'
+echo x > "$R/rel/luci-app-openuf_1.ipk"
+check "check_sha256 refuses an unlisted file" eval '! sumcheck "$R/rel/luci-app-openuf_1.ipk" "$R/rel/SHA256SUMS"'
+check "check_sha256 refuses a missing list" eval '! sumcheck "$R/rel/openuf-1.2.3.tar.gz" "$R/rel/nope"'
+printf '{"tag_name":"v1.2.3","assets":[{"browser_download_url":"https://x/d/v1.2.3/openuf-1.2.3.tar.gz"},{"browser_download_url":"https://x/d/v1.2.3/openuf-1.2.3.tar.gz.sha256"},{"browser_download_url":"https://x/d/v1.2.3/SHA256SUMS"}]}' \
+	> "$R/rel.json"
+check "release_asset finds the archive, not its .sha256" \
+	eval '[ "$( . "$R/f.sh"; release_asset "$R/rel.json" "openuf-[0-9][-.0-9A-Za-z_]*\.tar\.gz" | head -1)" = https://x/d/v1.2.3/openuf-1.2.3.tar.gz ]'
+check "release_asset finds SHA256SUMS" \
+	eval '[ "$( . "$R/f.sh"; release_asset "$R/rel.json" SHA256SUMS)" = https://x/d/v1.2.3/SHA256SUMS ]'
+
+# setup.sh's source download, its fetch a stub that serves $R/rel by name.
+srcdl() { # 0 or 1: whether the archive is tampered with
+	_r=$R/dl; rm -rf "$_r"; mkdir -p "$_r/rel/openuf-1.2.3/openuf"
+	: > "$_r/rel/openuf-1.2.3/openuf/conf.lua"
+	( cd "$_r/rel" && tar czf openuf-1.2.3.tar.gz openuf-1.2.3 && sha256sum openuf-1.2.3.tar.gz > SHA256SUMS )
+	[ "$1" = 1 ] && echo tampered >> "$_r/rel/openuf-1.2.3.tar.gz"
+	cp "$R/rel.json" "$_r/rel/release.json"
+	awk '/^if \[ -n "\$SRC" \]; then$/ { f = 1 } f { print } f && /^fi$/ { exit }' setup.sh > "$_r/block.sh"
+	( . "$R/f.sh"
+	  die() { echo "die: $*"; exit 1; }; ok() { echo "ok: $*"; }; info() { :; }; head1() { :; }
+	  fetch() { case "$1" in *api*) cp "$_r/rel/release.json" "$2" ;; *) cp "$_r/rel/$(basename "$1")" "$2" ;; esac; }
+	  SRC=""; WORK=$_r/work; OPENUF_TARBALL_URL=""; OPENUF_BRANCH=""; OPENUF_TARBALL_SHA256=""
+	  OPENUF_REPO=o/r; OPENUF_RELEASE_URL=https://api.github.com/repos/o/r/releases/latest
+	  . "$_r/block.sh"; echo "SRC=$SRC" ) > "$_r/out" 2>&1
+	# the block makes its own WORK, /tmp/openuf-setup-$$ (a subshell's $$ is ours)
+	rm -rf "/tmp/openuf-setup-$$"
+}
+srcdl 0
+check "setup.sh unpacks a release archive that matches" grep -q '^SRC=/tmp/openuf-setup-[0-9]*/openuf-1.2.3$' "$R/dl/out"
+srcdl 1
+check "setup.sh refuses an archive that does not match" grep -q '^die: the source archive does not match' "$R/dl/out"
+check "and unpacks nothing" eval '! grep -q ^SRC= "$R/dl/out"'
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

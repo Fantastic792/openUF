@@ -86,15 +86,25 @@ adopted `state.json`, else `conf.lua`'s default) actually is `https://`.
 ### The guided installer (`setup.sh`)
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/Fantastic792/openUF/main/setup.sh | sh
+cd /tmp
+wget -q https://github.com/Fantastic792/openUF/releases/latest/download/setup.sh
+wget -q https://github.com/Fantastic792/openUF/releases/latest/download/SHA256SUMS
+grep ' setup.sh$' SHA256SUMS | sha256sum -c - && sh setup.sh
 ```
+
+The script is the latest release's, not a moving branch, and is checked before it runs;
+everything it downloads afterwards (the source archive, the packages) comes from the same
+release and is checked against the same `SHA256SUMS`, and a mismatch stops it before
+anything is installed. There is no download without certificate checks: an image built
+without `ca-bundle` is told to install it first.
 
 This is the path to use unless you have a reason not to. It does everything in this
 guide's sections 1–3 plus the access-point conversion, in an order chosen so a failure
 never leaves the device unreachable — see REFERENCE.md's Quick start for the phase list
 and the reasoning.
 
-Piping into `sh` and still being able to answer questions works because the script
+Piping it (`wget -qO- .../setup.sh | sh`) still works, but nothing can check a script
+that is already running. Piping into `sh` and still being able to answer questions works because the script
 re-execs itself from a file with stdin reattached to `/dev/tty`: on a pipe, stdin *is*
 the script, so a `read` would otherwise eat the script's own remaining bytes. With no
 controlling terminal at all (cron, a provisioning system) it says so and takes the
@@ -118,11 +128,15 @@ default answer for everything.
 | `-y`, `--yes` | take every default, ask nothing | — |
 | `--keep-work` | leave the downloaded tree in `/tmp` | — |
 
-`OPENUF_REPO=owner/repo`, `OPENUF_REF=branch-or-tag` and `OPENUF_SRC=/path/to/checkout`
-point it at a different source. The packages of a web install come from the latest
-GitHub release; `OPENUF_RELEASE_URL=https://api.github.com/repos/owner/repo/releases/tags/vX.Y.Z`
-picks another release, and `OPENUF_PKG_DIR=/path` uses `.apk`/`.ipk` files already on the
-device (your own build, or a device without internet).
+`OPENUF_REPO=owner/repo`, `OPENUF_REF=vX.Y.Z` (a release tag) and
+`OPENUF_SRC=/path/to/checkout` point it at a different source. `OPENUF_BRANCH=name`
+installs a branch instead, **unverified** (a branch has no checksum; it says so), as does
+`OPENUF_TARBALL_URL` unless `OPENUF_TARBALL_SHA256` gives the archive's hash. The packages
+of a web install come from the same release;
+`OPENUF_RELEASE_URL=https://api.github.com/repos/owner/repo/releases/tags/vX.Y.Z` picks
+another release, and `OPENUF_PKG_DIR=/path` uses `.apk`/`.ipk` files already on the
+device (your own build, or a device without internet), with a `SHA256SUMS` beside them
+(`sha256sum *.apk > SHA256SUMS`): they are unsigned, so the checksum is what is checked.
 
 **Web or headless.** A web install writes the interview's answers to `/etc/config/openuf`
 (the `main` section, which puts UCI in charge of the daemon; LuCI's *Services → openUF →
@@ -365,8 +379,9 @@ to run that, from the least to the most involved:
 ```sh
 openuf-update --check                     # what is installed: build stamp, modelmap,
                                           # identity, last inform, whether the daemons run
-openuf-update                             # fetch main from GitHub and upgrade in place
-openuf-update --ref v1.2.0                # a tag or branch instead
+openuf-update                             # the latest release, sha256-checked, in place
+openuf-update --ref v1.2.0                # that release instead, sha256-checked
+openuf-update --branch main               # a branch: unverified (no checksum exists)
 openuf-update --from /tmp/openuf-X.Y.Z.tar.gz
                                           # a release archive already on the device
 ```

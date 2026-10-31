@@ -145,6 +145,9 @@ jobs:
         run: |
           sh tools/release-archive.sh "$VERSION"
           echo "sha256=$(cut -d' ' -f1 "openuf-$VERSION.tar.gz.sha256")" >> "$GITHUB_OUTPUT"
+      # setup.sh and update.sh go on the release too: the documented install
+      # downloads setup.sh from releases/latest/download/ (not a moving
+      # branch) and checks it against SHA256SUMS before running it.
       - name: Create the release (and its tag) unless it exists, then attach the source archive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -155,7 +158,7 @@ jobs:
             gh release create "$TAG" --target "$GITHUB_SHA" --title "openUF $TAG" --generate-notes
           fi
           gh release upload "$TAG" --clobber \
-            openuf-"$VERSION".tar.gz openuf-"$VERSION".tar.gz.sha256
+            openuf-"$VERSION".tar.gz openuf-"$VERSION".tar.gz.sha256 setup.sh update.sh
 
   packages:
     name: Build ${{ matrix.format }} with the ${{ matrix.sdk }} SDK
@@ -229,3 +232,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh release upload "$TAG" --clobber out/*
+
+  # One SHA256SUMS over every file on the release, once both package formats
+  # are attached. setup.sh and update.sh check every download against it
+  # (the packages are unsigned, so apk needs --allow-untrusted: the checksum is
+  # what says they are this release's), and refuse a release without one. A
+  # rebuild replaces the files and so recomputes it.
+  checksums:
+    name: SHA256SUMS over the release's files
+    needs: [version, packages]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          mkdir assets && cd assets
+          gh release download "$TAG"
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" --clobber SHA256SUMS

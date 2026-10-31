@@ -353,7 +353,8 @@ MAC. `setup.sh` is therefore the one entry point and never mixes the two:
   files of the latest GitHub release (`OPENUF_RELEASE_URL`, or `OPENUF_PKG_DIR` for files
   already on the device), installs `openuf` + `luci-app-openuf` (+ `luci-theme-halo` when
   wanted and present in the release) in one transaction with `apk add --allow-untrusted` /
-  `opkg install`, writes the answers to `/etc/config/openuf` (a generated profile as the
+  `opkg install` once each file matches the release's `SHA256SUMS` (the release
+  workflow's `checksums` job writes it over every attached file; no list, no install), writes the answers to `/etc/config/openuf` (a generated profile as the
   `custom` device + `port` sections), creates the adoption account through the new
   `openuf bootstrap-account` (`hook/openuf-bootstrap.sh`) and removes a leftover
   `/opt/openuf`; headless is the file install as before;

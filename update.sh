@@ -2,8 +2,9 @@
 # openUF updater — upgrade an installed openUF in place, on the device, keeping
 # its identity, its configuration and its adoption.
 #
-#   openuf-update                        # latest main from GitHub
-#   openuf-update --ref v1.2.0           # a tag or branch instead of main
+#   openuf-update                        # the latest release, sha256-checked
+#   openuf-update --ref v1.2.0           # that release instead, sha256-checked
+#   openuf-update --branch main          # a branch: UNVERIFIED, no checksum
 #   openuf-update --from /tmp/x.tar.gz   # a tarball already on the device
 #   openuf-update --from /tmp/openUF     # an unpacked tree already on the device
 #   openuf-update --check                # show what is installed; change nothing
@@ -34,8 +35,13 @@
 set -u
 
 OPENUF_REPO=${OPENUF_REPO:-Fantastic792/openUF}
-OPENUF_REF=${OPENUF_REF:-main}
+# A release tag; empty is the latest release. A release's source archive is
+# checked against its SHA256SUMS; a branch (codeload) has no checksum, so it
+# is only taken when asked for by name, and said to be unverified.
+OPENUF_REF=${OPENUF_REF:-}
+OPENUF_BRANCH=${OPENUF_BRANCH:-}
 OPENUF_TARBALL_URL=${OPENUF_TARBALL_URL:-}
+OPENUF_TARBALL_SHA256=${OPENUF_TARBALL_SHA256:-}
 
 INSTALL_DIR=/opt/openuf
 STATE_DIR=/etc/openuf
@@ -57,17 +63,24 @@ KEEP_WORK=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--from)        shift; [ $# -gt 0 ] || die "--from needs a path"; FROM=$1 ;;
-		--ref)         shift; [ $# -gt 0 ] || die "--ref needs a tag or branch"; OPENUF_REF=$1 ;;
+		--ref)         shift; [ $# -gt 0 ] || die "--ref needs a release tag"; OPENUF_REF=$1 ;;
+		--branch)      shift; [ $# -gt 0 ] || die "--branch needs a branch name"; OPENUF_BRANCH=$1 ;;
 		--check)       CHECK=1 ;;
 		--no-rollback) ROLLBACK=0 ;;
 		--no-restart)  RESTART=0 ;;
 		--keep-work)   KEEP_WORK=1 ;;
-		-h|--help)     sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help)     sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*)             die "unknown option: $1 (see --help)" ;;
 	esac
 	shift
 done
-[ -n "$OPENUF_TARBALL_URL" ] || OPENUF_TARBALL_URL="https://codeload.github.com/$OPENUF_REPO/tar.gz/$OPENUF_REF"
+[ -n "$OPENUF_BRANCH" ] && [ -z "$OPENUF_TARBALL_URL" ] \
+	&& OPENUF_TARBALL_URL="https://codeload.github.com/$OPENUF_REPO/tar.gz/$OPENUF_BRANCH"
+if [ -n "$OPENUF_REF" ]; then
+	OPENUF_RELEASE_URL="https://api.github.com/repos/$OPENUF_REPO/releases/tags/$OPENUF_REF"
+else
+	OPENUF_RELEASE_URL="https://api.github.com/repos/$OPENUF_REPO/releases/latest"
+fi
 
 # ─── What is installed ──────────────────────────────────────────────────────
 status_val() { sed -n "s/^$1=//p" "$STATUS_FILE" 2>/dev/null | head -1; }
@@ -121,22 +134,47 @@ show_installed
 BUILD_BEFORE=$(installed_build)
 
 # ─── Source ─────────────────────────────────────────────────────────────────
-# fetch <url> <dest>: every client an OpenWrt image might have, same as setup.sh.
+# fetch, sha256_of, check_sha256 and release_asset: the same as setup.sh's.
+# Certificate validation always: no retry without it (it made what runs as
+# root anyone's on the path); an image with no CA bundle is told to add one.
 fetch() {
 	_url=$1; _dst=$2
 	if command -v uclient-fetch >/dev/null 2>&1; then
 		uclient-fetch -q -O "$_dst" "$_url" 2>/dev/null && return 0
-		warn "download failed; retrying without TLS verification"
-		uclient-fetch -q --no-check-certificate -O "$_dst" "$_url" 2>/dev/null && return 0
 	fi
 	if command -v curl >/dev/null 2>&1; then
 		curl -fsSL -o "$_dst" "$_url" 2>/dev/null && return 0
 	fi
 	if command -v wget >/dev/null 2>&1; then
 		wget -q -O "$_dst" "$_url" 2>/dev/null && return 0
-		wget -q --no-check-certificate -O "$_dst" "$_url" 2>/dev/null && return 0
+	fi
+	if [ ! -s /etc/ssl/certs/ca-certificates.crt ] && ! ls /etc/ssl/certs/*.0 >/dev/null 2>&1; then
+		warn "this image has no CA certificates, so no https download can be verified:"
+		warn "  opkg update && opkg install ca-bundle   (or: apk add ca-bundle), then run again"
 	fi
 	return 1
+}
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d' ' -f1
+	elif command -v openssl >/dev/null 2>&1; then
+		openssl dgst -sha256 -r "$1" | cut -d' ' -f1
+	else
+		return 1
+	fi
+}
+check_sha256() {
+	_n=$(basename "$1")
+	_want=$(awk -v f="$_n" '$2 == f || $2 == "*" f { print $1; exit }' "$2" 2>/dev/null)
+	[ -n "$_want" ] || { warn "$_n is not listed in $(basename "$2")"; return 1; }
+	_got=$(sha256_of "$1")
+	[ -n "$_got" ] || { warn "no sha256sum or openssl on this image to check $_n with"; return 1; }
+	[ "$_got" = "$_want" ] || { warn "$_n: sha256 $_got, but $(basename "$2") says $_want"; return 1; }
+	return 0
+}
+release_asset() {
+	tr ',' '\n' < "$1" \
+		| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\/'"$2"'\)".*/\1/p'
 }
 
 WORK="/tmp/openuf-update-$$"
@@ -161,12 +199,41 @@ if [ -n "$FROM" ]; then
 	fi
 else
 	mkdir -p "$WORK" || die "cannot create $WORK"
-	info "$OPENUF_TARBALL_URL"
-	fetch "$OPENUF_TARBALL_URL" "$WORK/src.tar.gz" \
-		|| die "download failed. Check the device's internet access and DNS, or fetch the
+	_dl_fail="download failed. Check the device's internet access and DNS, or fetch the
       tarball elsewhere and re-run with --from /tmp/<file>."
+	if [ -n "$OPENUF_TARBALL_URL" ]; then
+		# Asked for by name (--branch, or an archive URL of the caller's).
+		info "$OPENUF_TARBALL_URL"
+		fetch "$OPENUF_TARBALL_URL" "$WORK/src.tar.gz" || die "$_dl_fail"
+		if [ -n "$OPENUF_TARBALL_SHA256" ]; then
+			[ "$(sha256_of "$WORK/src.tar.gz")" = "$OPENUF_TARBALL_SHA256" ] \
+				|| die "the archive does not match OPENUF_TARBALL_SHA256; not installing it"
+			ok "sha256 matches OPENUF_TARBALL_SHA256"
+		else
+			warn "UNVERIFIED source: $OPENUF_TARBALL_URL has no checksum (OPENUF_TARBALL_SHA256 gives one)"
+		fi
+		_what="$OPENUF_REPO @ ${OPENUF_BRANCH:-$OPENUF_TARBALL_URL}"
+	else
+		# A release: its source archive, checked against its SHA256SUMS.
+		info "$OPENUF_RELEASE_URL"
+		fetch "$OPENUF_RELEASE_URL" "$WORK/release.json" || die "$_dl_fail"
+		_tgz_url=$(release_asset "$WORK/release.json" 'openuf-[0-9][-.0-9A-Za-z_]*\.tar\.gz' | head -1)
+		_sums_url=$(release_asset "$WORK/release.json" 'SHA256SUMS' | head -1)
+		[ -n "$_tgz_url" ] || die "the release at $OPENUF_RELEASE_URL has no openuf-<version>.tar.gz"
+		[ -n "$_sums_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS to check
+      its archive against (a release made before checksums). Use a newer release,
+      or --branch <branch> to update from a branch unverified."
+		info "$_tgz_url"
+		_tgz="$WORK/$(basename "$_tgz_url")"
+		fetch "$_tgz_url" "$_tgz" && fetch "$_sums_url" "$WORK/SHA256SUMS" || die "$_dl_fail"
+		check_sha256 "$_tgz" "$WORK/SHA256SUMS" \
+			|| die "the source archive does not match the release's SHA256SUMS; not installing it"
+		ok "sha256 matches the release's SHA256SUMS"
+		mv "$_tgz" "$WORK/src.tar.gz"
+		_what="$(basename "$_tgz_url" .tar.gz)"
+	fi
 	( cd "$WORK" && tar xzf src.tar.gz ) || die "could not unpack the download"
-	ok "downloaded $OPENUF_REPO @ $OPENUF_REF"
+	ok "downloaded $_what"
 fi
 if [ -z "$SRC" ]; then
 	# A codeload tarball unpacks to <repo>-<ref>/; a release tarball (dist.sh)
@@ -183,7 +250,7 @@ fi
 # A source tree (not a dist.sh tarball) carries no build stamp; give it one so
 # `openuf-update --check` can say what is running afterwards.
 if [ ! -f "$SRC/openuf/BUILD" ]; then
-	_stamp="$OPENUF_REF $(date -u +%Y-%m-%dT%H:%MZ)"
+	_stamp="${OPENUF_BRANCH:-${OPENUF_REF:-release}} $(date -u +%Y-%m-%dT%H:%MZ)"
 	[ -n "$FROM" ] && _stamp="local $(date -u +%Y-%m-%dT%H:%MZ)"
 	printf '%s\n' "$_stamp" > "$SRC/openuf/BUILD" 2>/dev/null
 fi
