@@ -5955,32 +5955,48 @@ Wiphy phy1
 			end
 			assert_eq(ucihelper.FT_NASID_POLICY, "ft", "default policy")
 			local e = extra()
-			ucihelper.resolve_nas_id(e, true)
+			ucihelper.resolve_nas_id(e)
 			assert_eq(e.nasid, "00005e00532b", "default: the BSSID is the R0KH-ID")
 			assert_nil(e.nas_identifier, "default: the controller's NAS-ID is dropped")
 			e = extra()
-			ucihelper.resolve_nas_id(e, true, "keep")
+			ucihelper.resolve_nas_id(e, "keep")
 			assert_eq(e.nasid, "00005e00532b", "keep: nasid stays")
 			assert_eq(e.nas_identifier, "ap-office", "keep: NAS-ID stays")
 			e = extra()
-			ucihelper.resolve_nas_id(e, true, "ft")
+			ucihelper.resolve_nas_id(e, "ft")
 			assert_eq(e.nasid, "00005e00532b", "ft: the BSSID is the R0KH-ID")
 			assert_nil(e.nas_identifier, "ft: the controller's NAS-ID is dropped")
 			e = extra()
-			ucihelper.resolve_nas_id(e, true, "radius")
+			ucihelper.resolve_nas_id(e, "radius")
 			assert_nil(e.nasid, "radius: nasid dropped")
 			assert_eq(e.nas_identifier, "ap-office", "radius: RADIUS sees the NAS-ID")
-			-- outside interop, or without FT, neither policy touches anything
-			for _, args in ipairs({{false, "ft"}, {false, "radius"}}) do
+			-- without FT, neither policy touches anything
+			for _, policy in ipairs({"ft", "radius"}) do
 				e = extra()
-				ucihelper.resolve_nas_id(e, args[1], args[2])
-				assert_eq(e.nasid, "00005e00532b", "no interop: nasid as is")
-				assert_eq(e.nas_identifier, "ap-office", "no interop: NAS-ID as is")
+				e.ieee80211r = nil
+				ucihelper.resolve_nas_id(e, policy)
+				assert_eq(e.nasid, "00005e00532b", "no FT: nasid as is")
+				assert_eq(e.nas_identifier, "ap-office", "no FT: NAS-ID as is")
 			end
-			e = extra()
-			e.ieee80211r = nil
-			ucihelper.resolve_nas_id(e, true, "ft")
-			assert_eq(e.nas_identifier, "ap-office", "no FT: NAS-ID as is")
+		end
+	},
+	{
+		-- ft-nasid extended (owner, 2026-11-01): without interop hostapd still
+		-- uses nas_identifier as the R0KH-ID, so one shared by every AP breaks
+		-- FT-EAP roams between openUF APs (lab, 2026-10-31). hostapd's default
+		-- (the BSSID) takes over; a non-FT WLAN keeps the NAS-ID.
+		name = "ucihelper: an FT-EAP WLAN without interop drops the shared NAS-ID",
+		fn = function()
+			local e = {ieee80211r = "1", nas_identifier = "ap-office"}
+			ucihelper.resolve_nas_id(e)
+			assert_nil(e.nas_identifier, "FT: the shared NAS-ID is dropped")
+			assert_nil(e.nasid, "FT: nothing written, hostapd defaults to the BSSID")
+			e = {ieee80211r = "1", nas_identifier = "ap-office"}
+			ucihelper.resolve_nas_id(e, "radius")
+			assert_eq(e.nas_identifier, "ap-office", "radius: NAS-ID kept on request")
+			e = {nas_identifier = "ap-office"}
+			ucihelper.resolve_nas_id(e)
+			assert_eq(e.nas_identifier, "ap-office", "no FT: NAS-ID kept")
 		end
 	},
 }

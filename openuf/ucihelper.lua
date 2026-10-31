@@ -2227,14 +2227,18 @@ end
 -- the controller's NAS-ID is dropped on these WLANs, and on the first push,
 -- before the BSSID is known, hostapd's own default (the BSSID) applies
 -- instead of the shared NAS-ID. RADIUS sees the BSSID as NAS-Identifier.
--- "keep" (both written, nasid wins once known) and "radius" (nasid dropped,
--- UniFi FT pulls fail) remain for a deployment that needs the NAS-ID.
--- Decided by the owner 2026-10-31 (ft-nasid, option B).
+-- The same holds without interop: hostapd uses nas_identifier as the
+-- R0KH-ID there too, so with a shared one an FT-EAP roam to another openUF
+-- AP never pulls its key (seen in the lab, 2026-10-31). "keep" (both
+-- written, nasid wins once known) and "radius" (nasid dropped, UniFi FT
+-- pulls fail) remain for a deployment that needs the NAS-ID.
+-- Decided by the owner 2026-10-31 (ft-nasid, option B; every FT WLAN since
+-- 2026-11-01).
 M.FT_NASID_POLICY = "ft"
 
-function M.resolve_nas_id(extra, interop, policy)
+function M.resolve_nas_id(extra, policy)
 	policy = policy or M.FT_NASID_POLICY
-	if not (interop and extra.ieee80211r == "1" and extra.nas_identifier) then
+	if not (extra.ieee80211r == "1" and extra.nas_identifier) then
 		return
 	end
 	if policy == "ft" then
@@ -2755,7 +2759,7 @@ function M.apply_config(resp, cfg, opts)
 					extra.radius_acct_interim_interval = vap.radius.interim_interval
 				end
 				if vap.radius.nas_id then extra.nas_identifier = vap.radius.nas_id end
-				M.resolve_nas_id(extra, cfg and cfg.config and cfg.config.unifi_ft_interop)
+				M.resolve_nas_id(extra)
 				-- RADIUS Dynamic Authorization (CoA / Disconnect-Request). Both
 				-- options are real wifi-iface options, appended by ap.uc for
 				-- EVERY auth type -- but the one place it joins the secret onto

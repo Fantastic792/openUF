@@ -49,6 +49,9 @@
 //     that WLAN's key names it, so openUF writes them into hostapd's key
 //     holders itself (ftinterop.lua) instead of a person reading them off the
 //     UniFi AP over SSH
+//   - a BSS's BSSID comes from sysfs before its bssid= line: on OpenWrt 25.12
+//     the line can repeat another BSS's address (seen in the lab on a second
+//     BSS of a radio), and that BSS's RRB frames were then dropped as foreign
 'use strict';
 
 import * as socket from 'socket';
@@ -72,7 +75,7 @@ const CHECK = getenv('RRB_CHECK') == '1';
 const ROAM = getenv('RRB_ROAM') != '0';
 const RELOAD_FLAG = '/tmp/rrb-unifi.wifi-reloaded';	// tmpfs: once per boot
 const PEERS_FILE = getenv('RRB_PEERS_FILE') || '';	// openUF: learned UniFi BSSIDs, JSON
-const VERSION = '1.3+openuf.1';				// openUF: upstream 1.3 plus the changes above
+const VERSION = '1.3+openuf.2';				// openUF: upstream 1.3 plus the changes above
 
 let local = {};		// local BSSIDs ("aa:bb:..") -> interface name
 let remote = {};	// BSSIDs of other APs we injected frames for
@@ -209,7 +212,10 @@ function derive() {
 	let lans = {}, errors = [];
 
 	for (let b in bss) {
-		b.bssid = lc(b.bssid || sysfs(b.iface, 'address'));
+		// openUF: the live address first. OpenWrt's hostapd.uc writes the
+		// same bssid= line into several BSSes of one radio and sets the
+		// real addresses itself, so the file can name another BSS's address.
+		b.bssid = lc(sysfs(b.iface, 'address') || b.bssid);
 		if (!match(b.bssid, /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/))
 			push(errors, `${b.iface}: no BSSID in ${b.file} or sysfs`);
 		let orig = filter(b.ft, v => v != FT_IF);

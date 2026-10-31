@@ -9,7 +9,7 @@
 #          "packages":[{"pkg":"nftables","present":true,"required":false,
 #                       "unlocks":"..."},...],
 #          "missing":["kmod-nft-bridge"],"ok":false,
-#          "rrb_unifi":{"installed":true,"version":"1.3+openuf.1","enabled":true,
+#          "rrb_unifi":{"installed":true,"version":"1.3+openuf.2","enabled":true,
 #                       "veth":true,"running":true,"learned":2,"listed":0,
 #                       "missing":[]},
 #          "theme":{"package":"luci-theme-halo","installed":false,"luci":true,
