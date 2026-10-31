@@ -4986,7 +4986,12 @@ function M.handle_response(json_str, st, cfg)
 		local mac, ip, hostname = st.mac, st.ip, st.hostname
 		local prev = {}
 		for k, v in pairs(st) do prev[k] = v end
-		local fresh = M._state.reset()
+		local fresh, persisted = M._state.reset()
+		if persisted == false then
+			-- The in-memory reset still happens (the controller is gone
+			-- either way); the next save or reload settles the file.
+			io.stderr:write("inform: factory reset not yet on disk\n")
+		end
 		for k in pairs(st) do st[k] = nil end
 		for k, v in pairs(fresh) do st[k] = v end
 		st.mac, st.ip, st.hostname = mac, ip, hostname
@@ -8113,7 +8118,12 @@ function M.run(cfg, ufhw)
 		end
 		st.locating = false
 		st.locate_prev_trigger = nil
-		M._state.save(st)
+		-- Startup: a full overlay or a missing directory must not stop the
+		-- daemon here, before its first inform. The next save retries.
+		local ok_sv, err_sv = pcall(M._state.save, st)
+		if not ok_sv then
+			io.stderr:write("inform: state not saved at startup: " .. tostring(err_sv) .. "\n")
+		end
 	end
 	-- LED brightness is live kernel state too, not UCI -- the same reason the
 	-- blocked-client rules are reapplied above. The controller pushes

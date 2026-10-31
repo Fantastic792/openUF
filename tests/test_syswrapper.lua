@@ -136,6 +136,32 @@ return {
 		end
 	},
 	{
+		name = "syswrapper: a refused or failed save is reported, never printed as success",
+		fn = function()
+			reset_state()
+			local orig_save, orig_err, orig_out = state.save, io.stderr, io.stdout
+			local err, out = {}, {}
+			local ok, e = pcall(function()
+				io.stderr = {write = function(_, t) err[#err + 1] = t end}
+				io.stdout = {write = function(_, t) out[#out + 1] = t end}
+				-- The daemon wrote the file between this process's load and save.
+				state.save = function() return false end
+				assert_false(sw.cmd_set_adopt("http://192.0.2.1:8080/inform",
+					"deadbeefdeadbeefdeadbeefdeadbeef"), "set-adopt fails")
+				assert_false(sw.cmd_set_inform("http://192.0.2.1:8080/inform"), "set-inform fails")
+				assert_false(sw.cmd_reset_inform(), "reset-inform fails")
+				-- No space / no directory: save raises.
+				state.save = function() error("state.save: cannot write") end
+				assert_false(sw.cmd_set_inform("http://192.0.2.1:8080/inform"), "a raise fails it too")
+			end)
+			state.save, io.stderr, io.stdout = orig_save, orig_err, orig_out
+			if not ok then error(e, 0) end
+			assert_eq(#out, 0, "no success line printed")
+			assert_contains(table.concat(err), "state not saved", "the failure is said")
+			assert_contains(table.concat(err), "cannot write", "with the reason")
+		end
+	},
+	{
 		name = "syswrapper: reads conf.lua's state_file as text, ignoring comments",
 		fn = function()
 			-- conf.lua cannot be dofile()d from the hook (its modelmap path is

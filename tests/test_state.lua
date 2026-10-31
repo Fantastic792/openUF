@@ -105,6 +105,31 @@ return {
 		end
 	},
 	{
+		name = "state: reset says whether the defaults reached the disk, and never raises",
+		fn = function()
+			with_tmp(function()
+				local _, ok = state.reset()
+				assert_true(ok, "written")
+				local orig_save, orig_err = state.save, io.stderr
+				local buf = {}
+				io.stderr = {write = function(_, t) buf[#buf + 1] = t end}
+				local okp, err = pcall(function()
+					state.save = function() return false end
+					local st, ok2 = state.reset()
+					assert_eq(st.adopted, false, "the fresh table either way")
+					assert_false(ok2, "a refused save is reported")
+					state.save = function() error("state.save: cannot write to x") end
+					local st3, ok3 = state.reset()
+					assert_eq(st3.authkey, DEFKEY, "a raising save still hands back defaults")
+					assert_false(ok3, "and reports it")
+				end)
+				state.save, io.stderr = orig_save, orig_err
+				if not okp then error(err, 0) end
+				assert_contains(table.concat(buf), "reset not saved", "the raise is logged")
+			end)
+		end
+	},
+	{
 		name = "state: use_gcm field defaults to false and round-trips",
 		fn = function()
 			with_tmp(function()

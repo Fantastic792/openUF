@@ -317,11 +317,17 @@ function M.save(st)
 	return true
 end
 
--- Reset state to defaults and persist immediately.
+-- Reset state to defaults and persist immediately. Returns the fresh table
+-- and whether it reached the disk: the in-memory defaults are right either
+-- way, but a caller that reports success needs to know (a refused save is
+-- said by save itself, a raise here).
 function M.reset()
 	local st = defaults()
-	M.save(st)
-	return st
+	local ok, res = pcall(M.save, st)
+	if not ok then
+		io.stderr:write("state: reset not saved: " .. tostring(res) .. "\n")
+	end
+	return st, ok and res == true
 end
 
 return M

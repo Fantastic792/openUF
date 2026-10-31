@@ -98,6 +98,19 @@ local function is_url(s)
 	return type(s) == "string" and (s:match("^https?://") ~= nil)
 end
 
+-- state.save, reported: false (another process wrote the file since this
+-- one read it) or a raise (no space, no directory) is said on stderr, and
+-- the command fails instead of printing success over a change that never
+-- reached the disk.
+local function saved(fn, ...)
+	local ok, res = pcall(fn, ...)
+	if ok and res ~= false then return true end
+	io.stderr:write("syswrapper: state not saved"
+		.. (ok and " (the file changed under us -- run it again)" or (": " .. tostring(res)))
+		.. "\n")
+	return false
+end
+
 -- ─── Commands ────────────────────────────────────────────────────────────────
 
 -- set-adopt <url> <key>
@@ -118,7 +131,7 @@ local function cmd_set_adopt(url, key)
 	s.inform_url = url
 	s.authkey    = key:lower()
 	s.adopted    = true
-	st.save(s)
+	if not saved(st.save, s) then return false end
 	io.stdout:write("syswrapper: adopted; inform_url=" .. url .. "\n")
 	return true
 end
@@ -133,7 +146,7 @@ local function cmd_set_inform(url)
 	local st = load_state()
 	local s  = st.load()
 	s.inform_url = url
-	st.save(s)
+	if not saved(st.save, s) then return false end
 	io.stdout:write("syswrapper: inform_url set to " .. url .. "\n")
 	return true
 end
@@ -142,7 +155,11 @@ end
 -- Return to factory defaults: clears authkey and marks as un-adopted.
 local function cmd_reset_inform()
 	local st = load_state()
-	st.reset()
+	local _, ok = st.reset()
+	if not ok then
+		io.stderr:write("syswrapper: state not reset (see the line above)\n")
+		return false
+	end
 	io.stdout:write("syswrapper: reset to defaults\n")
 	return true
 end
