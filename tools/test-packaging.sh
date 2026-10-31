@@ -446,5 +446,15 @@ for f in $(git ls-files '*.sh' 'openuf/etc/init.d/*' 'package/*/root/etc/uci-def
 done
 check "every script the workflows check parses in bash and dash (bad:${_bad:- none})" test -z "$_bad"
 
+# ── B8: the Makefile's PKG_HASH is never "skip"; the release checks its own ─
+check "Makefile PKG_HASH is a 64-hex placeholder, not skip" grep -qE '^PKG_HASH:=[0-9a-f]{64}$' package/openuf/Makefile
+check "no Makefile in the tree has PKG_HASH:=skip" eval '! grep -rq "^PKG_HASH:=skip" package'
+cp package/openuf/Makefile "$T/mk"
+_h=$(printf x | sha256sum | cut -d' ' -f1)
+sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$_h/" "$T/mk"
+check "the workflow's PKG_HASH substitution lands in the Makefile" grep -qx "PKG_HASH:=$_h" "$T/mk"
+check "release.yml refuses a missing or malformed sha256" grep -q 'sha256 is not 64 hex digits' .github/workflows/release.yml
+check "release.yml re-reads the substituted PKG_HASH" grep -q 'grep -qx "PKG_HASH:=\$SHA256"' .github/workflows/release.yml
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

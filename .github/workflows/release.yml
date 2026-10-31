@@ -192,6 +192,12 @@ jobs:
       - name: Point the Makefiles at this release's archive
         run: |
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$VERSION/" package/openuf/Makefile package/luci-app-openuf/Makefile
+          # The archive's own sha256 from the verify job: nothing else, and
+          # never "skip" (which makes the SDK fetch without checking).
+          case "$SHA256" in
+            *[!0-9a-f]*|"") echo "no valid sha256 for the source archive: '$SHA256'" >&2; exit 1 ;;
+          esac
+          [ "${#SHA256}" = 64 ] || { echo "sha256 is not 64 hex digits: '$SHA256'" >&2; exit 1; }
           sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$SHA256/" package/openuf/Makefile
           # The committed URL says v<version>; a tag made by hand may lack the v.
           sed -i "s|/releases/download/[^/]*/|/releases/download/$TAG/|" package/openuf/Makefile
@@ -199,6 +205,7 @@ jobs:
           # its own archive, not the one the committed URL names.
           sed -i "s|https://github.com/[^/]*/[^/]*/releases/|https://github.com/$GITHUB_REPOSITORY/releases/|" package/openuf/Makefile
           grep -E '^PKG_(VERSION|HASH|SOURCE_URL):=' package/openuf/Makefile
+          grep -qx "PKG_HASH:=$SHA256" package/openuf/Makefile
       - name: Build with the OpenWrt SDK
         # A commit, not a branch: the action builds what goes on the release
         # (openwrt/gh-action-sdk main as of 2026-11-01). Raise it by hand.

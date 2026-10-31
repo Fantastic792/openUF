@@ -14,11 +14,14 @@ PKG_RELEASE:=1
 # The release archive tools/release-archive.sh produces from a tag: the
 # comment-stripped tree tools/dist.sh --verify proved bytecode-identical to the
 # source, under a single openuf-<version>/ directory. The release workflow
-# substitutes PKG_VERSION and PKG_HASH from the tag it is building; a feed
-# submission carries the real hash.
+# substitutes PKG_VERSION and PKG_HASH from the tag it is building and refuses
+# to build with anything but the archive's own sha256. The committed hash is an
+# all-zero placeholder, not "skip": a build straight from this tree fails the
+# hash check instead of installing an unchecked download. A feed submission
+# carries the real hash.
 PKG_SOURCE:=openuf-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/Fantastic792/openUF/releases/download/v$(PKG_VERSION)/
-PKG_HASH:=skip
+PKG_HASH:=0000000000000000000000000000000000000000000000000000000000000000
 
 PKG_MAINTAINER:=Yesrab Ali <yesrab.ali111@gmail.com>
 # The whole tree, the vendored 802.11r translator included (NOTICE lists the
