@@ -395,7 +395,9 @@ function M.apply(sw, cfg, st, wireless_vlans, uplink_phys, uplink_ifname)
 	local untagged_home = {}  -- phys -> vlan_id it becomes untagged in
 	local excluded      = {}  -- vlan_id -> { [phys] = true }
 	for port_idx, p in pairs((sw and sw.enabled and sw.ports) or {}) do
-		local phys = M.physical_port(cfg, port_idx)
+		-- uplink_phys as above: without it a dynamic-uplink board fails
+		-- closed here and the moved port is never stripped from stock.
+		local phys = M.physical_port(cfg, port_idx, uplink_phys)
 		if phys then
 			for vlan_id, mode in pairs(p.vlans) do
 				if mode == "untagged" and desired[vlan_id] then

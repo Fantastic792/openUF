@@ -721,6 +721,28 @@ return {
 		end
 	},
 	{
+		name = "switchvlan: a dynamic-uplink board strips the moved port from stock VLAN 1",
+		fn = function()
+			-- No static uplink: the stock-strip pass must use the runtime
+			-- uplink_phys too, or physical_port fails closed there and the
+			-- port stays untagged in VLAN 1 and in openuf_swvlan20 at once.
+			local cfg = {net = {lan_vlanid = 1, ports = {
+				{idx = 1, swport = "lan1"},   -- physical 1 -- the cable is here
+				{idx = 2, swport = "lan2"},   -- physical 2
+			}}, vlan = CFG.vlan}
+			with_capture(function()
+				local u = swconfig_board()
+				switchvlan._uci = u.mock
+				silently(function()
+					assert_true(switchvlan.apply(override(), cfg, {}, nil, 1), "applied")
+				end)
+				assert_eq(u.db.network.openuf_swvlan20.ports, "0t 2", "port untagged in VLAN 20")
+				assert_eq(u.db.network.stock_vlan1.ports, "0t 1 3 4",
+					"moved port stripped from stock VLAN 1, uplink socket kept")
+			end)
+		end
+	},
+	{
 		name = "switchvlan: a dynamic-uplink board fails closed when the uplink is unknown",
 		fn = function()
 			-- No static uplink flag and no detected socket: any port could be
