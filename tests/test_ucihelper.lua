@@ -3745,6 +3745,8 @@ Wiphy phy2
 				assert_true(calls[1]:find("-i wlan0", 1, true) ~= nil, "targets the given interface")
 				assert_true(calls[1]:find("deauthenticate aa:bb:cc:dd:ee:ff", 1, true) ~= nil,
 					"deauthenticates the given mac")
+				assert_true(calls[1]:find(">/dev/null 2>&1", 1, true) ~= nil,
+					"hostapd_cli's OK stays out of the log")
 			end)
 		end
 	},

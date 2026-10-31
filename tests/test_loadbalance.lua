@@ -2,6 +2,8 @@
 -- Run from project root: lua tests/run_tests.lua
 
 local lb = dofile("openuf/loadbalance.lua")
+local logged = {}
+lb._log = function(msg) logged[#logged + 1] = msg end
 
 local function obs(mac, inactive_ms, radio)
 	return {radio = radio or "radio0", ifname = "wlan0", mac = mac, inactive_ms = inactive_ms}
@@ -31,6 +33,8 @@ return {
 			assert_eq(#k, 1, "one over")
 			assert_eq(k[1].mac, B, "the most idle")
 			assert_eq(k[1].ifname, "wlan0", "on its interface")
+			assert_eq(logged[#logged], "kicked " .. B .. " from wlan0 (radio0 has 3 > maxsta 2; idle 5 s)",
+				"one line says who, where and why")
 			k = lb.kicks({obs(A, 100), obs(B, 5000), obs(C, 300)}, {radio0 = 1})
 			assert_eq(macs(k), B .. "," .. C, "two over: the two most idle")
 		end

@@ -3,6 +3,8 @@
 -- Run from project root: lua tests/run_tests.lua
 
 local mr = dofile("openuf/minrssi.lua")
+local logged = {}
+mr._log = function(msg) logged[#logged + 1] = msg end
 
 local function obs(mac, signal, threshold)
 	return {ifname = "wlan0", mac = mac, signal = signal, threshold = threshold or -80}
@@ -29,6 +31,8 @@ return {
 			assert_eq(#k, 1, "30 s: kicked")
 			assert_eq(k[1].mac, a, "that station")
 			assert_eq(k[1].ifname, "wlan0", "on its interface")
+			assert_eq(logged[#logged], "kicked " .. a .. " from wlan0 (-81 dBm < -80 for 30 s)",
+				"one line says who, where and why")
 			assert_eq(#mr.tick({obs(a, -85)}, 1040), 0, "a station still there after its kick starts over")
 			assert_eq(#mr.tick({obs(a, -85)}, 1070), 1, "and is kicked again after another 30 s")
 		end

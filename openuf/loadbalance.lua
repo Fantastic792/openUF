@@ -27,6 +27,9 @@
 
 local M = {}
 
+-- One line per kick, so a client dropped for the cap shows why in logread.
+M._log = function(msg) io.stderr:write("loadbalance: " .. msg .. "\n") end
+
 -- obs: one entry per station on a radio that has Load balance on, this
 -- heartbeat: {radio, ifname, mac, inactive_ms}. maxsta_by_radio: radio name
 -- -> cap. skip: mac -> true for stations already kicked this pass (Minimum
@@ -56,7 +59,10 @@ function M.kicks(obs, maxsta_by_radio, skip)
 			end)
 			-- Above the cap by n: the n most idle. At or below it: none.
 			for k = 1, #list - maxsta do
-				kicks[#kicks + 1] = {ifname = list[k].o.ifname, mac = list[k].o.mac}
+				local o = list[k].o
+				kicks[#kicks + 1] = {ifname = o.ifname, mac = o.mac}
+				M._log(string.format("kicked %s from %s (%s has %d > maxsta %d; idle %d s)",
+					o.mac, o.ifname, radio, #list, maxsta, math.floor((o.inactive_ms or 0) / 1000)))
 			end
 		end
 	end

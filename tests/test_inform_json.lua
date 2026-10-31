@@ -8,6 +8,9 @@ dofile("openuf/lib/lib.lua")
 local cjson  = require("cjson")
 local state  = dofile("openuf/state.lua")
 local inform = dofile("openuf/inform.lua")
+-- the kick lines (one per kick) would fill the suite output
+inform._minrssi._log = function() end
+inform._loadbalance._log = function() end
 
 local function fixture(name)
 	local f = io.open("tests/fixtures/" .. name, "r")

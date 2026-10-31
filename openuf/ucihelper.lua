@@ -3771,7 +3771,7 @@ end
 -- to reconcile on restart since this is fully re-derived every inform cycle
 -- from live UCI config + sta_table.
 function M.kick_station(ifname, mac)
-	M._run_cmd("hostapd_cli -i " .. ifname .. " deauthenticate " .. mac .. " 2>/dev/null")
+	M._run_cmd("hostapd_cli -i " .. ifname .. " deauthenticate " .. mac .. " >/dev/null 2>&1")
 	return true
 end
 

@@ -41,6 +41,10 @@ M.REFUSE_MARGIN = 3
 -- stamgr -i 1 -c 30: 30 consecutive one-second samples.
 M.HOLD = 30
 
+-- One line per kick: the hardware log showed hostapd_cli's "OK" and
+-- nothing about who was kicked or why.
+M._log = function(msg) io.stderr:write("minrssi: " .. msg .. "\n") end
+
 function M.dbm(raw)
 	return raw - M.WIRE_OFFSET
 end
@@ -61,6 +65,8 @@ function M.tick(obs, now)
 			local since = M._low_since[o.mac] or now
 			if now - since >= M.HOLD then
 				kicks[#kicks + 1] = {ifname = o.ifname, mac = o.mac}
+				M._log(string.format("kicked %s from %s (%d dBm < %d for %d s)",
+					o.mac, o.ifname, o.signal, o.threshold, now - since))
 			else
 				low[o.mac] = since
 			end
