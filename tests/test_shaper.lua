@@ -24,7 +24,10 @@ local function fresh(opts)
 		local i = n and env.ifindex[n]
 		return i and (i .. "\n") or nil
 	end
-	sh._popen = function() return opts.ls or "lo\nwlan0\nwlan1\n" end
+	sh._popen = function(cmd)
+		if cmd:find("^tc qdisc show") then return opts.qdisc or "" end
+		return opts.ls or "lo\nwlan0\nwlan1\n"
+	end
 	sh._time = function() return env.now end
 	env.sh = sh
 	return env
@@ -272,6 +275,27 @@ return {
 			e.cmds = {}
 			e.sh.sync({})
 			assert_eq(#e.cmds, 0, "once per process")
+		end
+	},
+	{
+		name = "shaper: the first sync removes a previous run's root HTB from a netdev no longer limited",
+		fn = function()
+			-- `tc qdisc show` after a daemon restart: wlan1 kept the old WLAN
+			-- limit's tree, wlan0 is still wanted, eth0 runs SQM (default 12).
+			local e = fresh({qdisc = table.concat({
+				"qdisc noqueue 0: dev lo root refcnt 2",
+				"qdisc htb 1: dev wlan1 root refcnt 2 r2q 10 default 0 direct_packets_stat 3 direct_qlen 1000",
+				"qdisc fq_codel 8001: dev wlan1 parent 1:1 limit 1000p flows 64 quantum 1514",
+				"qdisc htb 1: dev wlan0 root refcnt 2 r2q 10 default 0x0 direct_packets_stat 0",
+				"qdisc htb 1: dev eth0 root refcnt 2 r2q 10 default 0x12 direct_packets_stat 0",
+				"qdisc htb 1: dev bad;reboot root refcnt 2 r2q 10 default 0",
+			}, "\n") .. "\n"})
+			e.sh.sync(down_only(5000, {}))
+			assert_true(has(e, "tc qdisc del dev wlan1 root"), "stale openUF root removed")
+			assert_eq(count(e, "tc qdisc del dev eth0"), 0, "someone else's HTB is left alone")
+			assert_eq(count(e, "reboot"), 0, "a bad name never reaches a command")
+			assert_true(has(e, "tc qdisc add dev wlan0 root handle 1: htb default 0"),
+				"the wanted netdev is rebuilt as before")
 		end
 	},
 	{

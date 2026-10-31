@@ -327,8 +327,19 @@ end
 -- IFB devices a previous run left behind, once per process, with the
 -- ingress redirect of the netdev each one served (its name carries that
 -- netdev's ifindex): a redirect to a deleted device drops every frame.
-local function sweep()
+-- Also the download root a previous run built on a netdev that is not
+-- wanted any more -- M.applied starts empty, so sync()'s own teardown never
+-- sees it and the old cap stayed on that netdev until reboot. Ours is the
+-- exact `htb default 0` root build() adds (SQM's htb roots use a nonzero
+-- default class); a netdev still in desired is rebuilt by build() anyway.
+local function sweep(desired)
 	M._swept = true
+	for line in M._popen("tc qdisc show 2>/dev/null"):gmatch("[^\n]+") do
+		local dev, def = line:match("^qdisc htb 1: dev (%S+) root .-default (%S+)")
+		if dev and (def == "0" or def == "0x0") and valid_ifname(dev) and not desired[dev] then
+			run("tc qdisc del dev " .. dev .. " root")
+		end
+	end
 	local names = {}
 	for name in M._popen("ls /sys/class/net 2>/dev/null"):gmatch("%S+") do names[#names + 1] = name end
 	local by_index = {}
@@ -362,8 +373,8 @@ end
 -- A netdev missing from desired has its shaping removed. Returns true when
 -- every netdev ended up as wanted.
 function M.sync(desired)
-	if not M._swept then sweep() end
 	desired = desired or {}
+	if not M._swept then sweep(desired) end
 	for _, ifname in ipairs(sorted_keys(M.applied)) do
 		if not desired[ifname] then
 			local a = M.applied[ifname]
