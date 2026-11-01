@@ -200,8 +200,10 @@ config = {
 	-- never downloads or flashes UniFi firmware, so a rolling upgrade would
 	-- otherwise leave this AP "needs upgrade" forever. true reports the pushed
 	-- version (bare "a.b.c.d" only) from the next inform; false keeps the
-	-- profile's version. An absent key means on, so a conf.lua kept across an
-	-- upgrade picks this up.
+	-- profile's version. With it on, the uptime also counts from the accepted
+	-- upgrade, as a real AP's does after rebooting into it, until the next real
+	-- boot. An absent key means on, so a conf.lua kept across an upgrade picks
+	-- this up.
 	report_upgraded_version = true,
 
 	-- WiFi Connectivity (controller: Insights -> AirView -> Connectivity): report

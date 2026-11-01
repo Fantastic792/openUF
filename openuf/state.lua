@@ -51,6 +51,10 @@ local function defaults()
 		use_gcm                  = false,
 		upgrade_requested_version = "",
 		upgrade_requested_url     = "",
+		-- /proc/uptime when the controller's upgrade was accepted; 0 = none.
+		upgrade_accepted_uptime   = 0,
+		-- /proc/sys/kernel/random/boot_id at that moment ("" = unknown).
+		upgrade_accepted_boot     = "",
 		blocked_stas             = {},
 	}
 end
@@ -75,6 +79,8 @@ local TYPED = {
 	use_gcm                   = "boolean",
 	upgrade_requested_version = "string",
 	upgrade_requested_url     = "string",
+	upgrade_accepted_uptime   = "number",
+	upgrade_accepted_boot     = "string",
 	blocked_stas              = "table",
 	-- Identity, re-derived at startup by inform's _populate_net_info. Kept
 	-- so the PREVIOUS run's values are readable at that moment: M.run

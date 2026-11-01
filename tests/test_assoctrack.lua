@@ -679,4 +679,20 @@ return {
 				.. " -> failure wpa (assoc 50ms, authz never, gone=true)", "the line")
 		end
 	},
+	{
+		name = "assoctrack: a leave's last_seen uses the shifted uptime the inform reports",
+		fn = function()
+			reset()
+			roams({assoc(100.10, IF, -61), authorized(100.22, IF, "sae")})
+			at._roam_queue = {}
+			at.observe({{mac = STA, ifname = IF, signal = -72, inactive_ms = 1500}}, 200)
+			at.uptime_shift = 150
+			local ok, err = pcall(function()
+				local out = roams({disassoc(205.40, IF)})
+				assert_eq(out[1].last_seen, 55, "205 s of real uptime, 150 s after the upgrade mark")
+			end)
+			at.uptime_shift = 0
+			if not ok then error(err, 0) end
+		end
+	},
 }

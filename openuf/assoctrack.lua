@@ -37,6 +37,9 @@ local util = package.loaded["openuf.util"]
 M._exec      = os.execute
 M._popen     = util.popen
 M._read_file = util.read_file
+-- Seconds inform's reported uptime runs behind /proc/uptime after an accepted
+-- upgrade (inform.reported_uptime); last_seen is shifted the same way.
+M.uptime_shift = 0
 
 -- 5.1 returns the raw exit status (0 and 1 are both truthy); 5.4 returns
 -- true/nil. Normalise before branching.
@@ -603,8 +606,8 @@ local function leave_payload(event_type, mac, h, vap, last_seen)
 		vap          = vap,
 		avg_rssi     = h.rssi,
 		-- Whole seconds of this AP's uptime: the controller subtracts it from
-		-- the uptime of this AP's last inform.
-		last_seen    = math.floor(last_seen or 0),
+		-- the uptime of this AP's last inform, so it is on that one's clock.
+		last_seen    = math.floor(math.max(0, (last_seen or 0) - (M.uptime_shift or 0))),
 		assoc_status = kick_bits(mac),
 	}
 end

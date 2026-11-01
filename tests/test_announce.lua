@@ -851,4 +851,44 @@ return {
 			assert_eq(pkt:byte(2), 6, "command")
 		end
 	},
+	{
+		name = "announce: _refresh counts uptime from an accepted upgrade",
+		fn = function()
+			local o_read, o_state, o_popen = announce._read_file, announce._state, announce._popen
+			announce._popen = function() return "" end
+			announce._read_file = function(p) if p == "/proc/uptime" then return "1000.50 2000.00\n" end end
+			announce._state = {load = function() return {adopted = true, upgrade_accepted_uptime = 900} end}
+			local ok, err = pcall(function()
+				local cfg = {}
+				announce._refresh(cfg)
+				assert_eq(cfg.uptime, 100, "seconds since the upgrade")
+				announce._state = {load = function() return {adopted = true, upgrade_accepted_uptime = 2000} end}
+				announce._refresh(cfg)
+				assert_eq(cfg.uptime, 1000, "mark above uptime (rebooted since): the real uptime")
+			end)
+			announce._read_file, announce._state, announce._popen = o_read, o_state, o_popen
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "announce: _refresh ignores an upgrade mark from another boot",
+		fn = function()
+			local o_read, o_state, o_popen = announce._read_file, announce._state, announce._popen
+			announce._popen = function() return "" end
+			announce._read_file = function(p)
+				if p == "/proc/uptime" then return "1000.50 2000.00\n" end
+				if p == announce.BOOT_ID_FILE then return "boot-b\n" end
+			end
+			announce._state = {load = function()
+				return {adopted = true, upgrade_accepted_uptime = 60, upgrade_accepted_boot = "boot-a"}
+			end}
+			local ok, err = pcall(function()
+				local cfg = {}
+				announce._refresh(cfg)
+				assert_eq(cfg.uptime, 1000, "another boot: the real uptime")
+			end)
+			announce._read_file, announce._state, announce._popen = o_read, o_state, o_popen
+			if not ok then error(err, 0) end
+		end
+	},
 }

@@ -9902,6 +9902,97 @@ return {
 		end
 	},
 	{
+		-- A real AP reboots into an upgrade, so its uptime starts over. With
+		-- report_upgraded_version on, openUF reports seconds since the upgrade
+		-- was accepted, until the next real boot.
+		name = "inform: reported_uptime counts from an accepted upgrade",
+		fn = function()
+			local on = {config = {}}
+			local st = sample_state({upgrade_accepted_uptime = 0, upgrade_requested_version = "6.8.4.15610"})
+			assert_eq(inform.reported_uptime(500, st, on), 500, "no mark: real uptime")
+			st.upgrade_accepted_uptime = 900
+			local up, cleared = inform.reported_uptime(1000, st, on)
+			assert_eq(up, 100, "seconds since the upgrade")
+			assert_false(cleared, "nothing to save")
+		end
+	},
+	{
+		name = "inform: reported_uptime clears the mark after a real reboot",
+		fn = function()
+			local st = sample_state({upgrade_accepted_uptime = 900, upgrade_requested_version = "6.8.4.15610"})
+			local up, cleared = inform.reported_uptime(30, st, {config = {}})
+			assert_eq(up, 30, "the real uptime")
+			assert_true(cleared, "the caller saves")
+			assert_eq(st.upgrade_accepted_uptime, 0, "mark gone")
+		end
+	},
+	{
+		name = "inform: reported_uptime is the real one with report_upgraded_version = false",
+		fn = function()
+			local st = sample_state({upgrade_accepted_uptime = 900})
+			local up, cleared = inform.reported_uptime(1000, st, {config = {report_upgraded_version = false}})
+			assert_eq(up, 1000, "real uptime")
+			assert_true(cleared, "and the mark goes, so the broadcaster agrees")
+			assert_eq(st.upgrade_accepted_uptime, 0, "mark gone")
+		end
+	},
+	{
+		-- The upgrade-external form carries no bare version: reported_version
+		-- keeps the profile's, so a reset uptime would claim a reboot into the
+		-- same firmware.
+		name = "inform: reported_uptime ignores the mark when the reported version did not change",
+		fn = function()
+			local st = sample_state({upgrade_accepted_uptime = 900, upgrade_requested_version = "unknown"})
+			local up, cleared = inform.reported_uptime(1000, st, {config = {}})
+			assert_eq(up, 1000, "real uptime")
+			assert_true(cleared, "mark gone")
+		end
+	},
+	{
+		name = "inform: an accepted upgrade sets the mark to /proc/uptime, a second one moves it",
+		fn = function()
+			local o_up, o_save = inform._uptime, inform._state.save
+			local now = 100
+			inform._uptime = function() return now end
+			inform._state.save = function() return true end
+			local ok, err = pcall(function()
+				local st = sample_state()
+				inform.handle_response('{"_type":"upgrade","version":"6.8.4.15610","url":"http://unifi/fw.bin"}', st)
+				assert_eq(st.upgrade_accepted_uptime, 100, "first upgrade")
+				now = 700
+				inform.handle_response('{"_type":"upgrade","version":"6.8.5.15700","url":"http://unifi/fw.bin"}', st)
+				assert_eq(st.upgrade_accepted_uptime, 700, "second upgrade moves it")
+			end)
+			inform._uptime, inform._state.save = o_up, o_save
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- build_json reports the shifted uptime and leaves the save to _tick.
+		name = "inform: _tick saves state when a stale upgrade mark was cleared",
+		fn = function()
+			with_tick_env(function()
+				local o_si, o_save = inform._sysinfo.uptime, inform._state.save
+				local saved = 0
+				inform._state.save = function() saved = saved + 1; return true end
+				inform._sysinfo.uptime = function() return 30 end
+				inform.build_json = function(st, cfg)
+					local up = inform.reported_uptime(inform._sysinfo.uptime(), st, cfg)
+					return '{"uptime":' .. up .. '}'
+				end
+				local st = sample_state({upgrade_accepted_uptime = 900, upgrade_requested_version = "6.8.4.15610"})
+				inform._http_post = function() return nil, "connection refused" end
+				local ok, err = pcall(function()
+					with_stderr(function() inform._tick(st, {config = {}}, nil, fresh_ctx()) end)
+				end)
+				inform._sysinfo.uptime, inform._state.save = o_si, o_save
+				if not ok then error(err, 0) end
+				assert_eq(st.upgrade_accepted_uptime, 0, "cleared")
+				assert_eq(saved, 1, "saved once by the tick")
+			end)
+		end
+	},
+	{
 		-- Lab item 8a (2026-10-31): a host-name inform URL is answered 400
 		-- unless the payload carries inform_ip, the address the name resolves to.
 		name = "inform: inform_ip is the inform host's address, resolved and cached",
@@ -9966,6 +10057,72 @@ return {
 			assert_true(vt[1] ~= nil, "the WLAN with '=' in its SSID is built")
 			assert_eq(vt[1].ssid, "a=b", "SSID keeps its '='")
 			assert_eq(vt[1].x_passphrase, "pass=word==", "passphrase keeps every '='")
+		end
+	},
+	{
+		-- An upgrade accepted at 60 s: after a real reboot the uptime soon
+		-- passes 60 again, so "below the mark" alone misses the reboot.
+		name = "inform: reported_uptime clears the mark after a reboot even once uptime has passed it",
+		fn = function()
+			local o_boot = inform._boot_id
+			local boot = "boot-a"
+			inform._boot_id = function() return boot end
+			local ok, err = pcall(function()
+				local st = sample_state({upgrade_accepted_uptime = 60, upgrade_accepted_boot = "boot-a",
+					upgrade_requested_version = "6.8.4.15610"})
+				assert_eq(inform.reported_uptime(500, st, {config = {}}), 440, "same boot: shifted")
+				boot = "boot-b"
+				local up, cleared = inform.reported_uptime(500, st, {config = {}})
+				assert_eq(up, 500, "another boot: the real uptime")
+				assert_true(cleared, "and the mark goes")
+				assert_eq(st.upgrade_accepted_uptime, 0, "mark gone")
+			end)
+			inform._boot_id = o_boot
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: an unreadable uptime (0) leaves the mark alone",
+		fn = function()
+			local st = sample_state({upgrade_accepted_uptime = 900, upgrade_requested_version = "6.8.4.15610"})
+			local up, cleared = inform.reported_uptime(0, st, {config = {}})
+			assert_eq(up, 0, "nothing better to say")
+			assert_false(cleared, "not a reboot")
+			assert_eq(st.upgrade_accepted_uptime, 900, "kept")
+		end
+	},
+	{
+		name = "inform: an accepted upgrade records the boot it happened in",
+		fn = function()
+			local o_up, o_save, o_boot = inform._uptime, inform._state.save, inform._boot_id
+			inform._uptime = function() return 100 end
+			inform._state.save = function() return true end
+			inform._boot_id = function() return "boot-a" end
+			local ok, err = pcall(function()
+				local st = sample_state()
+				inform.handle_response('{"_type":"upgrade","version":"6.8.4.15610","url":"http://unifi/fw.bin"}', st)
+				assert_eq(st.upgrade_accepted_boot, "boot-a", "boot id stored")
+			end)
+			inform._uptime, inform._state.save, inform._boot_id = o_up, o_save, o_boot
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		-- Roam/leave reports carry last_seen in this AP's uptime, which the
+		-- controller subtracts from the inform's: both must use one clock.
+		name = "inform: reported_uptime hands assoctrack the same shift",
+		fn = function()
+			local o_at = inform._assoctrack
+			inform._assoctrack = {uptime_shift = 0}
+			local ok, err = pcall(function()
+				local st = sample_state({upgrade_accepted_uptime = 900, upgrade_requested_version = "6.8.4.15610"})
+				inform.reported_uptime(1000, st, {config = {}})
+				assert_eq(inform._assoctrack.uptime_shift, 900, "shifting: the mark")
+				inform.reported_uptime(1000, sample_state(), {config = {}})
+				assert_eq(inform._assoctrack.uptime_shift, 0, "no mark: none")
+			end)
+			inform._assoctrack = o_at
+			if not ok then error(err, 0) end
 		end
 	},
 }

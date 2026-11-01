@@ -794,6 +794,9 @@ function M.build_json(st, cfg, ufhw)
 
 	-- Collect sysinfo
 	local uptime     = M._sysinfo.uptime()
+	-- What the controller is told; `uptime` stays the real clock for the
+	-- station and roam arithmetic below.
+	local shown_up   = M.reported_uptime(uptime, st, cfg)
 	local meminfo    = M._sysinfo.meminfo()
 	local cpu_pct    = M._sysinfo.cpu_percent()
 	local load1, load5, load15
@@ -2127,7 +2130,7 @@ function M.build_json(st, cfg, ufhw)
 		ip               = st.ip or "0.0.0.0",
 		inform_url       = st.inform_url,
 		cfgversion       = st.cfgversion,
-		uptime           = uptime,
+		uptime           = shown_up,
 		time             = os.time(),
 		-- Bare firmware version string only -- NOT model-prefixed. The
 		-- controller compares this against its firmware catalog's own
@@ -2386,7 +2389,7 @@ function M.build_json(st, cfg, ufhw)
 		["system-stats"] = {
 			cpu    = tostring(cpu_pct),
 			mem    = tostring(mem_pct),
-			uptime = tostring(uptime),
+			uptime = tostring(shown_up),
 		},
 		if_table         = arr(if_table),
 		radio_table      = arr(radio_table),
@@ -4541,6 +4544,51 @@ function M.reported_version(uap, st, cfg)
 	return uap.fw and uap.fw.ver or "6.6.55"
 end
 
+-- The uptime the inform reports. A real AP reboots into an upgrade, so its
+-- uptime starts over; with report_upgraded_version on (see reported_version)
+-- openUF reports the seconds since it accepted the upgrade
+-- (st.upgrade_accepted_uptime, /proc/uptime at that moment) until the next
+-- real boot. A mark above the uptime (rebooted since), the option off or a
+-- version reported_version does not report clears
+-- the mark: returns the uptime and whether st changed, and sets
+-- M._uptime_mark_cleared so _tick saves it.
+M._uptime_mark_cleared = false
+-- This boot's identity: a reboot changes it whatever the uptime has reached
+-- since (an upgrade accepted at 60 s is passed again a minute after a reboot).
+M.BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id"
+function M._boot_id()
+	local s = M._read_file(M.BOOT_ID_FILE)
+	return s and s:match("^%s*(%S+)") or nil
+end
+local function set_shift(n)
+	-- Roam and leave reports carry last_seen on the same clock (assoctrack).
+	if M._assoctrack then M._assoctrack.uptime_shift = n end
+end
+function M.reported_uptime(up, st, cfg)
+	local m = st and tonumber(st.upgrade_accepted_uptime) or 0
+	-- 0 is what an unreadable /proc/uptime reads as: no evidence of a reboot.
+	if type(up) ~= "number" or up <= 0 or m <= 0 then
+		if m <= 0 then set_shift(0) end
+		return up, false
+	end
+	-- Only while the pushed version is the one reported: an upgrade without
+	-- a bare a.b.c.d version (upgrade-external) leaves the version as it was,
+	-- and an uptime from 0 would claim a reboot into the same firmware.
+	local v = st.upgrade_requested_version
+	local on = cfg and cfg.config and cfg.config.report_upgraded_version ~= false
+		and type(v) == "string" and v:match("^%d+%.%d+%.%d+%.%d+$") ~= nil
+	local b, now_b = st.upgrade_accepted_boot, M._boot_id()
+	local same_boot = not (type(b) == "string" and b ~= "" and now_b and now_b ~= b)
+	if on and same_boot and up >= m then
+		set_shift(m)
+		return up - m, false
+	end
+	st.upgrade_accepted_uptime, st.upgrade_accepted_boot = 0, ""
+	M._uptime_mark_cleared = true
+	set_shift(0)
+	return up, true
+end
+
 -- Injectable: the controller's reboot, and the exit after it.
 M._reboot = function() return os.execute("reboot") end
 M._exit = os.exit
@@ -5079,6 +5127,8 @@ function M.handle_response(json_str, st, cfg)
 		-- which handles this identically (log + store, no real upgrade path).
 		st.upgrade_requested_version = tostring(resp.version or "")
 		st.upgrade_requested_url     = tostring(resp.url or "")
+		st.upgrade_accepted_uptime   = M._uptime() or 0
+		st.upgrade_accepted_boot     = M._boot_id() or ""
 		io.stderr:write("inform: upgrade requested (version=" .. st.upgrade_requested_version
 			.. ") -- stored only, not applying\n")
 		M._state.save(st)
@@ -8072,6 +8122,11 @@ function M._tick(st, cfg, ufhw, ctx)
 	if not ok_b then
 		io.stderr:write("inform: build_json failed: " .. tostring(json_str) .. "\n")
 		return ctx.interval
+	end
+	-- build_json cleared a stale upgrade mark (see reported_uptime).
+	if M._uptime_mark_cleared then
+		M._uptime_mark_cleared = false
+		pcall(M._state.save, st)
 	end
 	-- On the stations build_json just listed.
 	local ok_sh, err_sh = pcall(M._shaper_resync, st)

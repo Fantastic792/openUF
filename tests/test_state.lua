@@ -543,4 +543,19 @@ return {
 			end)
 		end
 	},
+	{
+		name = "state: upgrade_accepted_uptime defaults to 0 and is a number",
+		fn = function()
+			with_tmp(function()
+				local f = io.open(TMP, "w")
+				f:write('{"adopted":true,"authkey":"aabbccddeeff00112233445566778899"}')
+				f:close()
+				assert_eq(state.load().upgrade_accepted_uptime, 0, "absent: 0")
+				f = io.open(TMP, "w")
+				f:write('{"adopted":true,"upgrade_accepted_uptime":"soon"}')
+				f:close()
+				assert_eq(state.load().upgrade_accepted_uptime, 0, "wrong type: the default")
+			end)
+		end
+	},
 }

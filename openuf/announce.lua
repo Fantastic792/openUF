@@ -325,6 +325,22 @@ function M.adopted(state_file)
 	return nil
 end
 
+M.BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id"
+-- /proc/uptime when an upgrade was accepted (inform.reported_uptime), or nil.
+function M.upgrade_mark(state_file)
+	local sm = state_module()
+	if not sm then return nil end
+	if state_file then sm._state_file = state_file end
+	local ok, s = pcall(sm.load)
+	local m = ok and type(s) == "table" and tonumber(s.upgrade_accepted_uptime) or nil
+	if not (m and m > 0) then return nil end
+	-- A mark from another boot is stale (inform clears it on its next tick).
+	local b = s.upgrade_accepted_boot
+	local now_b = (M._read_file(M.BOOT_ID_FILE) or ""):match("^%s*(%S+)")
+	if type(b) == "string" and b ~= "" and now_b and now_b ~= b then return nil end
+	return m
+end
+
 -- Re-read, before each broadcast, the facts that change while the broadcaster
 -- runs. The packet used to be built from startup values for the life of the
 -- process:
@@ -349,7 +365,13 @@ function M._refresh(cfg)
 	if hostname then cfg.hostname = hostname end
 	local up = M._read_file("/proc/uptime")
 	local secs = up and tonumber(up:match("^(%S+)"))
-	if secs then cfg.uptime = math.floor(secs) end
+	if secs then
+		-- Counted from an accepted upgrade, as the inform reports it; a mark
+		-- above the uptime is from before a reboot (inform clears it).
+		local mark = M.upgrade_mark(cfg.state_file)
+		if mark and secs >= mark then secs = secs - mark end
+		cfg.uptime = math.floor(secs)
+	end
 	local adopted = M.adopted(cfg.state_file)
 	if adopted ~= nil then cfg.adopted = adopted end
 	return cfg
