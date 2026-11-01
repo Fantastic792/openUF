@@ -61,6 +61,20 @@ end
 
 local function ev(t, n) return {[STA] = {t = t, n = n or 1}} end
 
+-- io.stderr lines written while fn runs (assoctrack logs through io.stderr).
+local function stderr_lines(fn)
+	local real, lines = io.stderr, {}
+	io.stderr = {write = function(_, ...)
+		for _, part in ipairs({...}) do
+			for l in tostring(part):gmatch("[^\n]+") do lines[#lines + 1] = l end
+		end
+	end}
+	local ok, err = pcall(fn)
+	io.stderr = real
+	if not ok then error(err, 0) end
+	return lines
+end
+
 return {
 	{
 		name = "assoctrack: parse_events keeps the four connection events, timestamped",
@@ -636,6 +650,33 @@ return {
 			assert_nil(next(at._roamed), "roamed")
 			assert_nil(next(at._kicks), "kicks")
 			assert_eq(#at._roam_queue, 0, "queue")
+		end
+	},
+	{
+		-- 657c7af (jonasevcik): one log line per decided attempt.
+		name = "assoctrack: a decided success logs one line with its stages",
+		fn = function()
+			ingest_fixture()
+			local sets = {dns_q = ev(5905614.10), dns_resp = ev(5905614.15)}
+			local lines = stderr_lines(function() at.poll(ctx(5905620, sets)) end)
+			assert_eq(#lines, 1, "one line")
+			assert_eq(lines[1], "openuf: assoctrack: " .. STA .. " phy1-ap0 vap=" .. VAP
+				.. " -> success (assoc 50ms, authz 120ms, gone=false)", "the line")
+		end
+	},
+	{
+		name = "assoctrack: a WPA failure logs its verdict and an authz of never",
+		fn = function()
+			reset()
+			at.ingest(at.parse_events(table.concat({
+				'100.00 { "auth": {"address":"00:00:5e:00:53:01","ifname":"phy1-ap0","signal":-60} }',
+				'100.05 { "assoc": {"address":"00:00:5e:00:53:01","ifname":"phy1-ap0","signal":-60} }',
+				'104.00 { "disassoc": {"address":"00:00:5e:00:53:01","ifname":"phy1-ap0"} }',
+			}, "\n")))
+			local lines = stderr_lines(function() at.poll(ctx(105)) end)
+			assert_eq(#lines, 1, "one line")
+			assert_eq(lines[1], "openuf: assoctrack: " .. STA .. " phy1-ap0 vap=" .. VAP
+				.. " -> failure wpa (assoc 50ms, authz never, gone=true)", "the line")
 		end
 	},
 }

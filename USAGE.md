@@ -2274,6 +2274,10 @@ backlog row 23). Each is on by default and needs nothing in `conf.lua`.
   hostapd's events plus a passive nft table (`bridge openuf_assoc`) that dates each
   station's first DHCP and DNS frames, and arrivals, departures and roams within ~250 ms.
   `assoc_tracker = false` in `conf.lua` switches both off and removes the table.
+  Each decided attempt is logged as one line, `openuf: assoctrack: <mac> <ifname> vap=<vap> ->
+  <verdict> (assoc <n>ms, authz <n>ms|never, gone=true|false)`, where the verdict is
+  `success`, `failure wpa|dhcp|dns`, `soft failure` or `no event` (decided, nothing sent)
+  (`logread | grep assoctrack`).
 - **Minimum RSSI** refuses weak clients in hostapd (threshold + 3 dB) and kicks only after
   30 s below; **Load balance** (`stamgr.<n>.loadbalance.maxsta`, REST-only in the 10.6 UI)
   kicks the most idle clients above a radio's cap.
