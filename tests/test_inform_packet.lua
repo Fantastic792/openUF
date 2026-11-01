@@ -33,6 +33,13 @@ inform._meshvlan = {record = function() return nil end, reconcile = function() r
 	resync = function() return true end}
 -- And the guest portal (nft, a listening socket); guest tests stub their own.
 inform._guestportal._exec = function() return 0 end
+-- And the WAN/LAN address (ip addr flush/add, ip route, resolv.conf): a
+-- setparam carrying netconf.1.ip runs netconfig.apply_static on
+-- cfg.net.lan_cpueth. Unstubbed, a suite run as root in WSL flushed the
+-- host's own eth0 and gave it the test's address and route (that was the
+-- "WSL loses its default route" quirk). Tests that check the commands
+-- install their own recorder and put this one back.
+inform._netconfig._exec = function() return true end
 inform._guestportal.listen = function() return {close = function() end} end
 
 -- Deterministic IV for the TEST FILE's own crypto instance -- affects only
@@ -3853,6 +3860,25 @@ return {
 			assert_eq(applied_cfg, cfg, "cfg passed through unchanged")
 			assert_false(applied_opts.band_steering_active,
 				"band_steering_active false -- no vap has no2ghz_oui enabled")
+		end
+	},
+	{
+		-- A static-IP push from any test must never reach the host's network.
+		name = "test hygiene: netconfig never runs a real command in this file",
+		fn = function()
+			assert_true(inform._netconfig._exec ~= os.execute, "netconfig._exec is stubbed")
+			local ran = {}
+			local orig_exec = os.execute
+			os.execute = function(cmd) ran[#ran + 1] = cmd; return 0 end
+			local ok, err = pcall(inform.handle_response,
+				'{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.2\\n"}',
+				sample_state(), {net = {lan_cpueth = "eth0"}})
+			os.execute = orig_exec
+			if not ok then error(err, 0) end
+			for _, c in ipairs(ran) do
+				assert_nil(c:find("ip addr", 1, true), "no ip addr on the host: " .. c)
+				assert_nil(c:find("ip route", 1, true), "no ip route on the host: " .. c)
+			end
 		end
 	},
 	{
