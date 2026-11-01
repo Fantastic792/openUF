@@ -448,6 +448,8 @@ check "release.yml: the feed job deletes its key file and verifies the index" ev
 check "release.yml: one feed push at a time across tags" eval "awk '/^  feed:/,0' $_rel | grep -q 'group: apk-feed'"
 check "release.yml: a feed run with nothing new still passes" eval "awk '/^  feed:/,0' $_rel | grep -qF 'git diff --cached --quiet ||'"
 check "release.yml: the version job asks for no write" eval "! awk '/^  version:/,/^  verify:/' $_rel | grep -q 'contents: write'"
+check "release.yml: verify installs the AES backend (openssl rock), as test.yml does" eval "awk '/^  verify:/,/^  packages:/' $_rel | grep -q 'luarocks --lua-version 5.1 install openssl' && awk '/^  verify:/,/^  packages:/' $_rel | grep -q 'libssl-dev'"
+check "release.yml: verify's suite run requires GCM, so a missing backend fails loudly" eval "awk '/^  verify:/,/^  packages:/' $_rel | grep -q 'OPENUF_REQUIRE_GCM: \"1\"'"
 check "release.yml: an _alpha/_beta/_rc tag is created as a prerelease, not Latest" eval "awk '/^  verify:/,/^  packages:/' $_rel | grep -qF '*_alpha*|*_beta*|*_rc*) pre=--prerelease' && awk '/^  verify:/,/^  packages:/' $_rel | grep -q 'gh release create .*\$pre'"
 
 # ── B10: the workflows syntax-check every shell script, with no `|| true` ──

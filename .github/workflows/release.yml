@@ -128,9 +128,13 @@ jobs:
       - name: Install Lua 5.1 and the bindings the suite needs
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y lua5.1 liblua5.1-dev lua-bitop luarocks openssl dash
+          sudo apt-get install -y lua5.1 liblua5.1-dev lua-bitop luarocks openssl dash libssl-dev
           sudo ln -sf /usr/bin/lua5.1 /usr/local/bin/lua
           sudo luarocks --lua-version 5.1 install lua-cjson LUA_INCDIR=/usr/include/lua5.1
+          # lua-openssl (rock name "openssl"): the AES backend, CBC and GCM. Since
+          # crypto.lua stopped falling back to the openssl CLI (which put the key
+          # on a command line), the suite cannot pass without it -- as in test.yml.
+          sudo luarocks --lua-version 5.1 install openssl LUA_INCDIR=/usr/include/lua5.1
       - name: Shell syntax, both shells
         run: |
           # The same list as the Tests workflow: every tracked script.
@@ -147,6 +151,8 @@ jobs:
       # version and docs, and is not published: nothing downloads it.
       - name: Build the source archive (dist.sh --verify runs the suite on the stripped tree)
         id: meta
+        env:
+          OPENUF_REQUIRE_GCM: "1"   # a missing GCM backend fails the suite, not skips
         run: |
           sh tools/release-archive.sh "$VERSION"
           echo "sha256=$(cut -d' ' -f1 "openuf-$VERSION.tar.gz.sha256")" >> "$GITHUB_OUTPUT"
