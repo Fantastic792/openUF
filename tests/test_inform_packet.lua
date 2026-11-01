@@ -7134,9 +7134,11 @@ return {
 		fn = function()
 			local t = 0
 			local queue = {}
-			local stun_sock = {receive = function()
+			-- Queued strings come from the STUN server; {data, from} from elsewhere.
+			local stun_sock = {receivefrom = function()
 				local p = table.remove(queue, 1)
-				if p then return p end
+				if type(p) == "table" then return p[1], p[2], 3478 end
+				if p then return p, "192.0.2.10", 3478 end
 				return nil, "timeout"
 			end}
 			local selects = {}
@@ -7153,7 +7155,7 @@ return {
 			local wake = string.char(0x88, 0x88) .. string.rep(string.char(0), 18)
 			local junk = string.char(0x01, 0x11) .. string.rep(string.char(0), 18)
 			inform._guest_server = nil
-			inform._stun_c = {sock = stun_sock}
+			inform._stun_c = {sock = stun_sock, ip = "192.0.2.10"}
 			local ok, err = pcall(function()
 				queue = {wake}
 				inform._idle(sock, 10)
@@ -7163,6 +7165,9 @@ return {
 				inform._idle(sock, 10)
 				assert_eq(t, 10, "an error response does not wake it")
 				assert_eq(table.concat(selects, ","), "1@10,1@8", "it keeps waiting for the rest")
+				t, selects, queue = 0, {}, {{wake, "192.0.2.66"}}
+				inform._idle(sock, 10)
+				assert_eq(t, 10, "a wake from another host does not wake it")
 			end)
 			inform._stun_c = nil
 			if not ok then error(err, 0) end

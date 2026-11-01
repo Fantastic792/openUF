@@ -42,11 +42,15 @@ local function fake_socket(opts)
 			f.sent[#f.sent + 1] = {data = data, to = ip .. ":" .. port}
 			return #data
 		end
-		function s:receive()
+		-- A queued string comes from the STUN server (f.server, or the
+		-- address the last send went to); {data=, from=} from anyone else.
+		function s:receivefrom()
 			local p = table.remove(f.queue, 1)
 			if p == nil then return nil, "timeout" end
-			if type(p) == "table" then return nil, p.err end
-			return p
+			if type(p) == "table" and p.err then return nil, p.err end
+			if type(p) == "table" then return p.data, p.from, 3478 end
+			local last = f.sent[#f.sent]
+			return p, f.server or (last and last.to:match("^(.-):%d+$")), 3478
 		end
 		function s:close() f.closed = f.closed + 1 end
 		return s
@@ -217,6 +221,7 @@ return {
 			local f = fake_socket()
 			local c = stun.new(f)
 			stun.sync(c, "stun://192.0.2.4:3478/", true)
+			stun.send_due(c, 0)
 			assert_eq(stun.fields(c), nil, "nothing before a response")
 			assert_false(stun.receive(c), "nothing queued")
 			f.queue = {response("192.0.2.3", 41234)}
@@ -264,6 +269,26 @@ return {
 			assert_eq(c.sock, nil, "no URL: closed")
 			assert_false(stun.send_due(c, 1000), "and nothing sent")
 			assert_eq(stun.fields(nil), nil, "no client at all")
+		end
+	},
+	{
+		-- The firmware takes a wake or a mapping from anyone; a LAN host
+		-- could keep the AP informing, or redirect the controller's wake-ups.
+		name = "stun: only the STUN server's own address can wake or set the mapping",
+		fn = function()
+			local f = fake_socket()
+			local c = stun.new(f)
+			stun.sync(c, "stun://192.0.2.4:3478/", true)
+			f.queue = {WAKE}
+			assert_false(stun.receive(c), "before any request: nothing counts")
+			stun.send_due(c, 0)
+			f.queue = {{data = WAKE, from = "192.0.2.66"}}
+			assert_false(stun.receive(c), "a wake from another host is ignored")
+			f.queue = {{data = response("192.0.2.66", 4444), from = "192.0.2.66"}}
+			assert_false(stun.receive(c), "a mapping from another host is ignored")
+			assert_eq(stun.fields(c), nil, "and not reported")
+			f.queue = {{data = WAKE, from = "192.0.2.4"}}
+			assert_true(stun.receive(c), "the server's own wake counts")
 		end
 	},
 }

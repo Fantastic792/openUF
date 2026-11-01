@@ -171,18 +171,27 @@ end
 
 -- Read what is queued. Returns wake: true when the controller asked for an
 -- inform or this socket's mapped address changed.
+--
+-- Only what the STUN server's own address sent counts. The firmware checks
+-- no sender, so any LAN host could make an AP inform over and over with a
+-- stream of 0x8888 packets, or plant a connect_request address the
+-- controller then sends its wake-ups to (fonix232/openUF 168c362,
+-- COMPLETION-PLAN D3). Nothing can matter before the first Binding Request,
+-- and that one sets c.ip.
 function M.receive(c)
 	if not c.sock then return false end
 	local wake = false
+	local server = c.ip or c.last_ip
 	for _ = 1, M.DRAIN do
-		local pkt, err = c.sock:receive()
+		local pkt, from = c.sock:receivefrom()
 		if not pkt then
 			-- Anything but "nothing queued" ends this socket; sync opens a
 			-- new one on the next tick, as the firmware reinits.
-			if err ~= "timeout" then M.close(c) end
+			if from ~= "timeout" then M.close(c) end
 			break
 		end
-		local kind, ip, port = M.parse(pkt)
+		local kind, ip, port
+		if server and from == server then kind, ip, port = M.parse(pkt) end
 		if kind == "wake" then
 			wake = true
 		elseif kind == "mapped" then
