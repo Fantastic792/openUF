@@ -115,6 +115,24 @@ return {
 		end
 	},
 	{
+		name = "airtime: flag_files accepts renamed wiphys and rejects unsafe names",
+		fn = function()
+			local o = airtime._run_cmd
+			local D = "/sys/kernel/debug/ieee80211/"
+			local cmd
+			airtime._run_cmd = function(c)
+				cmd = c
+				return table.concat({D .. "wl0/airtime_flags", D .. "wl1/airtime_flags",
+					D .. "a;rm x/airtime_flags", D .. "a b/airtime_flags", D .. "$(x)/airtime_flags",
+					D .. "../airtime_flags"}, string.char(10))
+			end
+			local files = airtime.flag_files()
+			airtime._run_cmd = o
+			assert_eq(table.concat(files, ","), D .. "wl0/airtime_flags," .. D .. "wl1/airtime_flags", "only the safe names")
+			assert_true(cmd:find("/*/airtime_flags", 1, true) ~= nil, "the listing globs every wiphy, not phy*: " .. cmd)
+		end
+	},
+	{
 		name = "airtime: flag_files ignores anything but phyN/airtime_flags",
 		fn = function()
 			local o = airtime._run_cmd

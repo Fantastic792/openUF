@@ -48,8 +48,14 @@ M._read_file = util.read_file
 -- Every phy's airtime_flags file, sorted.
 function M.flag_files()
 	local out = {}
-	for line in M._run_cmd("ls -d " .. M.DEBUGFS .. "/phy*/airtime_flags"):gmatch("[^\n]+") do
-		if line:match("^/sys/kernel/debug/ieee80211/phy%d+/airtime_flags$") then
+	for line in M._run_cmd("ls -d " .. M.DEBUGFS .. "/*/airtime_flags 2>/dev/null"):gmatch("[^\n]+") do
+		-- Not just phyN: a board whose wiphys are renamed (wl0, wl1) lists
+		-- them under those names, and matching only phyN left ATF off there.
+		-- The name is restricted to netdev-safe characters because the path
+		-- is later used in shell commands.
+		local name = line:match("^/sys/kernel/debug/ieee80211/([%w_%-%.]+)/airtime_flags$")
+		-- "." and ".." would pass the class and climb out of the directory.
+		if name and name ~= "." and name ~= ".." then
 			out[#out + 1] = line
 		end
 	end
