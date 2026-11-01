@@ -350,6 +350,26 @@ return {
 		end
 	},
 	{
+		-- 3cd99c2 (jonasevcik): a real packet's header with only the 0x01
+		-- bit cleared (the GCM and compression bits stay as sent) is refused
+		-- too, not only an all-zero flags word.
+		name = "inform packet: parse refuses a response without the encrypted flag",
+		fn = function()
+			local st = sample_state({use_gcm = true})
+			local json = '{"_type":"setparam","inform_url":"http://192.0.2.66:8080/inform"}'
+			local pkt = inform.build_packet(json, st)
+			local flags = pkt:byte(15) * 256 + pkt:byte(16)
+			assert_eq(flags % 2, 1, "the sender sets the encrypted bit")
+			assert_true(flags > 1, "and the GCM bit besides")
+			flags = flags - 1
+			local plain = pkt:sub(1, 14) .. string.char(math.floor(flags / 256), flags % 256)
+				.. pkt:sub(17, 36) .. string.char(0, 0, 0, #json) .. json
+			local ok, err = pcall(inform.parse_packet, plain, st)
+			assert_false(ok, "an unencrypted packet raises")
+			assert_contains(tostring(err), "unencrypted", "and says why")
+		end
+	},
+	{
 		-- A reply without the encrypted flag used to be parsed as plain JSON:
 		-- a spoofed HTTP answer could push a setparam with no key.
 		name = "inform packet: parse_packet refuses a response without the encrypted flag",

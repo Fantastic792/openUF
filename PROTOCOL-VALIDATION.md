@@ -524,6 +524,12 @@ AES-128-CBC + PKCS#7, and the default `http://unifi:8080/inform` URL all match o
 implementation and fxkr/unifi-protocol-reverse-engineering's published documentation.
 `PKT_VERSION` is 1; the GCM AAD is the 40-byte header.
 
+**A response without flag `0x01` is refused.** The controller encrypts its answer to an
+encrypted inform, and the AP firmware does the same ("only support encrypted data", BZ2 4.3.28
+`mcad`, beside its TNBU header checks). Taking an unflagged packet would let anyone on the
+plain-HTTP path push a `setparam` without the key; `parse_packet` raises and the tick waits
+its normal interval.
+
 `mgmt_cfg` is a newline-delimited `key=value` **string**, not JSON.
 
 ### The GCM provisioning gate
