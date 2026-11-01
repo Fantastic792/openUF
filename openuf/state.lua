@@ -281,6 +281,29 @@ end
 -- overwritten with the default URL the daemon had reloaded a moment before
 -- (two JIDU6401s, 2026-10-29). Skipping the save loses nothing the daemon
 -- cannot rebuild, and the next reload takes the newer file.
+-- The saved file's mode. state.json holds the authkey, and a save makes a
+-- new file (temp + rename) that would otherwise take the writer's umask --
+-- 0644 under procd, world-readable. share_gid is the SSH bootstrap
+-- account's group while that account exists (openuf-bootstrap.sh makes
+-- the file root:<gid> 0660 so the account can adopt): inform sets it from
+-- /etc/passwd, and a save keeps it. Set on the temp file, before the rename,
+-- so state.json never exists with another mode. Not a umask on the daemon:
+-- hostapd runs as user network and reads files the daemon writes.
+M.share_gid = nil
+M._execute  = os.execute
+local function protect(path)
+	local q = "'" .. path .. "'"
+	local gid = tonumber(M.share_gid)
+	if gid then
+		-- A gone group (the account removed since /etc/passwd was read) falls
+		-- back to owner-only, never to the writer's umask.
+		M._execute("chgrp " .. math.floor(gid) .. " " .. q .. " && chmod 660 " .. q
+			.. " || chmod 600 " .. q)
+	else
+		M._execute("chmod 600 " .. q)
+	end
+end
+
 M.last_written = nil
 function M.save(st)
 	local seen = M._seen[M._state_file]
@@ -313,6 +336,7 @@ function M.save(st)
 		error("state.save: cannot write " .. tmp .. ": " .. tostring(werr or cerr)
 			.. " -- keeping the previous state file")
 	end
+	protect(tmp)
 	local ok, err = os.rename(tmp, M._state_file)
 	if not ok then
 		os.remove(tmp)
