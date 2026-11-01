@@ -524,8 +524,17 @@ function M.parse_packet(raw, st)
 		error("inform: truncated payload")
 	end
 
+	-- A reply without the encrypted flag is refused: parsing it as plain
+	-- JSON let anyone who can answer the HTTP request (a spoofed or
+	-- intercepted reply) push a setparam or a cmd with no key at all. The
+	-- controller encrypts every reply, with the default key before adoption
+	-- (10.6.106, lab). From fonix232/openUF 168c362 (COMPLETION-PLAN D3).
+	if bit.band(flags, FLAG_ENCRYPTED) == 0 then
+		error("inform: refusing an unencrypted response")
+	end
+
 	-- Decrypt
-	if bit.band(flags, FLAG_ENCRYPTED) ~= 0 then
+	do
 		local key = st.authkey
 		if bit.band(flags, FLAG_GCM) ~= 0 then
 			-- AAD = full 40-byte packet header (per amd989/unifi-gateway decode_inform)

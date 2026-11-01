@@ -350,6 +350,26 @@ return {
 		end
 	},
 	{
+		-- A reply without the encrypted flag used to be parsed as plain JSON:
+		-- a spoofed HTTP answer could push a setparam with no key.
+		name = "inform packet: parse_packet refuses a response without the encrypted flag",
+		fn = function()
+			local json = '{"_type":"setparam","mgmt_cfg":"authkey=00112233445566778899aabbccddeeff"}'
+			local function be32(n)
+				return string.char(math.floor(n / 16777216) % 256, math.floor(n / 65536) % 256,
+					math.floor(n / 256) % 256, n % 256)
+			end
+			local raw = "TNBU" .. be32(0) .. string.rep("\0", 6) .. "\0\0"
+				.. string.rep("\0", 16) .. be32(1) .. be32(#json) .. json
+			local ok, err = pcall(inform.parse_packet, raw, sample_state())
+			assert_false(ok, "refused")
+			assert_contains(tostring(err), "unencrypted", "says why")
+			-- the encrypted form of the same JSON still parses
+			local st = sample_state()
+			assert_eq(inform.parse_packet(inform.build_packet(json, st), st), json, "encrypted still accepted")
+		end
+	},
+	{
 		name = "inform packet: different authkeys produce different ciphertext",
 		fn = function()
 			-- The IV must be pinned via inform's OWN crypto instance
