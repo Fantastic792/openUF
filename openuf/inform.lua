@@ -7993,6 +7993,8 @@ end
 -- reported no statistics and logged nothing beyond the traceback. A bad
 -- cycle now costs one heartbeat and one log line, and the next cycle gets
 -- another go.
+M._logged_pending = false
+
 function M._tick(st, cfg, ufhw, ctx)
 	-- base_interval is the device's own cadence; interval is what the loop
 	-- actually waits, which the controller's noop may have moved.
@@ -8069,20 +8071,43 @@ function M._tick(st, cfg, ufhw, ctx)
 
 	local body, err = M.http_post(st.inform_url, pkt)
 	if not body then
-		io.stderr:write("inform: POST failed: " .. tostring(err) .. "\n")
 		if dump_tx then M._debug_append(cfg, "ERR", tostring(err)) end
-		M._warn_http_400(err, st, cfg)
 		pcall(M._write_status, st, {last_fail = M._time(), last_fail_msg = tostring(err)})
+		-- A controller answers HTTP 404 to every inform from a device it has
+		-- not adopted, until someone clicks Adopt. That is its normal answer,
+		-- not a fault: backing off to 60 s would leave the first inform after
+		-- the click, the one that picks up the new key, up to a minute away.
+		-- The failure is still written above: the LuCI Setup page reads the
+		-- 404 in last_fail_msg as "pending adoption". (jonasevcik dcfe0df)
+		if not st.adopted and err == "HTTP 404" then
+			if not M._logged_pending then
+				io.stderr:write("inform: pending adoption (HTTP 404 until adopted in the controller)\n")
+				M._logged_pending = true
+			end
+			ctx.interval = ctx.base_interval
+			ctx.backoff  = ctx.interval
+			return ctx.interval
+		end
+		io.stderr:write("inform: POST failed: " .. tostring(err) .. "\n")
+		M._warn_http_400(err, st, cfg)
 		if M._guestportal then pcall(M._guest_selfrun, st, false) end
 		-- Doubles from the CURRENT cadence, capped at 60 s -- or at the
 		-- controller's own interval when that is longer, since a failure
 		-- must never make the device poll faster than it was asked to.
-		ctx.backoff = math.min(math.max(ctx.backoff, ctx.interval) * 2,
-			math.max(60, ctx.interval))
+		local cap = math.max(60, ctx.interval)
+		-- HTTP 503 is the controller shedding inform load ("Server is busy"
+		-- on 10.6): the wait goes straight to the cap rather than doubling
+		-- through 20 s and 40 s of more requests.
+		if err == "HTTP 503" then
+			ctx.backoff = cap
+			return ctx.backoff
+		end
+		ctx.backoff = math.min(math.max(ctx.backoff, ctx.interval) * 2, cap)
 		return ctx.backoff
 	end
 	ctx.backoff = ctx.interval
 	M._warned_400 = false
+	M._logged_pending = false
 	if M._guestportal then pcall(M._guest_selfrun, st, true) end
 
 	local parse_ok, json_body = pcall(M.parse_packet, body, st)

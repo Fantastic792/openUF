@@ -172,6 +172,7 @@ local function with_tick_env(fn)
 		inform.build_json, inform.handle_response, inform._http_post,
 		inform._state_mtime, inform._ucihelper, inform._run_cmd, inform._time
 	local o_warned, o_rrm, o_status = inform._warned_400, inform._rrmscan, inform.STATUS_FILE
+	local o_pending = inform._logged_pending
 	local o_ann = inform._announce
 	inform.build_json = function() return '{"_type":"state"}' end
 	-- _tick re-reads the address through announce.get_ip; no `ip addr` here.
@@ -189,6 +190,7 @@ local function with_tick_env(fn)
 		inform._state_mtime, inform._ucihelper, inform._run_cmd, inform._time =
 		o_build, o_handle, o_post, o_mtime, o_uci, o_run, o_time
 	inform._warned_400, inform._rrmscan, inform.STATUS_FILE = o_warned, o_rrm, o_status
+	inform._logged_pending = o_pending
 	inform._announce = o_ann
 	os.remove(STATUS_TMP)
 	if not ok then error(err, 0) end
@@ -5414,6 +5416,63 @@ return {
 				inform.build_json = function() error("boom") end
 				with_stderr(function() inform._tick(sample_state(), nil, nil, fresh_ctx()) end)
 				assert_true(ended, "the pass is closed on the error path")
+			end)
+		end
+	},
+	{
+		-- dcfe0df (jonasevcik), on our tick: 503 goes straight to the cap; a
+		-- 404 to an unadopted device is the controller's normal answer.
+		name = "inform: HTTP 503 waits the cap at once, and 404 on an unadopted device keeps the cadence",
+		fn = function()
+			with_tick_env(function()
+				inform._logged_pending = false
+				local st, ctx = sample_state({adopted = true}), fresh_ctx()
+				with_stderr(function()
+					inform._http_post = function() return nil, "HTTP 503" end
+					assert_eq(inform._tick(st, nil, nil, ctx), 60, "503 waits the cap straight away")
+					ctx.interval, ctx.backoff = 90, 90
+					assert_eq(inform._tick(st, nil, nil, ctx), 90, "or the controller's own longer interval")
+					-- Adopted: a 404 is a failure like any other and doubles.
+					ctx.interval, ctx.backoff = 10, 10
+					inform._http_post = function() return nil, "HTTP 404" end
+					assert_eq(inform._tick(st, nil, nil, ctx), 20, "404 after adoption backs off")
+				end)
+				-- Unadopted: keep the cadence, say so once.
+				st.adopted = false
+				ctx.interval, ctx.backoff = 10, 10
+				local out = with_stderr(function()
+					assert_eq(inform._tick(st, nil, nil, ctx), 10, "pending: own cadence")
+					assert_eq(inform._tick(st, nil, nil, ctx), 10, "and again")
+				end)
+				local _, pending = out:gsub("pending adoption", "")
+				assert_eq(pending, 1, "logged once")
+				-- Other failures still back off for an unadopted device.
+				inform._http_post = function() return nil, "connection refused" end
+				with_stderr(function()
+					assert_eq(inform._tick(st, nil, nil, ctx), 20, "a refused connection backs off")
+				end)
+				inform._logged_pending = false
+			end)
+		end
+	},
+	{
+		-- Ours: the pending branch still writes the heartbeat file. The LuCI
+		-- Setup page reads last_fail_msg for "404" to show "pending adoption".
+		name = "inform: a pending 404 still records last_fail for the LuCI Setup page, and an answer re-arms the log",
+		fn = function()
+			with_tick_env(function()
+				inform._logged_pending = false
+				local st = sample_state({adopted = false})
+				inform._http_post = function() return nil, "HTTP 404" end
+				with_stderr(function() inform._tick(st, nil, nil, fresh_ctx()) end)
+				local f = assert(io.open(STATUS_TMP, "r"))
+				local status = f:read("*a"); f:close()
+				assert_contains(status, "last_fail_msg=HTTP 404", "the badge's input is written")
+				-- An answer clears the flag, so a later pending streak logs again.
+				inform._http_post = function() return response('{"_type":"noop"}', st) end
+				with_stderr(function() inform._tick(st, nil, nil, fresh_ctx()) end)
+				assert_false(inform._logged_pending, "re-armed by an answer")
+				inform._logged_pending = false
 			end)
 		end
 	},

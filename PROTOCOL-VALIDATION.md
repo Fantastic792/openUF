@@ -370,7 +370,10 @@ correctly-flagged payload gets the same 404) and GCM-vs-CBC (both get the same 4
 
 `http_post` treats any non-200 as a hard failure and never inspects the body. In every case
 observed the body was genuinely empty, so nothing is lost — but the client cannot
-distinguish "processed, nothing to say" from "rejected," and backs off identically either way.
+distinguish "processed, nothing to say" from "rejected". An unadopted device therefore keeps its
+own cadence on a 404 (so the inform after the Adopt click is not up to 60 s away) and logs
+`pending adoption` once; after adoption a 404 backs off like any failure. An HTTP 503 (10.6
+shedding inform load) waits the full 60 s at once.
 
 **When you see this on a fresh device: click Adopt.** That is the correct next move, not
 more debugging.
