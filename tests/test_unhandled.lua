@@ -243,4 +243,46 @@ return {
 			assert_eq(unhandled.entry("cmd", "ok").count, 3, "count coerced to a number")
 		end
 	},
+	{
+		-- The ledger is shown on a LuCI page now, to every user with the
+		-- openUF ACL: names a controller uses for credentials besides
+		-- password/passphrase are secrets too.
+		name = "unhandled: passwd, pwd, pass, community, credential and cookie names are secrets",
+		fn = function()
+			for _, n in ipairs({"sshd.auth.passwd", "admin_pwd", "radius.pass", "snmp.community",
+					"x_credential", "session_cookie"}) do
+				assert_true(unhandled.is_secret_name(n), n)
+			end
+			for _, n in ipairs({"bcfilt.bypass_types", "passthrough", "compass"}) do
+				assert_false(unhandled.is_secret_name(n), n .. " is not a secret")
+			end
+		end
+	},
+	{
+		-- A ledger written before a name joined the list still holds the value;
+		-- load() redacts it again and marks the file for rewriting.
+		name = "unhandled: load re-redacts a ledger written before a name was added",
+		fn = function()
+			fresh(1700000000)
+			local f = io.open(FILE, "w")
+			f:write(cjson.encode({version = 1, entries = {
+				["system_cfg/snmp.community"] = {category = "system_cfg", key = "snmp.community",
+					count = 1, payload = {value = "hunter2", sample = "snmp.community", occurrences = 1}},
+				["field/setparam.x"] = {category = "field", key = "setparam.x", count = 1,
+					payload = {admin_pwd = "hunter2", keep = "this"}},
+			}}))
+			f:close()
+			unhandled.load()
+			local a = unhandled.entry("system_cfg", "snmp.community")
+			assert_eq(a.payload.value, "<redacted>", "the sample's value, by its key name")
+			assert_eq(a.payload.sample, "snmp.community", "the key name itself stays")
+			local b = unhandled.entry("field", "setparam.x")
+			assert_eq(b.payload.admin_pwd, "<redacted>", "a field by its own name")
+			assert_eq(b.payload.keep, "this", "the rest stays")
+			assert_true(unhandled._dirty, "rewritten at the next flush")
+			assert_true(unhandled.flush(true), "flushed")
+			local raw = read_file()
+			assert_true(raw:find("hunter2", 1, true) == nil, "gone from the file")
+		end
+	},
 }

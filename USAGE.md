@@ -263,6 +263,9 @@ LuCI, for OpenWrt 24.10 and later:
   custom profile as a file* produces a modelmap file to contribute. While the device is
   still a router, *Convert to an access point and reboot* runs `openuf-convert` behind a
   confirmation; *Turn back into a router* on the Overview page runs `--revert`.
+- *Unhandled*: the unhandled ledger (`unhandled_file`, below) as a table, newest first:
+  category, key, count, first and last seen, and the recorded sample (cut at 200
+  characters, secrets already replaced when they were recorded). Read-only.
 - *Log*: openUF's lines from the system log, newest first.
 
 `openuf-convert` is the conversion `setup.sh`'s last phase performs, as a command:
@@ -902,6 +905,8 @@ naming the verb; with this, its body would be on disk.
 lua -e 'local c=require"cjson"; local f=io.open("/etc/openuf/unhandled.json"); local d=c.decode(f:read("*a"))
   for id,e in pairs(d.entries) do print(e.count, e.last_seen, id) end' | sort -k3
 ```
+
+With `luci-app-openuf` the same list is *Services → openUF → Unhandled*.
 
 Bounds, because the file lives on the overlay: 150 entries (the one seen longest ago is
 evicted), 2 KiB per recorded body (past that only its key list is kept), strings cut at 200

@@ -313,6 +313,14 @@ msgid ""
 "network and the address above is set."
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:48
+msgid "Category"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:50
+msgid "Count"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:298
 msgid "CPU"
 msgstr ""
@@ -556,6 +564,10 @@ msgid ""
 "Fix it on the Settings page or in /etc/config/openuf and restart openUF."
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:51
+msgid "First seen"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:464
 msgid "Fixed uplink"
 msgstr ""
@@ -680,6 +692,10 @@ msgstr ""
 msgid "Kernel"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:49
+msgid "Key"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:442
 msgid "LAN VLAN id"
 msgstr ""
@@ -713,8 +729,16 @@ msgstr ""
 msgid "Last failure"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:52
+msgid "Last seen"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:195
 msgid "Leave the WAN socket out of the LAN (keep it unused)"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:70
+msgid "Ledger last written %s"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:407
@@ -870,6 +894,10 @@ msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:559
 msgid "Nothing to export: %s"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:44
+msgid "Nothing unhandled"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:265
@@ -1031,6 +1059,10 @@ msgstr ""
 msgid "Roaming Assistant: required signal advantage (dB)"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:53
+msgid "Sample"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:308
 msgid "SSH account for adoption"
 msgstr ""
@@ -1120,6 +1152,10 @@ msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:372
 msgid "System"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:42
+msgid "the ledger"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/dashboard.js:515
@@ -1369,8 +1405,16 @@ msgstr ""
 msgid "Two letters, for example SE"
 msgstr ""
 
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:42
+msgid "Unable to read %s: %s"
+msgstr ""
+
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/log.js:17
 msgid "Unable to read the log: %s"
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:67
+msgid "Unhandled messages"
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/status/include/05_openuf.js:27
@@ -1471,6 +1515,10 @@ msgid ""
 "Which hardware this device is, which UniFi access point it presents itself "
 "as, and how it behaves. Saving restarts openUF; the controller sees a pause "
 "of a few seconds and nothing else changes."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/unhandled.js:69
+msgid "What the controller sent that openUF does not act on: message types, commands and configuration keys, with how often and when each arrived. Secrets in the samples were replaced when they were recorded."
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js:479

@@ -136,10 +136,55 @@ function public_status() {
 	return public_cache;
 }
 
+// The unhandled ledger (openuf/unhandled.lua) for the Unhandled page: its
+// entries, newest first. Read-only. The samples were redacted when they were
+// recorded, and again when the daemon loads the file, so nothing here redacts.
+// Never throws: a missing or empty file is an empty ledger, anything
+// unparseable is an error line; a field of the wrong type reads as 0 or null.
+const UNHANDLED_FILE = '/etc/openuf/unhandled.json';
+function unhandled_ledger() {
+	const opt = cursor().get('openuf', 'main', 'unhandled_file');
+	const path = (type(opt) == 'string' && opt != '' && opt != '0') ? opt : UNHANDLED_FILE;
+	const raw = readfile(path);
+	if (raw == null || trim(raw) == '')
+		return { file: path, updated: null, entries: [] };
+	let doc = null;
+	try {
+		doc = json(raw);
+	}
+	catch (e) {
+		doc = null;
+	}
+	if (type(doc) != 'object' || type(doc.entries) != 'object')
+		return { file: path, error: 'not valid JSON' };
+	const out = [];
+	for (let id, e in doc.entries) {
+		if (type(e) != 'object' || type(e.category) != 'string' || type(e.key) != 'string')
+			continue;
+		push(out, {
+			category: e.category,
+			key: e.key,
+			count: (type(e.count) == 'int') ? e.count : 0,
+			first_seen: (type(e.first_seen) == 'string') ? e.first_seen : null,
+			last_seen: (type(e.last_seen) == 'string') ? e.last_seen : null,
+			last_ts: (type(e.last_ts) == 'int') ? e.last_ts : 0,
+			payload: e.payload ?? null
+		});
+	}
+	sort(out, (a, b) => b.last_ts - a.last_ts);
+	return { file: path, updated: doc.updated ?? null, entries: out };
+}
+
 const methods = {
 	getPublic: {
 		call: function() {
 			return public_status();
+		}
+	},
+
+	getUnhandled: {
+		call: function() {
+			return unhandled_ledger();
 		}
 	},
 

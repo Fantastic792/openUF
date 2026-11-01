@@ -51,6 +51,15 @@
 		}
 	},
 
+	"admin/services/openuf/unhandled": {
+		"title": "Unhandled",
+		"order": 25,
+		"action": {
+			"type": "view",
+			"path": "openuf/unhandled"
+		}
+	},
+
 	"admin/services/openuf/log": {
 		"title": "Log",
 		"order": 30,

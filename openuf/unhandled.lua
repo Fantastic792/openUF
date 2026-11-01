@@ -59,6 +59,10 @@ M._last_flush      = 0
 local SECRET_NAMES = {
 	"psk", "passphrase", "password", "secret", "authkey", "token", "private",
 	"^key$", "%.key$", "_key$", "%-key$",
+	-- Since the ledger is shown on a LuCI page (Services -> openUF -> Unhandled):
+	-- the other names credentials go by. "pass" only as a whole last word,
+	-- so bypass_types and passthrough stay readable.
+	"passwd", "pwd", "^pass$", "[%._%-]pass$", "community", "credential", "cookie",
 }
 
 function M.is_secret_name(name)
@@ -181,6 +185,17 @@ function M.load()
 			if type(e) == "table" and type(e.category) == "string"
 			   and type(e.key) == "string" then
 				e.count = tonumber(e.count) or 0
+				-- Redacted again: a ledger written before a name joined
+				-- SECRET_NAMES still holds the value. Changed -> rewritten.
+				if e.payload ~= nil then
+					local before = cjson.encode(e.payload)
+					e.payload = M.redact(e.payload)
+					local p = e.payload
+					if type(p) == "table" and p.value ~= nil and M.is_secret_name(p.sample) then
+						p.value = M.redact(p.value, p.sample)
+					end
+					if cjson.encode(e.payload) ~= before then M._dirty = true end
+				end
 				M._entries[id] = e
 			end
 		end

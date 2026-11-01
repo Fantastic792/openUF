@@ -11,7 +11,8 @@
 					"listPresets",
 					"discover",
 					"exportPreset",
-					"getConvertState"
+					"getConvertState",
+					"getUnhandled"
 				],
 				"file": [
 					"exec"
