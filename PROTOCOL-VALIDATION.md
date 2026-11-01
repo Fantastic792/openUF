@@ -589,7 +589,10 @@ less confidentiality than the rest of L3 provisioning already assumes.
 **L2 (broadcast discovery + real SSH).** With `announce.lua` broadcasting, the controller runs
 genuine SSH on the Adopt click and executes `syswrapper.sh set-adopt <url> <key>`. The existing
 `syswrapper.lua`/`state.lua` shape (`adopted`, `authkey`, `inform_url`, `cfgversion`, `use_gcm`)
-is what real SSH adoption expects — confirmed by a real round-trip.
+is what real SSH adoption expects — confirmed by a real round-trip. The command may be given by its
+absolute path (`/usr/bin/syswrapper.sh`) and may carry the device's MAC as a third argument;
+the AP firmware reads only the first two (BZ2 4.3.28 `syswrapper.sh`), and `syswrapper.lua`
+refuses a MAC that differs from the `mac` in `state.json`.
 
 Two things real hardware does that the validation container had to be taught:
 
@@ -2939,6 +2942,11 @@ ARM64 U6/U7 (incl. U6-IW) stays opaque; nothing below is claimed for it. Method:
   `sae_anti_clogging_threshold` and `sae_sync` are real hostapd keys but are declared in no
   wifi-iface schema, no ucode generator and no `hostapd.sh` `config_add_*` list, on either
   of upstream's boards. openUF no longer writes them (see feature 27).
+- **Which `set-adopt` form a controller sends.** The bootstrap shell accepts the bare or
+  absolute command path and an optional trailing MAC, which the BZ2 4.3.28 firmware ignores
+  (`syswrapper.sh` reads `$1 $2`). No controller build has been captured sending the MAC form
+  here; the lab adopts over L3. `syswrapper.lua` refuses a MAC that differs from the `mac` in
+  `state.json`.
 - **PoE self-reporting** could be reopened if the validation environment ever gains a real
   switch container, or if a non-Parent-Device UI surface for those fields is found.
 
