@@ -379,6 +379,16 @@ check "release-archive.sh sets MTIME" test -n "$_line"
 check "release-archive.sh passes MTIME to tar" grep -q -- '--mtime="@\$MTIME"' tools/release-archive.sh
 check "MTIME honours SOURCE_DATE_EPOCH" eval '[ "$(SOURCE_DATE_EPOCH=12345; eval "$_line"; echo $MTIME)" = 12345 ]'
 check "MTIME without it is the commit time, stable" eval '[ "$(unset SOURCE_DATE_EPOCH; eval "$_line"; echo $MTIME)" = "$(git log -1 --format=%ct)" ]'
+# A beta tag (v0.14.0_beta1) must reach the archive: the first beta run died
+# here on "digits and dots". apk takes _alpha/_beta/_rc + a number, not -beta1.
+_re=$(grep '^VER_RE=' tools/release-archive.sh)
+check "release-archive.sh has its version pattern" test -n "$_re"
+for _v in 0.14.0 0.14.0_beta1 0.14.0_rc2 0.14.0_alpha1; do
+	check "release-archive.sh takes version $_v" eval 'eval "$_re"; printf "%s\n" "$_v" | grep -Eq "$VER_RE"'
+done
+for _v in 0.14.0-beta1 v0.14.0 0.14.0_beta 0.14.0_pre1 0.14..0; do
+	check "release-archive.sh refuses version $_v before building" eval '_o=$(sh tools/release-archive.sh "$_v" 2>&1); [ $? = 2 ] && case "$_o" in *"version must be"*) true ;; *) false ;; esac'
+done
 
 # ── B15: verify.py's router.txt has its secret values redacted ─────────────
 cat > "$T/rt.py" <<'PYEOF'

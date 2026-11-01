@@ -17,9 +17,11 @@ VER=$1
 case "$VER" in
 	''|-*) echo "usage: sh tools/release-archive.sh <version>   (e.g. 0.9.0)" >&2; exit 2 ;;
 esac
-case "$VER" in
-	*[!0-9.]*) echo "release-archive: version must be digits and dots, got '$VER'" >&2; exit 2 ;;
-esac
+# X.Y.Z, or a test build X.Y.Z_beta1 (_alpha, _rc too): the forms apk's
+# version order takes; it refuses -beta1. The tag reaches PKG_VERSION as is.
+VER_RE='^[0-9]+(\.[0-9]+)*(_(alpha|beta|rc)[0-9]+)?$'
+printf '%s\n' "$VER" | grep -Eq "$VER_RE" || {
+	echo "release-archive: version must be X.Y.Z or X.Y.Z_alpha|_beta|_rcN, got '$VER'" >&2; exit 2; }
 
 sh tools/dist.sh --verify
 
