@@ -710,6 +710,11 @@ shape `ucihelper.apply_config()` expects.
 Conventions used throughout: booleans are `"enabled"`/`"disabled"` (sometimes `"true"`/`"1"`);
 an **absent block means disabled** — there is generally no explicit `status=false`.
 
+A line splits at its **first** `=`: keys never contain one, values may (a passphrase
+`pass=word`, an SSID `a=b`). Checked on the lab VMs (2026-10-31, controller 10.6): a WLAN
+with `a=b` in both the SSID and the passphrase was pushed, hostapd got both values as
+sent, and a client joined.
+
 ### `aaa.<n>.*` — per-SSID security
 
 | Key | Meaning |

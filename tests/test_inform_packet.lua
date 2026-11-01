@@ -9848,4 +9848,18 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		-- 6f1e242 (jonasevcik): a value that ends in '=' and an SSID line
+		-- whose value holds one. A greedy key pattern split at the last '='.
+		name = "inform packet: a '=' in a passphrase or SSID stays in the value",
+		fn = function()
+			local cfg = "aaa.1.ssid=a=b\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "aaa.1.wpa.psk=pass=word==\n"
+				.. "wireless.1.ssid=a=b\nwireless.1.parent=radio0\n"
+			local _, vt = inform._parse_wifi_system_cfg(cfg)
+			assert_true(vt[1] ~= nil, "the WLAN with '=' in its SSID is built")
+			assert_eq(vt[1].ssid, "a=b", "SSID keeps its '='")
+			assert_eq(vt[1].x_passphrase, "pass=word==", "passphrase keeps every '='")
+		end
+	},
 }
