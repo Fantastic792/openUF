@@ -438,6 +438,7 @@ check "release.yml: the feed job deletes its key file and verifies the index" ev
 check "release.yml: one feed push at a time across tags" eval "awk '/^  feed:/,0' $_rel | grep -q 'group: apk-feed'"
 check "release.yml: a feed run with nothing new still passes" eval "awk '/^  feed:/,0' $_rel | grep -qF 'git diff --cached --quiet ||'"
 check "release.yml: the version job asks for no write" eval "! awk '/^  version:/,/^  verify:/' $_rel | grep -q 'contents: write'"
+check "release.yml: an _alpha/_beta/_rc tag is created as a prerelease, not Latest" eval "awk '/^  verify:/,/^  packages:/' $_rel | grep -qF '*_alpha*|*_beta*|*_rc*) pre=--prerelease' && awk '/^  verify:/,/^  packages:/' $_rel | grep -q 'gh release create .*\$pre'"
 
 # ── B10: the workflows syntax-check every shell script, with no `|| true` ──
 for _w in .github/workflows/test.yml .github/workflows/release.yml; do

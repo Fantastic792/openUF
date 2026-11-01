@@ -152,15 +152,19 @@ jobs:
           echo "sha256=$(cut -d' ' -f1 "openuf-$VERSION.tar.gz.sha256")" >> "$GITHUB_OUTPUT"
       # setup.sh and update.sh go on the release too: the documented install
       # downloads setup.sh from releases/latest/download/ (not a moving
-      # branch) and checks it against SHA256SUMS before running it.
+      # branch) and checks it against SHA256SUMS before running it. So a test
+      # build (v0.14.0_beta1: apk takes _alpha/_beta/_rc, not -beta1) is made a
+      # prerelease, which never becomes Latest.
       - name: Create the release (and its tag) unless it exists, then attach the source archive
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
+            pre=
+            case "$VERSION" in *_alpha*|*_beta*|*_rc*) pre=--prerelease ;; esac
             # A tag that does not exist yet is created at this run's commit.
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "openUF $TAG" --generate-notes
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "openUF $TAG" --generate-notes $pre
           fi
           gh release upload "$TAG" --clobber \
             openuf-"$VERSION".tar.gz openuf-"$VERSION".tar.gz.sha256 setup.sh update.sh
