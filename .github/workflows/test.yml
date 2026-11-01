@@ -101,6 +101,18 @@ jobs:
           done
           exit $fail
 
+  packaging:
+    name: Packaging and installer scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The package's maintainer scripts, install.sh, setup.sh, update.sh and
+      # the tools, run against a scratch root with uci, init scripts and
+      # package managers stubbed (tools/test-packaging.sh). Nothing on the
+      # runner is touched.
+      - name: Run the packaging tests
+        run: sh tools/test-packaging.sh
+
   web-syntax:
     name: Device page, LuCI views and theme script syntax
     runs-on: ubuntu-latest
