@@ -1205,7 +1205,7 @@ return {
 		fn = function()
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = fixture("iw_phy_info_2g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_2g.txt"),
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_false(caps.is_11ac, "2.4GHz has no VHT Capabilities section")
@@ -1240,7 +1240,7 @@ return {
 			}, "\n")
 			with_fixtures({}, {
 				["dev wlan0 info"] = "Interface wlan0\n\twiphy 1\n\tchannel 6 (2437 MHz)\n",
-				["phy phy1 info"]  = ht_only,
+				["phy#1 info"]  = ht_only,
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_eq(caps.nss, 3, "MCS 0-23 is three spatial streams, not one")
@@ -1255,7 +1255,7 @@ return {
 			-- authoritative. ("0-15, 32" -> floor(15/8)+1 = 2, same answer.)
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = fixture("iw_phy_info_2g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_2g.txt"),
 			}, function()
 				assert_eq(sysinfo.radio_caps("wlan0").nss, 2, "explicit line wins, and agrees")
 			end)
@@ -1520,7 +1520,7 @@ return {
 						if cmd == "iw dev" then return dump end
 						local i = cmd:match("^iw dev (%S+) info$")
 						if i then return info[i] or "" end
-						local p = cmd:match("^iw phy phy(%d+) info$")
+						local p = cmd:match("^iw phy#(%d+) info$")
 						if p then return fixture(p == "0" and "iw_phy_info_5g.txt" or "iw_phy_info_2g.txt") end
 						return ""
 					end
@@ -1562,7 +1562,7 @@ return {
 					if cmd == "iw dev wlan9 info" then
 						return "Interface wlan9\n\twiphy 0\n\tchannel 6 (2437 MHz)\n"
 					end
-					if cmd == "iw phy phy0 info" then return fixture("iw_phy_info_2g.txt") end
+					if cmd == "iw phy#0 info" then return fixture("iw_phy_info_2g.txt") end
 					return ""
 				end
 				sysinfo.begin_pass()
@@ -1588,7 +1588,7 @@ return {
 			-- hardware was really at 23 dBm (5GHz) / 17 dBm (2.4GHz).
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = fixture("iw_phy_info_2g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_2g.txt"),
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_eq(caps.tx_power, 20, "live txpower from 'txpower 20.00 dBm'")
@@ -1604,7 +1604,7 @@ return {
 			-- when the driver can't be asked.
 			with_fixtures({}, {
 				["dev wlan0 info"] = "Interface wlan0\n\twiphy 0\n\tchannel 6 (2437 MHz)\n",
-				["phy phy0 info"]  = fixture("iw_phy_info_2g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_2g.txt"),
 			}, function()
 				assert_nil(sysinfo.radio_caps("wlan0").tx_power, "no txpower line -> nil")
 			end)
@@ -1615,7 +1615,7 @@ return {
 		fn = function()
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"):gsub("wiphy 0", "wiphy 1"),
-				["phy phy1 info"]  = fixture("iw_phy_info_5g.txt"),
+				["phy#1 info"]  = fixture("iw_phy_info_5g.txt"),
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_true(caps.is_11ac, "VHT Capabilities present")
@@ -1634,7 +1634,7 @@ return {
 			local phy_info = fixture("iw_phy_info_5g.txt"):gsub("HT TX Max spatial streams: 2\n", "")
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = phy_info,
+				["phy#0 info"]  = phy_info,
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_eq(caps.nss, 2, "max of the 'N streams: MCS ...' lines (1 and 2 both supported)")
@@ -1740,6 +1740,31 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: iw is queried by phy index, so renamed wiphys (wl0) still report",
+		fn = function()
+			-- "iw phy phyN" only works while the wiphy is called phyN; on a
+			-- board that names them wl0/wl1 it returned nothing and the radio
+			-- had no capabilities. "iw phy#N" addresses the index instead.
+			local orig_cmd = sysinfo._run_cmd
+			local cmds = {}
+			sysinfo._phy_info_cache = {}
+			sysinfo._run_cmd = function(cmd)
+				cmds[#cmds + 1] = cmd
+				if cmd == "iw dev wl0-ap0 info" then return "\twiphy 3\n" end
+				return "x\n"
+			end
+			local ok, err = pcall(function()
+				sysinfo._phy_info("3")
+				sysinfo.phy_channels("wl0-ap0")
+				assert_contains(table.concat(cmds, "|"), "iw phy#3 info", "info by index")
+				assert_contains(table.concat(cmds, "|"), "iw phy#3 channels", "channels by index")
+			end)
+			sysinfo._run_cmd = orig_cmd
+			sysinfo._phy_info_cache = {}
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "sysinfo: _phy_info() caches `iw phy` per phy and re-reads after the TTL",
 		fn = function()
 			-- Tens of kilobytes parsed per radio per heartbeat, for data that
@@ -1752,7 +1777,7 @@ return {
 			sysinfo._time = function() return t end
 			sysinfo._phy_info_cache = {}
 			local ok, err = pcall(function()
-				assert_eq(sysinfo._phy_info("1"), "Wiphy iw phy phy1 info", "read")
+				assert_eq(sysinfo._phy_info("1"), "Wiphy iw phy#1 info", "read")
 				sysinfo._phy_info("1")
 				sysinfo._phy_info("1")
 				assert_eq(#calls, 1, "served from the cache within the TTL")
@@ -2404,7 +2429,7 @@ return {
 		fn = function()
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = fixture("iw_phy_info_5g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_5g.txt"),
 			}, function()
 				local f = sysinfo.phy_frequencies("wlan0")
 				assert_true(f ~= nil, "a list")
@@ -2421,7 +2446,7 @@ return {
 			-- The device's own spelling ("5180.0 MHz") and a disabled channel.
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = "Wiphy phy0\n\tBand 2:\n\t\tFrequencies:\n" ..
+				["phy#0 info"]  = "Wiphy phy0\n\tBand 2:\n\t\tFrequencies:\n" ..
 					"\t\t\t* 5745.0 MHz [149] (30.0 dBm)\n\t\t\t* 5765.0 MHz [153] (30.0 dBm) (no IR)\n" ..
 					"\t\t\t* 5845.0 MHz [169] (disabled)\n",
 			}, function()

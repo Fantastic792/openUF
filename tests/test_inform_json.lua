@@ -92,7 +92,7 @@ local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_ca
 		if with_radio_caps and cmd:find("dev wlan0 info") then
 			return fixture("iw_dev_info.txt")
 		end
-		if with_radio_caps and cmd:find("phy phy0 info") then
+		if with_radio_caps and cmd:find("phy#0 info") then
 			return fixture("iw_phy_info_5g.txt")
 		end
 		return ""
@@ -1782,7 +1782,7 @@ return {
 						"channel 6 %(2437 MHz%), width: 20 MHz, center1: 2437 MHz",
 						"channel 11 (2462 MHz), width: 40 MHz, center1: 2452 MHz"))
 				end
-				if cmd:find("phy phy0 info") then return fixture("iw_phy_info_2g.txt") end
+				if cmd:find("phy#0 info") then return fixture("iw_phy_info_2g.txt") end
 				return ""
 			end
 			local real_uci = dofile("openuf/ucihelper.lua")
@@ -1836,7 +1836,7 @@ return {
 			inject_sysinfo(false, false, false, true)
 			inform._sysinfo._run_cmd = function(cmd)
 				if cmd:find("dev wlan0 info") then return fixture("iw_dev_info_5g.txt") end
-				if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
+				if cmd:find("phy#0 info") then return fixture("iw_phy_info_5g.txt") end
 				return ""
 			end
 			local real_uci = dofile("openuf/ucihelper.lua")
@@ -3296,7 +3296,7 @@ return {
 							"\tnoise:\t" .. c.noise .. " dBm\n"
 					end
 					if cmd:find("dev wlan0 info") then return fixture("iw_dev_info.txt") end
-					if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
+					if cmd:find("phy#0 info") then return fixture("iw_phy_info_5g.txt") end
 					return ""
 				end
 				t = t + 10

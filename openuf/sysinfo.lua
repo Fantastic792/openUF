@@ -1120,7 +1120,7 @@ function M._phy_info(phy)
 	local now = M._time()
 	local c = M._phy_info_cache[phy]
 	if c and (now - c.at) < M.PHY_INFO_TTL then return c.text, c.caps end
-	local text = M._run_cmd("iw phy phy" .. phy .. " info")
+	local text = M._run_cmd("iw phy#" .. phy .. " info")
 	if not text or text == "" then return text, nil end
 	local caps = parse_phy_info(text)
 	M._phy_info_cache[phy] = {text = text, caps = caps, at = now}
@@ -1254,7 +1254,7 @@ function M.phy_channels(ifname)
 	local dev_info = iw_dev_info(ifname)
 	local phy = dev_info and dev_info:match("wiphy%s+(%d+)")
 	if not phy then return nil end
-	local text = M._run_cmd("iw phy phy" .. phy .. " channels")
+	local text = M._run_cmd("iw phy#" .. phy .. " channels")
 	if not text or text == "" then return nil end
 	return text
 end
