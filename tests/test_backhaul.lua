@@ -630,7 +630,10 @@ return {
 				local st = {backhaul_mode = "wireless", backhaul_parent = "00:00:5e:00:53:01"}
 				local up = backhaul.uplink_report(st, {}, uf)
 				assert_eq(up.type, "wireless", "type")
-				assert_eq(up.name, "phy1-sta0", "netdev name when the section has no controller devname")
+				-- The name get_vap_table gives the uplink VAP entry, so the
+				-- controller can join the two. Lab: the netdev name matched no
+				-- entry and a meshed AP was shown as wired.
+				assert_eq(up.name, "openuf_bh_ul_radio1", "section name when it has no controller devname")
 				secs[1].devname = "ath4"
 				assert_eq(backhaul.uplink_report(st, {}, uf).name, "ath4", "the controller's devname when known")
 				secs[1].devname = nil

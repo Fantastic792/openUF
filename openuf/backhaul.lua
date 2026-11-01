@@ -1011,8 +1011,11 @@ function M.uplink_report(st, cfg, ufuci, sysinfo)
 	local own = (M._popen("iw dev " .. ifname .. " info") or ""):match("addr (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
 	-- `name` is the controller's own devname for the station (ath4, the one
 	-- its push put in connectivity.uplink_wds) when known, so the uplink can be
-	-- tied to the uplink VAP entry carrying the same name.
-	local report_name = secs[1].devname or ifname
+	-- tied to the uplink VAP entry carrying the same name. Without one, the
+	-- section name, which is what ucihelper.get_vap_table names that entry
+	-- then: the netdev name matched no entry, and the controller showed a
+	-- meshed AP as wired (lab, a push without a mesh uplink).
+	local report_name = secs[1].devname or secs[1].name
 	local bssid = link:match("Connected to (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
 	if not bssid then return nil end
 	local signal = tonumber(link:match("signal:%s*(-?%d+)"))
