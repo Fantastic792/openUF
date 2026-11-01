@@ -239,6 +239,18 @@ uci commit openuf && /etc/init.d/openuf enable && /etc/init.d/openuf start
 openuf status
 ```
 
+On 25.12 the release also publishes a signed apk feed. Trust its key once, add it, and
+`apk upgrade` keeps openUF current with the rest of the system:
+
+```sh
+wget -O /etc/apk/keys/openuf-feed.pem https://raw.githubusercontent.com/Fantastic792/openUF/main/keys/openuf-feed.pem
+echo https://fantastic792.github.io/openUF/apk/packages.adb > /etc/apk/repositories.d/openuf.list
+apk update && apk add openuf luci-app-openuf
+```
+
+`UNTRUSTED signature` from `apk update` means the key is missing. `--allow-untrusted` is
+only for single downloaded files.
+
 With `modelmap 'auto'` (the default) the daemon runs as the shipped profile that declares
 this board, exactly the match `setup.sh` makes. A board no profile declares is a refusal,
 not a guess -- the log says `no modelmap declares board <name>` and the service does not

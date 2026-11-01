@@ -113,6 +113,17 @@ opkg install ./openuf_<ver>_all.ipk ./luci-app-openuf_<ver>_all.ipk         # Op
 openuf deps --install        # swaps a wpad-basic build for the full one
 ```
 
+Or from the signed apk feed (OpenWrt 25.12), so `apk upgrade` brings each release:
+
+```sh
+wget -O /etc/apk/keys/openuf-feed.pem https://raw.githubusercontent.com/Fantastic792/openUF/main/keys/openuf-feed.pem
+echo https://fantastic792.github.io/openUF/apk/packages.adb > /etc/apk/repositories.d/openuf.list
+apk update && apk add openuf luci-app-openuf
+```
+
+Later releases: `apk update && apk upgrade`. If `apk update` says `WARNING: updating and
+opening ...openuf...: UNTRUSTED signature`, the key is not in `/etc/apk/keys/`.
+
 Upgrade with `openuf-update` on the device, or by installing the next release's packages.
 Install the packages or the files, never both. The [usage guide](USAGE.md) covers every
 option, the device page, upgrading, uninstalling and troubleshooting.

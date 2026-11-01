@@ -274,3 +274,80 @@ jobs:
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
           gh release upload "$TAG" --clobber SHA256SUMS
+
+  # The signed apk feed: the 25.12 apks under apk/ on gh-pages, with a
+  # packages.adb signed by OPENUF_FEED_KEY. Pages serves it at
+  # https://<owner>.github.io/<repo>/apk/packages.adb; routers trust it
+  # through keys/openuf-feed.pem. One version in the feed, this run's.
+  # apk v3's mkndx is not on ubuntu-latest and not in OpenWrt's target apk
+  # (apk-mbedtls), so it runs in an Alpine 3.24 container (apk-tools 3.0.8).
+  # A fork without the secret still releases: the job skips with a notice.
+  feed:
+    name: Signed apk feed on gh-pages
+    needs: [version, packages]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push gh-pages
+    # The workflow's group is per tag; two tags must not race the push.
+    concurrency:
+      group: apk-feed
+      cancel-in-progress: false
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - id: key
+        env:
+          FEED_KEY: ${{ secrets.OPENUF_FEED_KEY }}
+        run: |
+          if [ -n "$FEED_KEY" ]; then
+            echo "have=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::OPENUF_FEED_KEY is not set: no apk feed this run"
+            echo "have=no" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.key.outputs.have == 'yes'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - if: steps.key.outputs.have == 'yes'
+        uses: actions/download-artifact@v4
+        with:
+          name: openuf-apk
+          path: feed
+      - name: Sign the index and check it against keys/openuf-feed.pem
+        if: steps.key.outputs.have == 'yes'
+        env:
+          FEED_KEY: ${{ secrets.OPENUF_FEED_KEY }}
+        run: |
+          set -eu
+          ls -l feed/*.apk
+          key="$RUNNER_TEMP/openuf-feed-private.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$FEED_KEY" > "$key")
+          docker run --rm -v "$PWD/feed:/feed" -v "$key:/run/feed-key.pem:ro" \
+            -v "$PWD/keys:/run/keys:ro" -w /feed alpine:3.24 sh -euc '
+              apk mkndx --allow-untrusted --sign-key /run/feed-key.pem \
+                --output packages.adb *.apk
+              apk --keys-dir /run/keys verify packages.adb'
+      - name: Publish apk/ on gh-pages
+        if: steps.key.outputs.have == 'yes'
+        run: |
+          set -eu
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null; then
+            git fetch -q --depth 1 origin gh-pages
+            git worktree add -q -B gh-pages pages FETCH_HEAD
+          else
+            git worktree add -q --detach pages
+            (cd pages && git checkout -q --orphan gh-pages && git rm -rqf .)
+          fi
+          rm -rf pages/apk
+          mkdir pages/apk
+          cp feed/*.apk feed/packages.adb pages/apk/
+          touch pages/.nojekyll
+          cd pages
+          git add -A
+          git diff --cached --quiet || git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "apk feed: $TAG"
+          git push -q origin gh-pages
+          echo "Feed: https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/apk/packages.adb" >> "$GITHUB_STEP_SUMMARY"

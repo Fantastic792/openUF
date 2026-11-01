@@ -289,6 +289,16 @@ script is syntax-checked in `verify`).
    includes `luci.mk` from the SDK's luci feed; the same file is included as `../../luci.mk`
    when it lives inside `openwrt/luci`.
 3. **publish**: attach the `.ipk`, `.apk` and the source archive to the release.
+4. **feed**: the `.apk`s go to `apk/` on the `gh-pages` branch with a `packages.adb`
+   signed by the Actions secret `OPENUF_FEED_KEY` (an ECDSA P-256 private key the owner
+   made; its public half is `keys/openuf-feed.pem`). GitHub Pages serves it at
+   `https://<owner>.github.io/<repo>/apk/packages.adb`. The index is built with
+   `apk mkndx --sign-key` and checked with `apk --keys-dir keys verify` in an Alpine 3.24
+   container: ubuntu-latest has no apk v3, and OpenWrt's target apk (apk-mbedtls) has no
+   `mkndx`. Each run replaces `apk/`, so the feed holds one version, the newest. Without the
+   secret the job skips with a notice and the release still goes out. apk versions allow no
+   `-` before the release, so a pre-release tag is `v0.14.0_beta1`, not `v0.14.0-beta1`.
+   A pre-release replaces the feed like any release: routers on the feed get the beta.
 
 Formalities the feeds check on submission: `PKG_MAINTAINER`, `PKG_LICENSE:=GPL-3.0-or-later`,
 `PKG_LICENSE_FILES:=LICENSE NOTICE`, two-space metadata blocks and tabbed recipes, unindented

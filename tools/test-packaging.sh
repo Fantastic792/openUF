@@ -432,7 +432,11 @@ check "the shipped field reports still validate" python3 tools/field_report.py c
 _rel=.github/workflows/release.yml
 check "release.yml pins gh-action-sdk to a commit" grep -qE 'uses: openwrt/gh-action-sdk@[0-9a-f]{40}$' $_rel
 check "release.yml: workflow permissions are read-only" eval "awk '/^permissions:/ { getline; print; exit }' $_rel | grep -q 'contents: read'"
-check "release.yml: contents: write only inside jobs (3 upload jobs)" eval '[ "$(grep -c "contents: write" '$_rel')" = 3 ] && ! grep -q "^  contents: write" '$_rel
+check "release.yml: contents: write only inside jobs (3 upload jobs + feed)" eval '[ "$(grep -c "contents: write" '$_rel')" = 4 ] && ! grep -q "^  contents: write" '$_rel
+check "release.yml: the feed job skips without OPENUF_FEED_KEY" eval "awk '/^  feed:/,0' $_rel | grep -q 'OPENUF_FEED_KEY is not set'"
+check "release.yml: the feed job deletes its key file and verifies the index" eval "awk '/^  feed:/,0' $_rel | grep -qF \"trap 'rm -f\" && awk '/^  feed:/,0' $_rel | grep -qF 'verify packages.adb'"
+check "release.yml: one feed push at a time across tags" eval "awk '/^  feed:/,0' $_rel | grep -q 'group: apk-feed'"
+check "release.yml: a feed run with nothing new still passes" eval "awk '/^  feed:/,0' $_rel | grep -qF 'git diff --cached --quiet ||'"
 check "release.yml: the version job asks for no write" eval "! awk '/^  version:/,/^  verify:/' $_rel | grep -q 'contents: write'"
 
 # ── B10: the workflows syntax-check every shell script, with no `|| true` ──
