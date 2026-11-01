@@ -9822,6 +9822,8 @@ return {
 				assert_eq(#asked, 3, "a failure is cached too")
 				assert_nil(inform.inform_ip(nil, 0), "no URL")
 				assert_nil(inform.inform_ip("garbage", 0), "not a URL")
+				-- 9d4b21d (jonasevcik): an IPv6 literal host is no IPv4, so no field.
+				assert_nil(inform.inform_ip("http://[2001:db8::1]:8080/inform", 0), "IPv6 literal: no field")
 
 				local cjson = require("cjson")
 				local d = cjson.decode(inform.build_json(
