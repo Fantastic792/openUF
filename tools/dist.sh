@@ -53,7 +53,13 @@ for src in $(find openuf -type f ! -name '._*' ! -name .DS_Store | sort); do
 			# Full-line comments only, and never line 1 -- the shebang is
 			# functional (init.d's is `#!/bin/sh /etc/rc.common`), and a
 			# mid-line "#" may be a parameter expansion such as ${#key}.
-			awk 'NR==1 || $0 !~ /^[[:space:]]*#/' "$src" > "$dst"
+			# The comment block right under the shebang stays too: the hook
+			# scripts print it as their --help (`sed -n '2,Np' "$0"`). It ends
+			# at the first line that is not a comment, a blank one included.
+			awk 'NR==1 { print; next }
+				hdr && /^[[:space:]]*#/ { print; next }
+				{ hdr = 0 }
+				$0 !~ /^[[:space:]]*#/' hdr=1 "$src" > "$dst"
 			;;
 		*)
 			cp "$src" "$dst"

@@ -473,5 +473,23 @@ check "the workflow's PKG_HASH substitution lands in the Makefile" grep -qx "PKG
 check "release.yml refuses a missing or malformed sha256" grep -q 'sha256 is not 64 hex digits' .github/workflows/release.yml
 check "release.yml re-reads the substituted PKG_HASH" grep -q 'grep -qx "PKG_HASH:=\$SHA256"' .github/workflows/release.yml
 
+# ── dist.sh: a script's --help header survives the strip ───────────────────
+# openuf-convert/-deps/-bootstrap/-rrb and the openuf CLI print their usage
+# with `sed -n 'M,Np' "$0"`; a stripped header made them print code instead
+# (JIDU6401, v0.14.0_beta3).
+mkdir -p "$T/dist"
+cp -r openuf tools install.sh setup.sh update.sh LICENSE NOTICE "$T/dist/"
+( cd "$T/dist" && sh tools/dist.sh ) > "$T/dist.log" 2>&1
+check "dist.sh builds in a scratch copy" test -f "$T/dist/build/openuf/hook/openuf-convert.sh"
+_bad=""; _seen=0
+for _src in $(grep -l "sed -n '[0-9]*,[0-9]*p' \"\$0\"" openuf/hook/*.sh); do
+	_r=$(grep -o "sed -n '[0-9]*,[0-9]*p' \"\$0\"" "$_src" | head -1 | cut -d"'" -f2)
+	case "$_r" in [0-9]*,[0-9]*p) ;; *) _bad="$_bad ${_src##*/}(range?)"; continue ;; esac
+	_seen=$((_seen + 1))
+	[ "$(sed -n "$_r" "$_src")" = "$(sed -n "$_r" "$T/dist/build/$_src")" ] || _bad="$_bad ${_src##*/}"
+done
+check "every shipped hook keeps the header its --help prints (bad:${_bad:- none})" test -z "$_bad"
+check "the header check saw the five hooks that print one (saw $_seen)" test "$_seen" -ge 5
+
 echo "test-packaging: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
