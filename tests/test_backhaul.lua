@@ -452,14 +452,50 @@ return {
 				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("phy1-sta0"), state_mod), "wireless", "stays wireless")
 				assert_eq(st.backhaul_wired_port, "wan", "the station is not a wired socket")
 				-- cable back
+				local seam_popen, seam_read, br = backhaul._popen, backhaul._read_file, {}
+				local port = "3"   -- the station's bridge port state, as sysfs has it
+				backhaul._popen = function(cmd)
+					local st8 = cmd:match("^bridge link set dev phy1%-sta0 state (%d)$")
+					if st8 then br[#br + 1] = st8; port = st8; return "" end
+					return seam_popen(cmd)
+				end
+				backhaul._read_file = function(path)
+					if path == "/sys/class/net/phy1-sta0/brport/state" then return port .. "\n" end
+					return seam_read(path)
+				end
 				carrier.wan = true
 				local n = #uf.calls
 				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wireless",
 					"cable back: held UP_SECS first")
 				assert_eq(#uf.calls, n, "station untouched while the cable proves itself")
+				-- Both uplinks on the same LAN with STP off loop for the whole
+				-- hold (JIDU6401, 2026-11-02): the station stops forwarding now.
+				assert_eq(table.concat(br, ","), "0", "station port blocked at once")
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wireless", "still held")
+				assert_eq(#br, 1, "already blocked: nothing more")
+				-- a reload re-adds the port forwarding mid-hold: blocked again
+				port = "3"
+				backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod)
+				assert_eq(table.concat(br, ","), "0,0", "re-blocked from what sysfs says")
+				-- an unreadable carrier changes nothing
+				carrier.wan = nil
+				backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod)
+				assert_eq(#br, 2, "unknown: held as it is")
+				-- the plug flaps before the hold is over: the air is the uplink again
+				carrier.wan = false
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("phy1-sta0"), state_mod), "wireless", "still wireless")
+				assert_eq(br[#br], "3", "forwarding again")
+				carrier.wan = true
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wireless", "held afresh")
+				assert_eq(br[#br], "0", "blocked again")
+				local blocked = #br
 				now = now + backhaul.UP_SECS
 				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wired", "then wired")
 				assert_eq(uf.calls[#uf.calls], false, "station disabled")
+				assert_eq(#br, blocked, "never forwarding again on its way down")
+				assert_eq(backhaul.tick(st, {}, uf, fake_sysinfo("wan"), state_mod), "wired", "stays wired")
+				assert_eq(#br, blocked, "and not touched once wired")
+				backhaul._popen, backhaul._read_file = seam_popen, seam_read
 			end)
 		end
 	},

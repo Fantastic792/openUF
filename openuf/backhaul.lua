@@ -772,6 +772,29 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 	local pending = M._down_since
 	local new_mode, since = M.decide(carrier, mode, pending, now)
 	M._down_since = since
+	-- The cable back while the station is still joined: both uplinks reach
+	-- the same LAN and UniFi runs with STP off, so for the whole UP_SECS hold
+	-- frames went round (JIDU6401, 2026-11-02: "received packet on wan with
+	-- own address as source" on both APs for 10 s after every failback). The
+	-- hold stays -- a flapping plug must not cost a reload per flap -- but
+	-- the station's bridge port stops forwarding at once and forwards again
+	-- only once the cable is seen gone. Decided from the port's state in
+	-- sysfs, not from memory, so a daemon restart or a reload that re-adds
+	-- the port forwarding mid-hold is caught on the next tick; an unreadable
+	-- carrier changes nothing.
+	if mode == "wireless" and valid_ifname(sta_if) and carrier ~= nil then
+		local cur = (M._read_file("/sys/class/net/" .. sta_if .. "/brport/state") or ""):match("%d+")
+		if cur then
+			local want = carrier and "0" or "3"
+			if (want == "0") ~= (cur == "0") then
+				M._popen("bridge link set dev " .. sta_if .. " state " .. want)
+				if want == "0" then
+					M._log(("wired uplink back on %s -- %s stops forwarding while the cable proves itself"):format(
+						tostring(wired_desc or "?"), sta_if))
+				end
+			end
+		end
+	end
 	-- The idle loop reads a DSA socket's link between heartbeats; a swconfig
 	-- port's needs `swconfig dev <sw> show`, too heavy for once a second.
 	if not swconfig and wired_port and carrier ~= nil then
