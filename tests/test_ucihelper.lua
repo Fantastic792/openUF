@@ -451,6 +451,108 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: backhaul_push_downlink_ie re-hands the element to hostapd only, no UCI write",
+		fn = function()
+			-- A live element can be lost behind openUF's back (a mesh child's
+			-- beacon kept its old ancestors for 6+ min, JIDU6401, 2026-11-02),
+			-- so multihop_tick re-asserts it every heartbeat -- without the
+			-- flash write backhaul_set_downlink_ie does.
+			with_ucihelper(function(db, cmds, commits)
+				ucihelper.backhaul_apply({downlink = {radio = "radio1", ssid = "vwire-x", key = "0123456789abcdef"}})
+				db.wireless.openuf_bh_dl_radio1.vendor_elements = "dd0d026f55aa"
+				local orig = ucihelper.ifname_for_section
+				ucihelper.ifname_for_section = function() return "phy1-ap1" end
+				local before, commits_before = #cmds, #commits
+				local ok = ucihelper.backhaul_push_downlink_ie("dd0d026f55aa")
+				local bad = ucihelper.backhaul_push_downlink_ie("dd0d; reboot")
+				ucihelper.ifname_for_section = orig
+				assert_true(ok, "pushed")
+				assert_eq(cmds[before + 1], "hostapd_cli -i phy1-ap1 set vendor_elements dd0d026f55aa >/dev/null 2>&1",
+					"handed to hostapd")
+				assert_eq(cmds[before + 2], "hostapd_cli -i phy1-ap1 update_beacon >/dev/null 2>&1", "beacon rebuilt")
+				assert_eq(#cmds, before + 2, "nothing else, no wifi reload")
+				assert_eq(#commits, commits_before, "no UCI commit")
+				assert_false(bad, "only hex is ever spliced into a command")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: backhaul_set_uplink_lists applies pin and blacklist live through wpa_supplicant, no reload",
+		fn = function()
+			-- A `wifi reload` per learnt descendant restarted the radio: the
+			-- station re-associated (to another parent, on another channel)
+			-- and every child on its downlink dropped (JIDU6401, 2026-11-02).
+			with_ucihelper(function(db, cmds)
+				ucihelper.backhaul_apply({uplink = {radio = "radio1", ssid = "vwire-x", key = "0123456789abcdef",
+					enabled = true}})
+				local orig = ucihelper.ifname_for_section
+				ucihelper.ifname_for_section = function() return "phy1-sta0" end
+				local asked, current, fail = {}, "02:00:00:00:0c:01", nil
+				ucihelper._popen = function(cmd)
+					local c = cmd:match("^ubus call wpa_supplicant%.phy1%-sta0 control '{\"command\":\"(.-)\"}'")
+					if not c then return "" end
+					asked[#asked + 1] = c
+					local res
+					if fail and c:find(fail, 1, true) then res = "FAIL"
+					elseif c == "LIST_NETWORKS" then
+						res = "network id / ssid / bssid / flags\n6\tvwire-x\tany\t[CURRENT]"
+					elseif c == "STATUS" then res = "bssid=" .. current .. "\nwpa_state=COMPLETED"
+					else res = "OK" end
+					local esc = res:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\t", "\\t")
+					return '{"result": "' .. esc .. '"}'
+				end
+				local before = #cmds
+				assert_true(ucihelper.backhaul_set_uplink_lists({blacklist = {"02:00:00:00:0c:01", "02:00:00:00:0d:01"}}),
+					"a descendant learnt")
+				assert_eq(table.concat(db.wireless.openuf_bh_ul_radio1.bssid_blacklist, " "),
+					"02:00:00:00:0c:01 02:00:00:00:0d:01", "UCI keeps them for the next reload")
+				local joined = table.concat(asked, "|")
+				assert_true(joined:find("SET_NETWORK 6 bssid_ignore 02:00:00:00:0c:01 02:00:00:00:0d:01", 1, true) ~= nil,
+					"blacklist handed to the running station")
+				assert_true(joined:find("SET_NETWORK 6 bssid any", 1, true) ~= nil, "no pin")
+				assert_eq(asked[#asked - 1], "DISCONNECT", "joined a BSS it now ignores: leaves it")
+				assert_eq(asked[#asked], "RECONNECT", "and picks again")
+				assert_eq(#cmds, before, "no wifi reload")
+
+				asked = {}
+				current = "02:00:00:00:0a:01"
+				assert_true(ucihelper.backhaul_set_uplink_lists({bssid = "02:00:00:00:0a:01", blacklist = {}}),
+					"pinned to the parent it is on, blacklist cleared")
+				joined = table.concat(asked, "|")
+				assert_true(joined:find("SET_NETWORK 6 bssid_ignore |", 1, true) ~= nil, "an empty list clears it")
+				assert_true(joined:find("SET_NETWORK 6 bssid 02:00:00:00:0a:01", 1, true) ~= nil, "pin handed over")
+				assert_true(joined:find("DISCONNECT", 1, true) == nil, "already on the pinned parent: stays")
+				assert_eq(db.wireless.openuf_bh_ul_radio1.bssid_blacklist, nil, "UCI cleared too")
+				assert_eq(#cmds, before, "still no reload")
+
+				asked = {}
+				current = "02:00:00:00:0c:01"
+				assert_true(ucihelper.backhaul_station_leave(), "told to leave")
+				assert_eq(table.concat(asked, "|"), "LIST_NETWORKS|DISCONNECT|RECONNECT", "live, no list change")
+				assert_eq(#cmds, before, "no reload")
+
+				fail = "bssid_ignore"
+				assert_true(ucihelper.backhaul_set_uplink_lists({blacklist = {"02:00:00:00:0e:01"}}), "changed")
+				assert_eq(cmds[#cmds], "wifi reload", "a refused live change falls back to the reload")
+				assert_eq(#cmds, before + 1, "one")
+
+				fail = nil
+				db.wireless.openuf_bh_ul_radio1.ssid = "vwire-other"
+				assert_true(ucihelper.backhaul_set_uplink_lists({blacklist = {"02:00:00:00:0f:01"}}), "changed")
+				assert_eq(#cmds, before + 2, "an ssid no running network has: the reload, never another network")
+
+				db.wireless.openuf_bh_ul_radio1.ssid = "vwire-x"
+				db.wireless.openuf_bh_ul_radio1.disabled = "1"
+				asked = {}
+				assert_true(ucihelper.backhaul_set_uplink_lists({blacklist = {}}), "changed")
+				assert_eq(#asked, 0, "a disabled station is not asked")
+				assert_eq(#cmds, before + 2, "nor reloaded: it reads UCI when enabled")
+				assert_false(ucihelper.backhaul_station_leave(), "nothing to leave while disabled")
+				ucihelper.ifname_for_section = orig
+			end)
+		end
+	},
+	{
 		name = "ucihelper: wlan_add defaults network to lan",
 		fn = function()
 			with_ucihelper(function(db)

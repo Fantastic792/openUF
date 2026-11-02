@@ -1152,20 +1152,66 @@ return {
 					{bssid = "02:00:00:00:0a:01", peer_mac = "aa:00:00:00:00:0a",
 						peer_mesh = {rooted = true, ancestors = {}}}} end,
 			}
-			local set = {}
+			local set, pushed = {}, {}
 			local uf = {backhaul_set_downlink_ie = function(h) set[#set + 1] = h; return true end,
+				backhaul_push_downlink_ie = function(h) pushed[#pushed + 1] = h; return true end,
 				backhaul_set_uplink_lists = function() return false end}
 			local st = {mac = "aa:00:00:00:00:0b"}
+			local orig_ticks = backhaul.IE_REASSERT_TICKS
+			backhaul.IE_REASSERT_TICKS = 2
+			backhaul._ie_ticks = 0
 			backhaul.multihop_tick(st, uf, si, "wired", nil)
 			assert_eq(st.backhaul_ie, sysinfo.peer_path_ie_hex("aa:00:00:00:00:0b", true, nil, {}), "wired: rooted, no ancestors")
 			assert_eq(set[1], sysinfo.peer_ie_hex("aa:00:00:00:00:0b") .. st.backhaul_ie, "version 1 kept in front")
+			assert_eq(#pushed, 0, "just written: no second push in the same heartbeat")
 			backhaul.multihop_tick(st, uf, si, "wired", nil)
-			assert_eq(#set, 1, "unchanged: not handed over again")
+			assert_eq(#set, 1, "unchanged: not written again")
+			assert_eq(#pushed, 0, "not re-handed before IE_REASSERT_TICKS heartbeats")
+			-- A mesh child's beacon kept its old ancestors for 6+ min while
+			-- state and UCI held the new ones (JIDU6401, 2026-11-02): the
+			-- running hostapd gets the element again every few heartbeats.
+			backhaul.multihop_tick(st, uf, si, "wired", nil)
+			backhaul.IE_REASSERT_TICKS = orig_ticks
+			assert_eq(pushed[1], set[1], "unchanged: re-handed to hostapd")
+			assert_eq(#pushed, 1, "once")
 			backhaul.multihop_tick(st, uf, si, "wireless", "phy1-sta0")
 			backhaul._popen = orig_popen
 			assert_eq(st.backhaul_ie, sysinfo.peer_path_ie_hex("aa:00:00:00:00:0b", true,
 				"02:00:00:00:0b:99", {"aa:00:00:00:00:0a"}), "on the air: the parent in front, own station named")
 			assert_eq(#set, 2, "handed over once more")
+		end
+	},
+	{
+		name = "backhaul: multihop_tick() leaves a descendant's downlink outright when the lists did not change",
+		fn = function()
+			-- A live list update leaves the joined BSS only when it is newly
+			-- ignored; joined to a descendant already on the blacklist, the
+			-- station must be told to leave (it was a `wifi reload` before).
+			local orig_popen = backhaul._popen
+			backhaul._popen = function(cmd)
+				if cmd:find(" info$") then return "addr 02:00:00:00:0b:99\n" end
+				if cmd:find(" link$") then return "Connected to 02:00:00:00:0c:01 (on phy1-sta0)\n" end
+				return ""
+			end
+			local sysinfo = dofile("openuf/sysinfo.lua")
+			local si = {
+				peer_ie_hex = sysinfo.peer_ie_hex, peer_path_ie_hex = sysinfo.peer_path_ie_hex,
+				scan_table = function() return {
+					{bssid = "02:00:00:00:0c:01", peer_mac = "aa:00:00:00:00:0c",
+						peer_mesh = {rooted = true, ancestors = {"aa:00:00:00:00:0b"}}}} end,
+			}
+			local left, lists = 0, 0
+			local uf = {backhaul_set_downlink_ie = function() return true end,
+				backhaul_set_uplink_lists = function() lists = lists + 1; return true end,
+				backhaul_station_leave = function() left = left + 1; return true end}
+			local st = {mac = "aa:00:00:00:00:0b"}
+			backhaul.multihop_tick(st, uf, si, "wireless", "phy1-sta0")
+			assert_eq(lists, 1, "the descendant blacklisted")
+			assert_eq(left, 0, "a changed list does the leaving itself")
+			backhaul.multihop_tick(st, uf, si, "wireless", "phy1-sta0")
+			backhaul._popen = orig_popen
+			assert_eq(lists, 1, "same lists: not written again")
+			assert_eq(left, 1, "still on the descendant: told to leave")
 		end
 	},
 	{

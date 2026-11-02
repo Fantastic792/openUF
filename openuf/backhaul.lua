@@ -119,6 +119,12 @@ M.SEEN_TTL = 7 * 86400         -- a downlink not heard for a week is forgotten
 M.SEEN_REFRESH = 86400         -- how stale a persisted `t` may get before it is saved again
 M._unjoined = 0
 M._time = os.time
+-- Heartbeats between re-handing an unchanged downlink element to hostapd
+-- (multihop_tick): a mesh child once beaconed stale ancestors for 6+ min,
+-- and hostapd cannot be asked what it beacons (`get vendor_elements` FAIL),
+-- so the element is re-asserted about once a minute at the 10 s heartbeat.
+M.IE_REASSERT_TICKS = 6
+M._ie_ticks = 0
 
 local function lower(s) return type(s) == "string" and s:lower() or nil end
 
@@ -872,7 +878,11 @@ function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
 			local rec = parent_rec or (type(st.backhaul_seen) == "table" and st.backhaul_seen[joined])
 			if type(rec) == "table" and rec.desc then
 				M._log(("joined %s, a downlink of this AP's own descendant -- a loop; leaving it"):format(joined))
-				write_lists(st, ufuci, M.station_lists(st, true))
+				-- Lists that did not change move nothing (a live update leaves
+				-- the BSS only when it is newly ignored), so leave it outright.
+				if not write_lists(st, ufuci, M.station_lists(st, true)) and ufuci.backhaul_station_leave then
+					pcall(ufuci.backhaul_station_leave)
+				end
 				parent_rec = nil
 				joined = nil
 			else
@@ -904,6 +914,18 @@ function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
 				M._dirty = true
 			else
 				M._log("could not update the downlink's element: " .. tostring(err))
+			end
+			M._ie_ticks = 0
+		elseif ie and ufuci.backhaul_push_downlink_ie then
+			-- Unchanged, and handed to the running hostapd again all the same,
+			-- every IE_REASSERT_TICKS heartbeats: a mesh child beaconed its old
+			-- ancestors for 6+ min while state and UCI held the new ones
+			-- (JIDU6401, 2026-11-02), and a parent that cannot see it is an
+			-- ancestor may join it -- a loop.
+			M._ie_ticks = M._ie_ticks + 1
+			if M._ie_ticks >= M.IE_REASSERT_TICKS then
+				M._ie_ticks = 0
+				pcall(ufuci.backhaul_push_downlink_ie, (sysinfo.peer_ie_hex(st.mac) or "") .. ie)
 			end
 		end
 	end

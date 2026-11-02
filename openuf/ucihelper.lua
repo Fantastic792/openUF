@@ -4000,21 +4000,120 @@ function M.backhaul_set_uplink_enabled(enabled, lists)
 	return changed
 end
 
--- Only the station's parent pin and blacklist; one `wifi reload` when they
--- changed. Returns true if so.
+-- One raw wpa_cli command to a station's running wpa_supplicant, over its
+-- ubus `control` method; the result text, or nil when there is no answer.
+-- Only fixed keywords, digits and validated MACs are ever spliced in.
+local function wpas_control(ifname, command)
+	local out = M._popen("ubus call wpa_supplicant." .. ifname .. " control '{\"command\":\""
+		.. command .. "\"}' 2>/dev/null") or ""
+	local cjson = out ~= "" and get_cjson() or nil
+	if not cjson then return nil end
+	local ok, t = pcall(cjson.decode, out)
+	return (ok and type(t) == "table" and type(t.result) == "string") and t.result or nil
+end
+
+-- Leave the BSS a running station is on and pick again under its current
+-- lists. DISCONNECT + RECONNECT, not REASSOCIATE: REASSOCIATE stays on a BSS
+-- that is now in bssid_ignore when it is the one it already has (JIDU6401,
+-- 2026-11-02: still joined 15 s later; DISCONNECT + RECONNECT moved it).
+local function station_leave_live(ifname)
+	return wpas_control(ifname, "DISCONNECT") == "OK" and wpas_control(ifname, "RECONNECT") == "OK"
+end
+
+-- The network id of the station's ssid in its running wpa_supplicant, or nil.
+-- An ssid that matches no network is nil, never "the first one".
+local function station_network_id(ifname, ssid)
+	if type(ifname) ~= "string" or not ifname:match("^[%w%-%._]+$") or type(ssid) ~= "string" then
+		return nil
+	end
+	for line in tostring(wpas_control(ifname, "LIST_NETWORKS") or ""):gmatch("[^\n]+") do
+		local nid, nssid = line:match("^(%d+)\t([^\t]*)\t")
+		if nid and nssid == ssid then return nid end
+	end
+	return nil
+end
+
+-- The lists handed to a running station without a restart: the network's
+-- bssid_ignore (an empty value clears it) and bssid (`any` unpins); then,
+-- when the BSS it is on is now ignored or is not the pin, it leaves it. true
+-- when every step was accepted.
+local function station_lists_live(ifname, ssid, lists)
+	local id = station_network_id(ifname, ssid)
+	if not id then return false end
+	local pin = valid_mac(lists.bssid) and lists.bssid:lower() or nil
+	local bl = {}
+	for _, m in ipairs(type(lists.blacklist) == "table" and lists.blacklist or {}) do
+		if valid_mac(m) then bl[#bl + 1] = m:lower() end
+	end
+	if wpas_control(ifname, "SET_NETWORK " .. id .. " bssid_ignore " .. table.concat(bl, " ")) ~= "OK" then
+		return false
+	end
+	if wpas_control(ifname, "SET_NETWORK " .. id .. " bssid " .. (pin or "any")) ~= "OK" then return false end
+	local cur = ("\n" .. tostring(wpas_control(ifname, "STATUS") or "")):match("\nbssid=(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
+	if cur then
+		cur = cur:lower()
+		local leave = pin ~= nil and cur ~= pin
+		for _, m in ipairs(bl) do if m == cur then leave = true end end
+		if leave and not station_leave_live(ifname) then return false end
+	end
+	return true
+end
+
+-- Only the station's parent pin and blacklist, when they changed: written to
+-- UCI for the next reload and handed to the running wpa_supplicant. A
+-- `wifi reload` here restarted the whole radio for every learnt descendant:
+-- the station re-associated (to another parent, on another channel) and
+-- every child on its downlink dropped (JIDU6401, 2026-11-02). The reload
+-- stays as the fallback when the live change is refused; a disabled station
+-- needs none, it reads UCI when it is enabled. Returns true if anything
+-- changed.
 function M.backhaul_set_uplink_lists(lists)
 	if type(lists) ~= "table" then return false end
 	local uci = get_uci()
 	local cursor = uci.cursor()
-	local changed = false
+	local changed = {}
 	for _, s in ipairs(M.backhaul_uplink_sections()) do
-		if set_station_lists(cursor, s.name, lists) then changed = true end
+		if set_station_lists(cursor, s.name, lists) then changed[#changed + 1] = s end
 	end
-	if changed then
-		cursor:commit("wireless")
-		M._run_cmd("wifi reload")
+	if #changed == 0 then return false end
+	cursor:commit("wireless")
+	local live = true
+	for _, s in ipairs(changed) do
+		if not s.disabled and not station_lists_live(M.ifname_for_section(s.name), s.ssid, lists) then
+			live = false
+		end
 	end
-	return changed
+	if not live then M._run_cmd("wifi reload") end
+	return true
+end
+
+-- Make every enabled uplink station leave the BSS it is on and pick again
+-- under the lists it already has: multihop_tick's way out of a descendant's
+-- downlink when the lists did not change (so nothing else would move it).
+-- `wifi reload` when the live way is refused. Returns true if a station was
+-- told to leave.
+function M.backhaul_station_leave()
+	local any, live = false, true
+	for _, s in ipairs(M.backhaul_uplink_sections()) do
+		if not s.disabled then
+			any = true
+			local ifname = M.ifname_for_section(s.name)
+			if not (station_network_id(ifname, s.ssid) and station_leave_live(ifname)) then live = false end
+		end
+	end
+	if any and not live then M._run_cmd("wifi reload") end
+	return any
+end
+
+-- Hand vendor elements (hex, checked by the caller) to the hostapd running a
+-- wifi-iface section, which rebuilds its beacon.
+local function hostapd_vendor_elements(section, hex)
+	local ifname = M.ifname_for_section(section)
+	if type(ifname) == "string" and ifname:match("^[%w%-%._]+$") then
+		local cli = "hostapd_cli -i " .. ifname .. " "
+		M._run_cmd(cli .. "set vendor_elements " .. hex .. " >/dev/null 2>&1")
+		M._run_cmd(cli .. "update_beacon >/dev/null 2>&1")
+	end
 end
 
 -- The downlink's vendor elements (hex), changed without a reload: written to
@@ -4028,14 +4127,24 @@ function M.backhaul_set_downlink_ie(hex)
 	for _, s in ipairs(M.backhaul_downlink_sections()) do
 		cursor:set("wireless", s.name, "vendor_elements", hex)
 		any = true
-		local ifname = M.ifname_for_section(s.name)
-		if type(ifname) == "string" and ifname:match("^[%w%-%._]+$") then
-			local cli = "hostapd_cli -i " .. ifname .. " "
-			M._run_cmd(cli .. "set vendor_elements " .. hex .. " >/dev/null 2>&1")
-			M._run_cmd(cli .. "update_beacon >/dev/null 2>&1")
-		end
+		hostapd_vendor_elements(s.name, hex)
 	end
 	if any then cursor:commit("wireless") end
+	return any
+end
+
+-- The same element handed to the running hostapd again, with no UCI write:
+-- multihop_tick re-asserts it on every heartbeat, because a live element
+-- was seen lost behind openUF's back (a mesh child beaconed its old
+-- ancestors for 6+ min while state and UCI held the new ones, JIDU6401,
+-- 2026-11-02), and a stale ancestor list is the loop guard's blind spot.
+function M.backhaul_push_downlink_ie(hex)
+	if type(hex) ~= "string" or hex == "" or hex:find("[^%x]") then return false end
+	local any = false
+	for _, s in ipairs(M.backhaul_downlink_sections()) do
+		any = true
+		hostapd_vendor_elements(s.name, hex)
+	end
 	return any
 end
 
