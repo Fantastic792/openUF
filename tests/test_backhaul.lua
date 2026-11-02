@@ -1251,6 +1251,79 @@ return {
 		end
 	},
 	{
+		name = "backhaul: wired_below() names the hosts cabled below this AP, never its uplink side or the air",
+		fn = function()
+			local si = {
+				lan_bridge = function() return "br-lan" end,
+				bridge_fdb_ports = function() return {
+					["aa:00:00:00:00:01"] = "wan",            -- the gateway: the uplink side
+					["AA:00:00:00:00:0B"] = "lan2",           -- a sibling AP cabled below
+					["aa:00:00:00:00:0c"] = "phy1-ap1.sta1",  -- a mesh child: the air
+					["aa:00:00:00:00:0d"] = "phy1-sta0",      -- behind this AP's own station
+					["aa:00:00:00:00:0e"] = "phy0-ap0",       -- a WiFi client
+				} end,
+			}
+			local below = backhaul.wired_below({}, si, {backhaul_wired_port = "wan"}, "phy1-sta0")
+			assert_true(below["aa:00:00:00:00:0b"], "the AP behind lan2, lowercased")
+			local n = 0
+			for _ in pairs(below) do n = n + 1 end
+			assert_eq(n, 1, "and nothing else")
+			assert_nil(backhaul.wired_below({}, si, {}, "phy1-sta0"), "no uplink socket learnt: cannot tell")
+			assert_nil(backhaul.wired_below(SWCFG, si, {backhaul_wired_port = "wan"}, nil),
+				"swconfig: every socket is the CPU trunk to the bridge")
+		end
+	},
+	{
+		name = "backhaul: multihop_tick() treats a downlink of an AP cabled below as a descendant and leaves it",
+		fn = function()
+			-- main LAN -> A -> B by cable, A's cable pulled: B's downlink is a
+			-- wired root with no ancestors, A joined it and both forwarded
+			-- 40-55k frames/s until A's cable came back (JIDU6401, 2026-11-02).
+			local orig_popen = backhaul._popen
+			backhaul._popen = function(cmd)
+				if cmd:find(" info$") then return "addr 02:00:00:00:0a:99\n" end
+				if cmd:find(" link$") then return "Connected to 02:00:00:00:0b:01 (on phy1-sta0)\n" end
+				return ""
+			end
+			local sysinfo = dofile("openuf/sysinfo.lua")
+			local si = {
+				peer_ie_hex = sysinfo.peer_ie_hex, peer_path_ie_hex = sysinfo.peer_path_ie_hex,
+				scan_table = function() return {
+					{bssid = "02:00:00:00:0b:01", peer_mac = "aa:00:00:00:00:0b",
+						peer_mesh = {rooted = true, ancestors = {}}}} end,
+			}
+			local written
+			local uf = {backhaul_set_downlink_ie = function() return true end,
+				backhaul_set_uplink_lists = function(l) written = l; return true end}
+			local st = {mac = "aa:00:00:00:00:0a"}
+			backhaul.multihop_tick(st, uf, si, "wireless", "phy1-sta0", {["aa:00:00:00:00:0b"] = true})
+			backhaul._popen = orig_popen
+			assert_true(st.backhaul_seen["02:00:00:00:0b:01"].desc, "recorded as a descendant")
+			assert_eq(table.concat(written and written.blacklist or {}, " "), "02:00:00:00:0b:01",
+				"blacklisted: the live update leaves it")
+			local st2 = {mac = "aa:00:00:00:00:0a"}
+			backhaul.learn(st2, si.scan_table(), nil)
+			assert_nil(st2.backhaul_seen["02:00:00:00:0b:01"].desc, "without the cable fact it is just a parent")
+			-- and a flag learnt from the cable goes once the sibling is not below any more
+			backhaul.learn(st, si.scan_table(), {})
+			assert_nil(st.backhaul_seen["02:00:00:00:0b:01"].desc, "cleared on the next scan")
+		end
+	},
+	{
+		name = "backhaul: station_lists() blacklists a known downlink of an AP cabled below, before any scan marked it",
+		fn = function()
+			-- At the switch to the air the station is enabled with these lists:
+			-- a downlink seen earlier without the cable fact must not be its
+			-- first pick (the same loop, for one tick).
+			local st = {mac = "aa:00:00:00:00:0a", backhaul_seen = {
+				["02:00:00:00:0b:01"] = {id = "aa:00:00:00:00:0b", t = 1},
+				["02:00:00:00:0c:01"] = {id = "aa:00:00:00:00:0c", t = 1}}}
+			local l = backhaul.station_lists(st, false, {["aa:00:00:00:00:0b"] = true})
+			assert_eq(table.concat(l.blacklist, " "), "02:00:00:00:0b:01", "only the one cabled below")
+			assert_eq(#backhaul.station_lists(st, false, nil).blacklist, 0, "no cable fact: none")
+		end
+	},
+	{
 		name = "backhaul: tick() with a downlink and no uplink station still beacons the rooted element",
 		fn = function()
 			-- A wired root whose Wireless Meshing is off: the push carries the

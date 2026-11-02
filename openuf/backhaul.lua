@@ -129,10 +129,11 @@ M._ie_ticks = 0
 local function lower(s) return type(s) == "string" and s:lower() or nil end
 
 -- Learn the mesh downlinks in one scan (sysinfo.scan_table entries; those with
--- peer_mesh carry the version 2 element). Changes st.backhaul_seen and marks
--- the state dirty when something worth saving changed. Returns the entries
--- learnt, by BSSID.
-function M.learn(st, nets)
+-- peer_mesh carry the version 2 element). below (optional): identity MACs of
+-- sibling APs cabled below this one (M.wired_below), descendants whatever
+-- their element says. Changes st.backhaul_seen and marks the state dirty when
+-- something worth saving changed. Returns the entries learnt, by BSSID.
+function M.learn(st, nets, below)
 	local me = st and lower(st.mac)
 	if not (me and is_mac(me)) then return {} end
 	local seen = type(st.backhaul_seen) == "table" and st.backhaul_seen or {}
@@ -142,7 +143,7 @@ function M.learn(st, nets)
 		local m = type(n) == "table" and n.peer_mesh
 		local bssid, id = lower(n.bssid), lower(n.peer_mac)
 		if type(m) == "table" and is_mac(bssid) and is_mac(id) then
-			local desc = (id == me)
+			local desc = (id == me) or (type(below) == "table" and below[id] == true)
 			for _, a in ipairs(m.ancestors or {}) do
 				if lower(a) == me then desc = true end
 			end
@@ -169,14 +170,17 @@ function M.learn(st, nets)
 end
 
 -- What the uplink station may join: {bssid = pin or nil, blacklist = {...}},
--- from what has been learnt and the controller's chosen parent.
-function M.station_lists(st, drop_pin)
+-- from what has been learnt and the controller's chosen parent. below
+-- (optional, M.wired_below): siblings cabled below this AP, blacklisted from
+-- what is already known of them -- at the switch to the air too, before any
+-- scan has marked them.
+function M.station_lists(st, drop_pin, below)
 	local seen = (st and type(st.backhaul_seen) == "table") and st.backhaul_seen or {}
 	local bl, pin = {}, nil
 	local want = st and lower(st.backhaul_parent)
 	for bssid, rec in pairs(seen) do
 		if type(rec) == "table" then
-			if rec.desc then
+			if rec.desc or (type(below) == "table" and below[rec.id] == true) then
 				bl[#bl + 1] = bssid
 			elseif not drop_pin and is_mac(want) and rec.id == want then
 				-- One parent can have a downlink per radio: the first by BSSID.
@@ -541,6 +545,38 @@ local function is_wds_port(port, sta_if)
 	return port == sta_if or port:match("%.sta%d+$") ~= nil
 end
 
+-- Hosts cabled below this AP: every MAC its LAN bridge learnt behind a wired
+-- port that is not the wired uplink (the socket the gateway is behind). A
+-- sibling AP among them hangs off this one's LAN, and its downlink beacons
+-- as a wired root -- its own cable has carrier -- with no ancestors at all,
+-- so the element cannot tell this AP that joining it closes a loop (main
+-- LAN -> A -> B by cable, A's cable pulled: A joined B's downlink and both
+-- forwarded 40-55k frames/s for 68 s, JIDU6401, 2026-11-02). {mac = true},
+-- or nil when it cannot be told: a swconfig board (every socket is the one
+-- CPU trunk to the bridge), no uplink socket learnt yet, no bridge. Only as
+-- good as backhaul_wired_port: a cable moved to another socket while the AP
+-- is on the air leaves the old socket named until the gateway is seen again,
+-- and siblings behind the new one count as below until then (a parent
+-- refused, never a loop).
+function M.wired_below(cfg, sysinfo, st, sta_if)
+	if cfg and cfg.vlan and cfg.vlan.ports then return nil end
+	local up = st and st.backhaul_wired_port
+	if type(up) ~= "string" or up == "" then return nil end
+	if not (sysinfo and sysinfo.bridge_fdb_ports) then return nil end
+	local bridge = M.lan_bridge(cfg, sysinfo)
+	if not bridge then return nil end
+	local ok, fdb = pcall(sysinfo.bridge_fdb_ports, bridge)
+	if not (ok and type(fdb) == "table") then return nil end
+	local below = {}
+	for mac, port in pairs(fdb) do
+		if type(port) == "string" and port ~= up
+				and not looks_wireless(port) and not is_wds_port(port, sta_if) and is_mac(mac) then
+			below[mac:lower()] = true
+		end
+	end
+	return below
+end
+
 function M.heal_wds_moves(cfg, sysinfo, sta_if)
 	local br = M.lan_bridge(cfg, sysinfo)
 	local now = M._time()
@@ -802,6 +838,11 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 	else
 		M._watch = nil
 	end
+	local below = nil
+	if mode == "wireless" or new_mode == "wireless" then
+		local ok_b, b = pcall(M.wired_below, cfg, sysinfo, st, sta_if)
+		below = ok_b and b or nil
+	end
 	if new_mode ~= mode then
 		M._log(("wired uplink %s on %s -- %s the WDS station"):format(
 			new_mode == "wireless" and "lost" or "back", tostring(wired_desc or "?"),
@@ -811,7 +852,7 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 			-- Enabled with the parent pin and the descendants' blacklist in
 			-- the same reload: unpinned, its first pick could be one of its
 			-- own children, still beaconing for a few seconds.
-			switched = write_lists(st, ufuci, M.station_lists(st), true)
+			switched = write_lists(st, ufuci, M.station_lists(st, false, below), true)
 		else
 			local ok, err = pcall(ufuci.backhaul_set_uplink_enabled, false)
 			if not ok then M._log("could not switch the station: " .. tostring(err)) end
@@ -860,7 +901,7 @@ function M.tick(st, cfg, ufuci, sysinfo, state_mod)
 		end
 	end
 
-	pcall(M.multihop_tick, st, ufuci, sysinfo, new_mode, sta_if)
+	pcall(M.multihop_tick, st, ufuci, sysinfo, new_mode, sta_if, below)
 	if not swconfig then pcall(M.heal_wds_moves, cfg, sysinfo, sta_if) end
 	if new_mode == "wireless" then
 		pcall(M.revive_silent_aps, sta_if)
@@ -880,7 +921,7 @@ end
 -- finds itself joined to one, and drop an unreachable parent pin; in either
 -- mode, keep this device's own downlink element current.
 local MAC = "%x%x:%x%x:%x%x:%x%x:%x%x:%x%x"
-function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
+function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if, below)
 	local sta_mac, joined, parent_rec, parent_id = nil, nil, nil, nil
 	if mode == "wireless" and valid_ifname(sta_if) then
 		sta_mac = lower((M._popen("iw dev " .. sta_if .. " info") or ""):match("addr (" .. MAC .. ")"))
@@ -888,7 +929,7 @@ function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
 		if sysinfo and sysinfo.scan_table then
 			local ok_s, nets = pcall(sysinfo.scan_table, sta_if)
 			nets = (ok_s and type(nets) == "table") and nets or {}
-			local got = M.learn(st, nets)
+			local got = M.learn(st, nets, below)
 			if joined then
 				parent_rec = got[joined]
 				for _, n in ipairs(nets) do
@@ -903,7 +944,7 @@ function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
 				M._log(("joined %s, a downlink of this AP's own descendant -- a loop; leaving it"):format(joined))
 				-- Lists that did not change move nothing (a live update leaves
 				-- the BSS only when it is newly ignored), so leave it outright.
-				if not write_lists(st, ufuci, M.station_lists(st, true)) and ufuci.backhaul_station_leave then
+				if not write_lists(st, ufuci, M.station_lists(st, true, below)) and ufuci.backhaul_station_leave then
 					pcall(ufuci.backhaul_station_leave)
 				end
 				parent_rec = nil
@@ -912,7 +953,7 @@ function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
 				-- Joined and no loop, but the lists may still be stale: the
 				-- controller can name a new parent (mesh.serial1), or a new
 				-- descendant can show up. Written only when they differ.
-				write_lists(st, ufuci, M.station_lists(st))
+				write_lists(st, ufuci, M.station_lists(st, false, below))
 			end
 		else
 			M._unjoined = M._unjoined + 1
@@ -921,7 +962,7 @@ function M.multihop_tick(st, ufuci, sysinfo, mode, sta_if)
 				M._log(("parent %s not joined in %d heartbeats -- unpinning"):format(
 					tostring(st.backhaul_pin), M.PIN_GIVEUP))
 			end
-			write_lists(st, ufuci, M.station_lists(st, drop))
+			write_lists(st, ufuci, M.station_lists(st, drop, below))
 		end
 	end
 	if ufuci.backhaul_set_downlink_ie and sysinfo and sysinfo.peer_ie_hex then
