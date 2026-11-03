@@ -2071,17 +2071,37 @@ function M.build_json(st, cfg, ufhw)
 	-- lldp_table (field names confirmed against the real controller's OXMua
 	-- DTO -- see PROTOCOL-VALIDATION.md's outbound payload field
 	-- reference)
-	local lldp_table = {}
+	--
+	-- The controller takes every LLDP neighbour of an AP for its uplink: a
+	-- stock UAP has one socket, so it never hears anything else. A
+	-- multi-socket board hears the AP cabled BELOW it too, and reporting that
+	-- one hung this AP beneath its own child (seen on a main -> A -> B LAN
+	-- chain). With the uplink socket known, only its neighbour is reported,
+	-- under that socket's port_idx (the kernel ifindex lldp.lua reads means
+	-- nothing in port_table). Unknown uplink: every neighbour, as before.
+	local uplink_idx
+	if uplink_dev then
+		for _, p in ipairs(ports) do
+			if p.ifname == uplink_dev then uplink_idx = p.idx break end
+		end
+	end
+	local lldp_table, lldp_seen = {}, {}
 	for _, nbr in ipairs(lldp_nbrs) do
-		lldp_table[#lldp_table + 1] = {
-			chassis_descr   = nbr.system_desc,
-			chassis_id      = nbr.chassis_id,
-			local_port_name = nbr.port,
-			local_port_idx  = nbr.local_port_idx,
-			is_wired        = true,  -- LLDP is inherently a wired-link protocol
-			port_id         = nbr.port_id,
-			port_descr      = nbr.port_descr,
-		}
+		local key = tostring(nbr.port) .. "|" .. tostring(nbr.chassis_id)
+			.. "|" .. tostring(nbr.port_id)
+		-- skip a duplicate, and anything heard on a downstream socket
+		if not (lldp_seen[key] or (uplink_dev and nbr.port ~= uplink_dev)) then
+			lldp_seen[key] = true
+			lldp_table[#lldp_table + 1] = {
+				chassis_descr   = nbr.system_desc,
+				chassis_id      = nbr.chassis_id,
+				local_port_name = nbr.port,
+				local_port_idx  = uplink_idx or nbr.local_port_idx,
+				is_wired        = true,  -- LLDP is inherently a wired-link protocol
+				port_id         = nbr.port_id,
+				port_descr      = nbr.port_descr,
+			}
+		end
 	end
 
 	-- Device-level spectrum-scan status, aggregated across all radios'

@@ -282,6 +282,7 @@ local DSA_CFG = {
 local function build_dsa(opts)
 	opts = opts or {}
 	inject_sysinfo(false, false, false, false)
+	if opts.lldp then inform._lldp._run_cmd = function() return opts.lldp end end
 	local fdb_dump = fixture("bridge_fdb_dsa.txt")
 	local base_read = inform._sysinfo._read_file
 	inform._sysinfo._read_file = function(path)
@@ -3374,6 +3375,50 @@ return {
 
 			inform._time = orig_time
 			inform._sta_stats_cache = {}
+		end
+	},
+
+	-- lldp_table on a multi-socket AP: the controller reads every LLDP
+	-- neighbour of an AP as its uplink (a stock UAP has one socket), so a
+	-- neighbour heard on a downstream socket -- an AP cabled below this one --
+	-- became this AP's parent and the topology hung upside down. Only the
+	-- uplink socket's neighbour is reported, under that socket's port_idx.
+	{
+		name = "inform json: lldp_table keeps only the uplink socket's neighbour",
+		fn = function()
+			local two = '{"lldp":{"interface":['
+				.. '{"lan1":{"chassis":{"upstream":{"id":{"type":"mac","value":"aa:bb:cc:00:00:01"}}},'
+				.. '"port":{"id":{"type":"mac","value":"aa:bb:cc:00:00:01"}}}},'
+				.. '{"lan3":{"chassis":{"downstream":{"id":{"type":"mac","value":"aa:bb:cc:00:00:02"}}},'
+				.. '"port":{"id":{"type":"mac","value":"aa:bb:cc:00:00:02"}}}}]}}'
+			local d = build_dsa({lldp = two})
+			inform._lldp._run_cmd = function() return "" end
+			assert_eq(#d.lldp_table, 1, "one neighbour reported")
+			assert_eq(d.lldp_table[1].chassis_id, "aa:bb:cc:00:00:01", "the uplink's")
+			assert_eq(d.lldp_table[1].local_port_name, "lan1", "on the uplink socket")
+			assert_eq(d.lldp_table[1].local_port_idx, 1, "port_idx, not the kernel ifindex")
+		end
+	},
+	{
+		name = "inform json: lldp_table keeps every neighbour when the uplink is unknown",
+		fn = function()
+			local two = '{"lldp":{"interface":['
+				.. '{"lan1":{"chassis":{"id":{"type":"mac","value":"aa:bb:cc:00:00:01"}},"port":{"id":{"type":"mac","value":"x1"}}}},'
+				.. '{"lan3":{"chassis":{"id":{"type":"mac","value":"aa:bb:cc:00:00:02"}},"port":{"id":{"type":"mac","value":"x2"}}}}]}}'
+			local d = build_dsa({lldp = two, no_fdb = true})
+			inform._lldp._run_cmd = function() return "" end
+			assert_eq(#d.lldp_table, 2, "both kept")
+		end
+	},
+	{
+		name = "inform json: lldp_table reports one neighbour once",
+		fn = function()
+			local dup = '{"lldp":{"interface":['
+				.. '{"lan1":{"chassis":{"id":{"type":"mac","value":"aa:bb:cc:00:00:01"}},"port":{"id":{"type":"mac","value":"x1"}}}},'
+				.. '{"lan1":{"chassis":{"id":{"type":"mac","value":"aa:bb:cc:00:00:01"}},"port":{"id":{"type":"mac","value":"x1"}}}}]}}'
+			local d = build_dsa({lldp = dup})
+			inform._lldp._run_cmd = function() return "" end
+			assert_eq(#d.lldp_table, 1, "deduplicated")
 		end
 	},
 }
