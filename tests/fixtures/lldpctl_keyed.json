@@ -1,0 +1,68 @@
+{
+  "lldp": {
+    "interface": [
+      {
+        "wan": {
+          "via": "LLDP",
+          "rid": "2",
+          "age": "0 day, 00:00:05",
+          "chassis": {
+            "ap-upstream": {
+              "id": {
+                "type": "mac",
+                "value": "aa:bb:cc:00:00:01"
+              },
+              "descr": "OpenWrt 25.12.6 @ ap-upstream",
+              "mgmt-ip": [
+                "192.0.2.20",
+                "fe80::1"
+              ],
+              "mgmt-iface": [
+                "8",
+                "2"
+              ],
+              "capability": [
+                {
+                  "type": "Bridge",
+                  "enabled": true
+                },
+                {
+                  "type": "Router",
+                  "enabled": true
+                }
+              ]
+            }
+          },
+          "port": {
+            "id": {
+              "type": "mac",
+              "value": "aa:bb:cc:00:00:01"
+            },
+            "descr": "br-lan",
+            "ttl": "120"
+          }
+        }
+      },
+      {
+        "lan1": {
+          "via": "LLDP",
+          "rid": "1",
+          "age": "0 day, 00:03:59",
+          "chassis": {
+            "id": {
+              "type": "local",
+              "value": "DESKTOP"
+            }
+          },
+          "port": {
+            "id": {
+              "type": "mac",
+              "value": "aa:bb:cc:00:00:02"
+            },
+            "ttl": "3601"
+          }
+        }
+      }
+    ]
+  }
+}

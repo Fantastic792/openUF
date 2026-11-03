@@ -1600,8 +1600,16 @@ if [ -f /etc/config/lldpd ]; then
 		"$MAPDIR/$MODELMAP.lua" 2>/dev/null | head -1)
 	[ -n "$LAN_NET" ] || LAN_NET=lan
 	uci set "lldpd.config.cid_interface=$LAN_NET"
+	# Listen on the wired ports too, not only the bridge: a Linux bridge never
+	# hands LLDP's link-local frames up to br-lan, so lldpd there hears no
+	# cabled neighbour and the controller guesses the wired parent. Patterns,
+	# resolved by lldpd at run time: the WAN joins the bridge only after this.
+	uci -q delete lldpd.config.interface
+	for i in "$LAN_NET" 'lan*' 'wan*' 'eth*'; do
+		uci add_list "lldpd.config.interface=$i"
+	done
 	uci commit lldpd
-	ok "lldpd chassis id follows the '$LAN_NET' network"
+	ok "lldpd chassis id follows the '$LAN_NET' network; listens on the wired ports"
 elif pkg_installed lldpd; then
 	warn "lldpd has no /etc/config/lldpd; set cid_interface by hand or the"
 	warn "controller will show the wrong Parent Device (see USAGE.md sec 7)."

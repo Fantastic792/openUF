@@ -235,8 +235,14 @@ convert() {
 	# lldpd's chassis id follows the LAN, or the controller shows a wrong Parent Device.
 	if [ -f /etc/config/lldpd ]; then
 		lan_name=$(probe_field modelmap.lan_name); [ -n "$lan_name" ] || lan_name=lan
-		uci set "lldpd.config.cid_interface=$lan_name"; uci commit lldpd
-		say "  lldpd chassis id follows '$lan_name'"
+		uci set "lldpd.config.cid_interface=$lan_name"
+		# and it listens on the wired ports: br-lan alone hears no cabled neighbour.
+		uci -q delete lldpd.config.interface
+		for i in "$lan_name" 'lan*' 'wan*' 'eth*'; do
+			uci add_list "lldpd.config.interface=$i"
+		done
+		uci commit lldpd
+		say "  lldpd chassis id follows '$lan_name'; listens on the wired ports"
 	fi
 
 	# Radios: a fresh OpenWrt ships them disabled, and openUF writes that

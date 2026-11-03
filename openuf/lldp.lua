@@ -99,6 +99,14 @@ function M._neighbors_uncached()
 		-- Each interface may have one or more neighbors
 		local port_name = iface.name or ""
 		local neighbors = iface.neighbor
+		-- lldpd 1.x keys the interface by its name instead:
+		-- {"wan": {"chassis": ..., "port": ...}}, one neighbour per entry.
+		if iface.name == nil and neighbors == nil then
+			local key, body = next(iface)
+			if type(key) == "string" and type(body) == "table" and next(iface, key) == nil then
+				port_name, neighbors = key, body
+			end
+		end
 		if type(neighbors) ~= "table" then
 			-- no neighbors on this port
 		elseif neighbors[1] ~= nil then
@@ -119,6 +127,17 @@ end
 function M._parse_neighbor(port_name, nbr)
 	local chassis = type(nbr.chassis) == "table" and nbr.chassis or {}
 	local port    = type(nbr.port)    == "table" and nbr.port    or {}
+
+	-- lldpd 1.x keys a named chassis by its system name:
+	-- {"ap1": {"id": ..., "descr": ...}}. Unwrap it; the key is the name.
+	if chassis.id == nil and chassis.name == nil then
+		local key, body = next(chassis)
+		if type(key) == "string" and type(body) == "table" and next(chassis, key) == nil then
+			chassis = {}
+			for k, v in pairs(body) do chassis[k] = v end
+			if chassis.name == nil then chassis.name = key end
+		end
+	end
 
 	-- chassis.id.value can be a MAC, IP or string
 	local chassis_id = ""

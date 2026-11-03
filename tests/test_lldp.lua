@@ -228,4 +228,41 @@ return {
 			lldp._port_idx_cache = {}
 		end
 	},
+	{
+		-- lldpd 1.x `lldpctl -f json` keys each interface by its name and each
+		-- chassis by its system name ({"wan": {"chassis": {"ap": {...}}}}); a
+		-- chassis without a name has its id directly under chassis. The older
+		-- {"name": ..., "neighbor": ...} shape above dropped every neighbour.
+		name = "lldp: lldpd 1.x keyed JSON -> one neighbour per interface",
+		fn = function()
+			with_cmd(fixture("lldpctl_keyed.json"), function()
+				local nbrs = lldp.neighbors()
+				assert_eq(#nbrs, 2, "two neighbours")
+				local by = {}
+				for _, n in ipairs(nbrs) do by[n.port] = n end
+				assert_eq(by.wan.chassis_id,  "aa:bb:cc:00:00:01",             "wan chassis_id")
+				assert_eq(by.wan.system_name, "ap-upstream",                   "wan system_name")
+				assert_eq(by.wan.port_id,     "aa:bb:cc:00:00:01",             "wan port_id")
+				assert_eq(by.wan.system_desc, "OpenWrt 25.12.6 @ ap-upstream", "wan descr as a string")
+				assert_eq(by.wan.port_descr,  "br-lan",                        "wan port descr as a string")
+				assert_eq(by.lan1.chassis_id,  "DESKTOP",                      "unnamed chassis id")
+				assert_eq(by.lan1.system_name, "",                             "unnamed chassis has no name")
+				assert_eq(by.lan1.port_id,     "aa:bb:cc:00:00:02",            "lan1 port_id")
+			end)
+		end
+	},
+	{
+		name = "lldp: lldpd 1.x keyed JSON with a single interface object",
+		fn = function()
+			local one = '{"lldp":{"interface":{"lan2":{"via":"LLDP","chassis":{"sw":{"id":{"type":"mac","value":"aa:bb:cc:00:00:03"}}},"port":{"id":{"type":"ifname","value":"port7"}}}}}}'
+			with_cmd(one, function()
+				local nbrs = lldp.neighbors()
+				assert_eq(#nbrs, 1, "one neighbour")
+				assert_eq(nbrs[1].port,        "lan2",              "local port from the key")
+				assert_eq(nbrs[1].system_name, "sw",                "name from the chassis key")
+				assert_eq(nbrs[1].chassis_id,  "aa:bb:cc:00:00:03", "chassis_id")
+				assert_eq(nbrs[1].port_id,     "port7",             "port_id")
+			end)
+		end
+	},
 }
