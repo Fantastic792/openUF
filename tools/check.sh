@@ -161,6 +161,11 @@ if [ -f /tmp/openuf-status ]; then
 	if [ -n "$_fail" ] && [ "$_fail" -gt 0 ] 2>/dev/null; then
 		info "last failure $((_now - _fail))s ago: $(sed -n 's/^last_fail_msg=//p' /tmp/openuf-status | head -1)"
 	fi
+	# Stages of the last config push that raised: nothing re-sends it on its own.
+	_stages=$(sed -n 's/^push_fail_stages=//p' /tmp/openuf-status | head -1)
+	if [ -n "$_stages" ]; then
+		fail "last config push not fully applied ($_stages) -- Force Provision this device in the controller (or change one of its settings)"
+	fi
 else
 	info "no /tmp/openuf-status -- daemon not running, or older than this check"
 fi

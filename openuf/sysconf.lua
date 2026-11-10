@@ -446,18 +446,19 @@ end
 
 -- One call from the setparam path. Each part is pcall'd on its own: a full
 -- overlay or a missing init script must cost one part, not the other two.
+-- r.failed lists the parts that raised (a false part may just mean "nothing
+-- to change"), for inform's record of the push.
 function M.apply(parsed)
-	local r = {}
+	local r = {failed = {}}
 	if type(parsed) ~= "table" then return r end
-	local ok, res
-	ok, res = pcall(M.apply_timezone, parsed.timezone); r.timezone = ok and res or false
-	if not ok then io.stderr:write("sysconf: timezone: " .. tostring(res) .. "\n") end
-	ok, res = pcall(M.apply_ntp, parsed.ntp);           r.ntp = ok and res or false
-	if not ok then io.stderr:write("sysconf: ntp: " .. tostring(res) .. "\n") end
-	ok, res = pcall(M.apply_cron, parsed.cron);         r.cron = ok and res or false
-	if not ok then io.stderr:write("sysconf: cron: " .. tostring(res) .. "\n") end
-	ok, res = pcall(M.apply_hostname, parsed.hostname); r.hostname = ok and res or false
-	if not ok then io.stderr:write("sysconf: hostname: " .. tostring(res) .. "\n") end
+	for _, part in ipairs({"timezone", "ntp", "cron", "hostname"}) do
+		local ok, res = pcall(M["apply_" .. part], parsed[part])
+		r[part] = ok and res or false
+		if not ok then
+			r.failed[#r.failed + 1] = part
+			io.stderr:write("sysconf: " .. part .. ": " .. tostring(res) .. "\n")
+		end
+	end
 	return r
 end
 

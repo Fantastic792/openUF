@@ -10312,4 +10312,176 @@ return {
 			assert_eq(got and got.last_fail_msg, "build_packet failed: bang", "status message")
 		end
 	},
+	{
+		name = "inform packet: a push whose switch, sysconf and l2guard stages raise names them in the status file",
+		fn = function()
+			local st = sample_state({cfgversion = "v1"})
+			local orig = {us = inform._usteer.set_enabled, err = io.stderr, uci = inform._ucihelper,
+				sw = inform._switchvlan, lb = inform._sysinfo.lan_bridge, sc = inform._sysconf,
+				l2 = inform._l2guard_apply_push, file = inform.STATUS_FILE,
+				ok = inform._status.push_ok}
+			local tmp = os.tmpname()
+			inform._usteer.set_enabled = function() end
+			inform._ucihelper = {apply_config = function() end}
+			inform._sysinfo.lan_bridge = function() return nil end
+			local boom = true
+			inform._switchvlan = {apply = function() if boom then error("swconfig: boom") end end,
+				restore = function() end}
+			inform._sysconf = {parse = function() if boom then error("uci: bad zone") end end,
+				apply = function() return {} end}
+			inform._l2guard_apply_push = function() if boom then error("nft: boom") end end
+			inform.STATUS_FILE = tmp
+			inform._status.push_ok = nil
+			local buf = {}
+			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			local function push(ver)
+				return ('{"_type":"setparam","mgmt_cfg":"cfgversion=%s\\n","system_cfg":"%s"}')
+					:format(ver, (sys_cfg:gsub("\n", "\\n")))
+			end
+			local function status()
+				inform._write_status(st, {})
+				local f = assert(io.open(tmp, "r"))
+				local s = f:read("*a")
+				f:close()
+				return s
+			end
+			local ok, err = pcall(function()
+				io.stderr = {write = function(_, t) buf[#buf + 1] = t end}
+				inform.handle_response(push("v2"), st, {net = {lan_cpueth = "eth0"}})
+				io.stderr = orig.err
+				local log = table.concat(buf)
+				assert_eq(st.cfgversion, "v2", "the WiFi pass went through, so the version is recorded")
+				assert_contains(log, "inform: switch: ", "the switch failure is logged (it was silent)")
+				assert_contains(log, "swconfig: boom", "with its reason")
+				assert_contains(log, "inform: sysconf: ", "the sysconf failure is logged (it was silent)")
+				assert_contains(log, "nft: boom", "the l2guard reason")
+				assert_contains(log, "not applied: switch,sysconf,l2guard", "one summary line names them")
+				assert_contains(log, "Force Provision", "and says how to send it again")
+				assert_eq(st.push_fail_stages, "switch,sysconf,l2guard", "kept in state, so a restart shows it")
+				local s = status()
+				assert_contains(s, "\npush_fail_stages=switch,sysconf,l2guard\n", "status file names the stages")
+				assert_true(not s:find("\npush_fail=0\n", 1, true), "and when")
+				assert_contains(s, "\npush_ok=0\n", "no fully applied push yet")
+				-- A partial push (no WiFi tables, so most stages do not rerun)
+				-- that applies does not clear what it did not redo.
+				boom, buf = false, {}
+				io.stderr = {write = function(_, t) buf[#buf + 1] = t end}
+				inform.handle_response('{"_type":"setparam","system_cfg":"system.timezone=UTC\\n"}', st,
+					{net = {lan_cpueth = "eth0"}})
+				io.stderr = orig.err
+				assert_eq(st.push_fail_stages, "switch,sysconf,l2guard", "partial push keeps the record")
+				-- The next push applies everything: the record clears.
+				boom, buf = false, {}
+				io.stderr = {write = function(_, t) buf[#buf + 1] = t end}
+				inform.handle_response(push("v3"), st, {net = {lan_cpueth = "eth0"}})
+				io.stderr = orig.err
+				assert_true(not table.concat(buf):find("not applied", 1, true), "no summary line")
+				s = status()
+				assert_contains(s, "\npush_fail_stages=\n", "stages cleared by the full push")
+				assert_eq(st.push_fail_stages, nil, "and from state")
+				assert_true(not s:find("\npush_ok=0\n", 1, true), "push_ok set")
+				-- A setparam without system_cfg is not a config push: the record stays.
+				st.push_fail_stages = "wifi"
+				inform.handle_response('{"_type":"setparam","mgmt_cfg":"led_enabled=true\\n"}', st,
+					{net = {lan_cpueth = "eth0"}})
+				assert_eq(st.push_fail_stages, "wifi", "mgmt_cfg-only answer leaves it")
+			end)
+			io.stderr = orig.err
+			inform._usteer.set_enabled, inform._ucihelper, inform._switchvlan = orig.us, orig.uci, orig.sw
+			inform._sysinfo.lan_bridge, inform._sysconf, inform._l2guard_apply_push = orig.lb, orig.sc, orig.l2
+			inform.STATUS_FILE = orig.file
+			inform._status.push_ok = orig.ok
+			os.remove(tmp); os.remove(tmp .. ".tmp")
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: a failed WiFi pass is named in the push record too",
+		fn = function()
+			local st = sample_state({cfgversion = "v1"})
+			local o_us, o_err, o_uci = inform._usteer.set_enabled, io.stderr, inform._ucihelper
+			local o_lb, o_sw = inform._sysinfo.lan_bridge, inform._switchvlan
+			inform._usteer.set_enabled = function() end
+			inform._ucihelper = {apply_config = function() error("uci: boom") end}
+			inform._sysinfo.lan_bridge = function() return nil end
+			inform._switchvlan = {apply = function() end, restore = function() end}
+			local sys_cfg = "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			local resp = ('{"_type":"setparam","mgmt_cfg":"cfgversion=v2\\n","system_cfg":"%s"}')
+				:format((sys_cfg:gsub("\n", "\\n")))
+			local ok, err = pcall(function()
+				io.stderr = {write = function() end}
+				inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}})
+				io.stderr = o_err
+				assert_eq(st.cfgversion, "v1", "version held back as before")
+				assert_eq(st.push_fail_stages, "wifi", "stage named")
+			end)
+			io.stderr = o_err
+			inform._usteer.set_enabled, inform._ucihelper = o_us, o_uci
+			inform._sysinfo.lan_bridge, inform._switchvlan = o_lb, o_sw
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: a config push that raises outside its stages is recorded as aborted",
+		fn = function()
+			local o = {us = inform._usteer.set_enabled, lb = inform._sysinfo.lan_bridge,
+				sw = inform._switchvlan, dr = inform._deny_reloaded}
+			local ok, err = pcall(with_tick_env, function()
+				local st, ctx = sample_state(), fresh_ctx()
+				-- The real handle_response, with an unguarded step (the deny
+				-- list reload after the WiFi pass) raising mid-push.
+				inform._usteer.set_enabled = function() end
+				inform._ucihelper = {apply_config = function() end}
+				inform._sysinfo.lan_bridge = function() return nil end
+				inform._switchvlan = {apply = function() end, restore = function() end}
+				inform._deny_reloaded = function() error("unguarded bug") end
+				local sys_cfg = "wireless.1.ssid=openuf-test\\nwireless.1.parent=radio0\\n"
+				inform._http_post = function()
+					return response('{"_type":"setparam","system_cfg":"' .. sys_cfg .. '"}', st)
+				end
+				local out = with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+				assert_contains(out, "handle_response failed", "logged as before")
+				assert_contains(out, "unguarded bug", "with the error")
+				assert_eq(st.push_fail_stages, "aborted", "recorded")
+				assert_eq(inform._push_open, false, "flag spent")
+				local f = assert(io.open(STATUS_TMP, "r"))
+				local s = f:read("*a")
+				f:close()
+				assert_contains(s, "\npush_fail_stages=aborted\n", "and in the status file")
+				assert_eq(inform._state.load().push_fail_stages, "aborted", "and saved")
+				-- A handler error on anything else is not a push.
+				st.push_fail_stages = nil
+				inform.handle_response = function() error("dispatcher bug") end
+				with_stderr(function() inform._tick(st, nil, nil, ctx) end)
+				assert_eq(st.push_fail_stages, nil, "no record for a non-push error")
+			end)
+			inform._usteer.set_enabled, inform._sysinfo.lan_bridge = o.us, o.lb
+			inform._switchvlan, inform._deny_reloaded = o.sw, o.dr
+			inform._push_open = false
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: _note_push merges a partial push and replaces on a full one",
+		fn = function()
+			local st, o_err, o_ok = {}, io.stderr, inform._status.push_ok
+			local ok, err = pcall(function()
+				io.stderr = {write = function() end}
+				inform._note_push(st, {"switch"}, true)
+				assert_eq(st.push_fail_stages, "switch", "full push with a failure")
+				inform._note_push(st, {"airtime", "switch"}, false)
+				assert_eq(st.push_fail_stages, "switch,airtime", "partial adds, no duplicate")
+				inform._note_push(st, {}, false)
+				assert_eq(st.push_fail_stages, "switch,airtime", "partial clean push keeps it")
+				inform._note_push(st, {"l2guard"}, true)
+				assert_eq(st.push_fail_stages, "l2guard", "full push replaces")
+				inform._note_push(st, {}, true)
+				assert_eq(st.push_fail_stages, nil, "full clean push clears")
+				assert_eq(st.push_fail, nil, "with its time")
+			end)
+			io.stderr, inform._status.push_ok = o_err, o_ok
+			if not ok then error(err, 0) end
+		end
+	},
 }

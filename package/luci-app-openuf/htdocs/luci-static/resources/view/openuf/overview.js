@@ -72,6 +72,10 @@ function controllerBlock(s) {
 		[ _('Last failed contact'), h.last_fail ? '%s (%s)'.format(age(s.now, h.last_fail), h.last_fail_msg || '') : _('none') ],
 		[ _('Controller address'), st.inform_url || c.inform_url ],
 		[ _('Controller configuration'), st.cfgversion ? _('received (version %s)').format(st.cfgversion) : _('none received yet') ],
+		[ _('Last configuration push'), h.push_fail_stages ?
+			E('span', {}, [ E('span', { 'class': 'label warning' }, _('not applied: %s').format(h.push_fail_stages)), ' ',
+				_('%s. Force Provision this device in the controller (or change one of its settings) to send it again.').format(age(s.now, h.push_fail)) ]) :
+			(h.push_ok ? _('applied without errors %s').format(age(s.now, h.push_ok)) : _('none since openUF started')) ],
 		[ _('Address the controller knows this device by'), st.mac ],
 		[ _('IP address and hostname'), st.ip ? '%s (%s)'.format(st.ip, st.hostname || '') : st.hostname ],
 		[ _('Message encryption'), st.use_gcm ? _('AES-GCM, as current controllers require') : _('AES-CBC (the controller has not switched to GCM yet)') ]

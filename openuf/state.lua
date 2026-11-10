@@ -156,6 +156,11 @@ local TYPED = {
 	-- The 802.11r key holders heard on the LAN ({bssid = mobility domain},
 	-- inform._rrb_peers_tick), kept so a reboot does not relearn them.
 	rrb_peers                 = "table",
+	-- The stages of the last config push that failed ("switch,l2guard") and
+	-- when (inform._note_push): kept so a restart does not hide a drift the
+	-- controller will not repair by itself. Gone with a Forget.
+	push_fail_stages          = "string",
+	push_fail                 = "number",
 	-- The tagged SSIDs' VLANs carried over the mesh hop on a swconfig board
 	-- ({bridge, vids}, meshvlan.lua): kernel state, rebuilt at startup.
 	meshvlan                  = "table",

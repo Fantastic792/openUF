@@ -4656,6 +4656,16 @@ function M.handle_response(json_str, st, cfg)
 		-- confirmed by amd989/unifi-gateway _parse_mgmt_cfg).
 		local mgmt_raw = resp.mgmt_cfg
 		local newly_adopted = false
+		-- The stages of a system_cfg push that raised. Each is pcall'd so one
+		-- failure leaves the rest applied, and only the WiFi pass holds the
+		-- cfgversion back -- so a failed switch or l2guard pass would
+		-- otherwise go unnoticed for good: controller 10.6.106 does not push
+		-- again on its own. _note_push puts them in the status file.
+		local failed = {}
+		local function stage_failed(name, err, msg)
+			failed[#failed + 1] = name
+			io.stderr:write(msg or ("inform: " .. name .. ": " .. tostring(err) .. "\n"))
+		end
 		-- The pushed cfgversion is recorded only once the WiFi pass has gone
 		-- through: recorded first (and saved by the IP-settings save below),
 		-- a failed apply_config left the controller sure the AP was
@@ -4751,6 +4761,9 @@ function M.handle_response(json_str, st, cfg)
 
 		local sys_raw = resp.system_cfg
 		if type(sys_raw) == "string" then
+			-- Cleared by _note_push at the end of this block; still set
+			-- when something unprotected raised, which _tick records.
+			M._push_open = true
 			M._report_dropped_keys("system_cfg", sys_raw, RECOGNIZED_SYSTEM_CFG)
 
 			local net = M._parse_net_system_cfg(sys_raw)
@@ -4837,7 +4850,7 @@ function M.handle_response(json_str, st, cfg)
 			local backhaul_plan = nil
 			if M._backhaul and mesh_cfg then
 				local ok_bp, plan = pcall(M._backhaul.plan, mesh_cfg, backhaul_entries, cfg, st)
-				if ok_bp then backhaul_plan = plan end
+				if ok_bp then backhaul_plan = plan else stage_failed("mesh", plan) end
 				local parent = (type(mesh_cfg.serial1) == "string") and mesh_cfg.serial1:lower() or ""
 				if st and st.backhaul_parent ~= parent then st.backhaul_parent = parent end
 			end
@@ -4881,6 +4894,8 @@ function M.handle_response(json_str, st, cfg)
 				local ok_pv, m = pcall(M._switchvlan.dsa_members, sw, cfg, dsa_uplink_port())
 				if ok_pv then
 					for vid in pairs(m or {}) do port_vlans[vid] = true end
+				else
+					stage_failed("port VLAN", m)
 				end
 			end
 
@@ -4893,9 +4908,7 @@ function M.handle_response(json_str, st, cfg)
 					-- WLANs from being written.
 					local ok_us, err_us = pcall(M._usteer.set_enabled,
 						steering_active, cfg, roam_assist_active)
-					if not ok_us then
-						io.stderr:write("inform: usteer: " .. tostring(err_us) .. "\n")
-					end
+					if not ok_us then stage_failed("usteer", err_us) end
 					M._usteer_filter_next = 0   -- re-check the sync filter next tick
 					local ok_ac, err_ac = pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
@@ -4909,11 +4922,12 @@ function M.handle_response(json_str, st, cfg)
 					if not ok_ac then
 						-- The wireless config is committed once, at the end of
 						-- apply_config, so a raise before it leaves the previous
-						-- WLANs on disk; the cfgversion stays unrecorded and the
-						-- controller pushes again.
+						-- WLANs on disk; the cfgversion stays unrecorded, so the
+						-- controller may push again (PROTOCOL-VALIDATION: a stale
+						-- cfgversion sometimes gets a full push, sometimes only
+						-- noops) -- the push record says so either way.
 						wifi_applied = false
-						io.stderr:write("inform: WiFi config not applied, the "
-							.. "controller will push again: " .. tostring(err_ac) .. "\n")
+						stage_failed("wifi", err_ac)
 					end
 					M._deny_reloaded()   -- apply_config ran `wifi reload`
 				end
@@ -4923,7 +4937,7 @@ function M.handle_response(json_str, st, cfg)
 			-- ensure_vlan_network() creates for a tagged SSID already exists
 			-- before a switch port is put on the same VLAN.
 			if M._switchvlan then
-				pcall(function()
+				local ok_sw, err_sw = pcall(function()
 					-- Every VLAN a tagged SSID lands on. The switch drops
 					-- frames for a VID it has no entry for, so these need
 					-- trunking whether or not per-port VLAN is in use.
@@ -5003,6 +5017,7 @@ function M.handle_response(json_str, st, cfg)
 					-- cannot notice on its own.
 					if M._sysinfo.forget_uplink_cache then M._sysinfo.forget_uplink_cache() end
 				end)
+				if not ok_sw then stage_failed("switch", err_sw) end
 			end
 
 			-- A tagged SSID's VLAN over the mesh hop on a swconfig board
@@ -5014,9 +5029,7 @@ function M.handle_response(json_str, st, cfg)
 			if M._meshvlan and (#radio_table > 0 or #vap_table > 0) then
 				local ok_mv, err_mv = pcall(M._meshvlan_push, st, cfg, backhaul_plan,
 					M._wireless_vlans(vap_table))
-				if not ok_mv then
-					io.stderr:write("inform: meshvlan: " .. tostring(err_mv) .. "\n")
-				end
+				if not ok_mv then stage_failed("meshvlan", err_mv) end
 			end
 
 			-- Controller-managed system settings: timezone, NTP servers,
@@ -5025,11 +5038,16 @@ function M.handle_response(json_str, st, cfg)
 			-- apply(); this pcall is for parse. A new hostname goes into the
 			-- inform payload too, from this heartbeat on.
 			if M._sysconf then
-				pcall(function()
+				local ok_sc, err_sc = pcall(function()
 					local sc = M._sysconf.parse(sys_raw)
 					local r = sc and M._sysconf.apply(sc)
 					if r and r.hostname then st.hostname = r.hostname end
+					-- A part that raised inside apply, already logged there.
+					if r and type(r.failed) == "table" and #r.failed > 0 then
+						stage_failed("sysconf", nil, "")
+					end
 				end)
+				if not ok_sc then stage_failed("sysconf", err_sc) end
 			end
 
 			-- Airtime Fairness (airtime.lua). Kept in state.json because the
@@ -5039,9 +5057,12 @@ function M.handle_response(json_str, st, cfg)
 				local atf = M._airtime.parse(sys_raw)
 				if atf ~= nil then
 					st.atf_enabled = atf
-					local ok_atf, err_atf = pcall(M._airtime.set_enabled, atf)
+					local ok_atf, done_atf, total_atf = pcall(M._airtime.set_enabled, atf)
 					if not ok_atf then
-						io.stderr:write("inform: airtime: " .. tostring(err_atf) .. "\n")
+						stage_failed("airtime", done_atf)
+					elseif type(done_atf) == "number" and type(total_atf) == "number"
+						and done_atf < total_atf then
+						stage_failed("airtime", nil, "")   -- airtime said which
 					end
 				end
 			end
@@ -5054,19 +5075,16 @@ function M.handle_response(json_str, st, cfg)
 			-- _l2guard_resync picks it up if not.
 			if M._l2guard then
 				local ok_l2, err_l2 = pcall(M._l2guard_apply_push, sys_raw, st)
-				if not ok_l2 then
-					io.stderr:write("inform: l2guard: " .. tostring(err_l2) .. "\n")
-				end
+				if not ok_l2 then stage_failed("l2guard", err_l2) end
 			end
 			-- The guest portal's own ebtables rules (guestportal.lua), after
 			-- the WiFi pass for the same reason; _guest_resync covers a
 			-- guest VAP whose netdev is not up yet.
 			if M._guestportal then
 				local ok_gp, err_gp = pcall(M._guest_apply_push, sys_raw, st)
-				if not ok_gp then
-					io.stderr:write("inform: guestportal: " .. tostring(err_gp) .. "\n")
-				end
+				if not ok_gp then stage_failed("guestportal", err_gp) end
 			end
+			M._note_push(st, failed, #radio_table > 0 or #vap_table > 0)
 		end
 
 		-- blocked_sta: the site's whole block list, newline-separated, on
@@ -7886,6 +7904,43 @@ local function build_stamp()
 	return M._build
 end
 
+-- The outcome of a config push (a setparam carrying system_cfg). Any stage
+-- failed: st.push_fail is now and st.push_fail_stages names them, plus one
+-- log line, because nothing heals it on its own (controller 10.6.106 does
+-- not push again, and a restart does not rerun the switch or system
+-- stages). In state.json, saved by the setparam branch, so a restart keeps
+-- showing it. A full push (one carrying the WiFi tables, which reruns every
+-- stage) that applied replaces the record; a partial one only adds to it,
+-- since the stages it skipped are still as they were. push_ok (the last
+-- fully applied push) is in memory only. "Applied" means no stage raised:
+-- a stage that refuses without raising (switchvlan on a board with no port
+-- map) is in the log only.
+M.PUSH_HINT = "Force Provision this device in the controller (or change one of its settings)"
+function M._note_push(st, failed, full)
+	M._push_open = false
+	if type(st) ~= "table" then return end
+	local names = {}
+	if not full then
+		for n in tostring(st.push_fail_stages or ""):gmatch("[^,]+") do names[#names + 1] = n end
+	end
+	for _, n in ipairs(type(failed) == "table" and failed or {}) do
+		local dup = false
+		for _, m in ipairs(names) do if m == n then dup = true end end
+		if not dup then names[#names + 1] = n end
+	end
+	if #names == 0 then
+		M._status.push_ok = M._time()
+		st.push_fail_stages, st.push_fail = nil, nil
+		return
+	end
+	if type(failed) == "table" and #failed > 0 then st.push_fail = M._time() end
+	st.push_fail_stages = table.concat(names, ",")
+	if type(failed) == "table" and #failed > 0 then
+		io.stderr:write("inform: config push applied in part, not applied: " .. st.push_fail_stages
+			.. " -- " .. M.PUSH_HINT .. " to send it again\n")
+	end
+end
+
 -- fields: {last_ok = epoch, last_type = "noop"} on success, or
 -- {last_fail = epoch, last_fail_msg = "..."} on a transport failure. The
 -- other side's last value is carried forward so the file always shows both
@@ -7904,6 +7959,9 @@ function M._write_status(st, fields)
 		"mac="           .. tostring(st and st.mac or ""),
 		"inform_url="    .. tostring(st and st.inform_url or ""),
 		"build="         .. build_stamp(),
+		"push_ok="       .. tostring(s.push_ok or 0),
+		"push_fail="     .. tostring(st and st.push_fail or 0),
+		"push_fail_stages=" .. (tostring(st and st.push_fail_stages or ""):gsub("[\r\n]", " ")),
 	}
 	local tmp = M.STATUS_FILE .. ".tmp"
 	local f = io.open(tmp, "w")
@@ -8265,6 +8323,15 @@ function M._tick(st, cfg, ufhw, ctx)
 	if M._unhandled then pcall(M._unhandled.flush) end
 	if not ok_h then
 		io.stderr:write("inform: handle_response failed: " .. tostring(applied) .. "\n")
+		-- A config push that raised outside its stages' pcalls: some of it
+		-- ran, the rest did not, and its state.save was skipped. Record and
+		-- save it rather than keep showing the last push as applied (a noop
+		-- run saves nothing, and an outside write reloads st from disk).
+		if M._push_open then
+			pcall(M._note_push, st, {"aborted"}, false)
+			pcall(M._state.save, st)
+			pcall(M._write_status, st, {})
+		end
 		return ctx.interval
 	end
 	-- After the state inform, never instead of it: the controller has just
