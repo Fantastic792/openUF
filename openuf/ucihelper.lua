@@ -3521,6 +3521,8 @@ local function owe_transition_ifname(iface)
 	-- One fork per VAP per pass: inform's _vap_watch asks for the VAP list on
 	-- every tick, and an uncached bss_info per OWE VAP would add a fork each
 	-- time. Outside a pass pass_memo recomputes, as before.
+	-- ifname goes into a shell command line below.
+	if type(iface.ifname) ~= "string" or not iface.ifname:match("^[%w%-%._]+$") then return nil end
 	return pass_memo("owe_peer:" .. iface.ifname, function()
 		local out = M._popen("ubus call hostapd bss_info '{\"iface\":\"" .. iface.ifname .. "\"}'")
 		local ok, info = pcall(cjson.decode, out or "")

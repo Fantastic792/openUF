@@ -200,7 +200,9 @@ end
 function M.deauth(mac, ifnames)
 	if not is_mac(mac) then return false end
 	for _, ifname in ipairs(ifnames or {}) do
-		M._exec("hostapd_cli -i " .. ifname .. " deauthenticate " .. mac .. " 2>/dev/null")
+		if util.valid_ifname(ifname) then
+			M._exec("hostapd_cli -i " .. ifname .. " deauthenticate " .. mac .. " 2>/dev/null")
+		end
 	end
 	return true
 end

@@ -463,7 +463,7 @@ local RRM_BEACON_ACTIVE  = 0x20  -- bit 5
 -- refused by hostapd itself with "does not support passive beacon report",
 -- before anything reaches the air.
 function M.capable_stations(ifname)
-	if not ifname then return {} end
+	if type(ifname) ~= "string" or not ifname:match(IFNAME_SAFE) then return {} end
 	local out = M._popen("ubus call hostapd." .. ifname .. " get_clients 2>/dev/null") or ""
 	local stations = {}
 	for mac, block in out:gmatch('"(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)":%s*(%b{})') do

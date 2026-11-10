@@ -7585,6 +7585,7 @@ function M._dfs_reset_radio(radio, ifname)
 			:format(ifname, want, tostring(caps.width), live))
 		return nil, "not expressible as a channel switch"
 	end
+	if not util.valid_ifname(ifname) then return nil, "not a netdev name" end
 	local cmd = "hostapd_cli -i " .. ifname .. " chan_switch "
 		.. rrm.CS_COUNT .. " " .. args
 	local out = M._run_cmd(cmd .. " 2>&1") or ""

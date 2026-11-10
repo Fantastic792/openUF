@@ -117,6 +117,16 @@ return {
 		end
 	},
 	{
+		name = "firewall: deauth skips an interface name that is not a netdev name",
+		fn = function()
+			with_capture(function(cmds)
+				firewall.deauth("aa:bb:cc:dd:ee:01", {"wlan0;reboot", "-x", "wlan1"})
+				assert_eq(#cmds, 1, "only the plain name is run")
+				assert_contains(cmds[1], "hostapd_cli -i wlan1 ", "the plain name")
+			end)
+		end
+	},
+	{
 		name = "firewall: deauth is a safe no-op with no interfaces",
 		fn = function()
 			with_capture(function(cmds)

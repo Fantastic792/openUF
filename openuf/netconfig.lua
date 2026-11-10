@@ -59,6 +59,12 @@ function M.netmask_to_prefix(netmask)
 	return octets == 4 and bits or 24
 end
 
+-- iface goes into a command line: a netdev name only (as util.valid_ifname), else refused.
+local function valid_iface(s)
+	return type(s) == "string" and #s <= 15 and s:match("^[%w%._][%w%-%._]*$") ~= nil
+		and s ~= "." and s ~= ".."
+end
+
 -- Replace /etc/resolv.conf with the controller-pushed nameservers.
 -- servers: array of IPv4 strings in controller order (resolv.nameserver.<k>.ip,
 -- sorted by <k>).
@@ -83,7 +89,7 @@ end
 -- deciding this is the right moment (e.g. a genuine controller push).
 -- dns: optional array of nameserver IPs, applied via apply_dns().
 function M.apply_static(iface, ip, netmask, gateway, dns)
-	if not iface or not ip or ip == "0.0.0.0" then return false end
+	if not valid_iface(iface) or not ip or ip == "0.0.0.0" then return false end
 	-- Same rule as apply_dns, for the same reason: ip and gateway come off
 	-- the wire and go into a command line, and pre-adoption that wire is
 	-- plain HTTP under the well-known key. Refused whole rather than
@@ -145,7 +151,7 @@ end
 -- again before it reaches a command line; a bad one is skipped. DNS is only
 -- rewritten when the snapshot had nameservers (apply_dns's own rule).
 function M.restore(iface, snap)
-	if not iface or type(snap) ~= "table" or type(snap.addrs) ~= "table" then return false end
+	if not valid_iface(iface) or type(snap) ~= "table" or type(snap.addrs) ~= "table" then return false end
 	local good = {}
 	for _, cidr in ipairs(snap.addrs) do
 		if is_cidr(cidr) then good[#good + 1] = cidr end
@@ -168,7 +174,7 @@ end
 -- Best-effort: real hardware's netifd handles this natively; here we shell
 -- out to udhcpc directly (present on both Alpine and OpenWrt).
 function M.apply_dhcp(iface)
-	if not iface then return false end
+	if not valid_iface(iface) then return false end
 	M._exec(string.format("ip addr flush dev %s 2>/dev/null", iface))
 	M._exec(string.format("udhcpc -i %s -n -q 2>/dev/null", iface))
 	return true

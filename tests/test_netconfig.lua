@@ -228,4 +228,15 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		name = "netconfig: a bad interface name reaches no command line",
+		fn = function()
+			with_capture(function(cmds)
+				assert_eq(netconfig.apply_static("br0;reboot", "10.0.0.2", "255.255.255.0", nil), false, "static")
+				assert_eq(netconfig.apply_dhcp("-br0"), false, "dhcp")
+				assert_eq(netconfig.restore("a b", {addrs = {}}), false, "restore")
+				assert_eq(#cmds, 0, "nothing was run")
+			end)
+		end
+	},
 }
