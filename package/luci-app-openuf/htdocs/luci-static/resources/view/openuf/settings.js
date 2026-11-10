@@ -253,6 +253,10 @@ return view.extend({
 		o.depends('use_only_unifi_wlan', '1');
 		o.datatype = 'uciname';
 
+		o = s.taboption('features', form.DynamicList, 'plugin', _('Plugins'),
+			_('Names of plugin files in /etc/openuf/plugins (without .lua), one per entry. A plugin changes the wireless settings the controller pushes and runs with the same rights as openUF itself, so list only code you have read. Plugins an installer enabled through /etc/openuf/plugins.enabled are loaded as well and need no entry here. Fast roaming with genuine UniFi access points is such a plugin: rrb-unifi, installed by its own setup tool.'));
+		o.datatype = 'uciname';
+
 		o = s.taboption('features', form.Flag, 'unifi_ft_interop', _('Fast roaming with genuine UniFi access points'),
 			_('Lets clients roam between this device and real UniFi access points without a full reconnect (802.11r). Needs the rrb-unifi translator installed on this device and its list of UniFi access points. Without the translator openUF access points still roam among themselves; turn this off only on a site that has real UniFi access points and no translator, where clients would otherwise try a fast roam towards them and fall back to a full reconnect.'));
 		o.default = '1';

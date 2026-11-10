@@ -327,7 +327,31 @@ function body(s) {
 	parts.push(section(_('Controller connection'), controllerBlock(s)));
 	parts.push(section(_('This device'), deviceBlock(s)));
 	parts.push(section(_('WiFi networks from the controller'), wlanBlock(s)));
+	if (arr(s.plugins).length)
+		parts.push(section(_('Plugins'), pluginsBlock(s),
+			_('Add-ons that change the wireless settings the controller pushes. Fast roaming with genuine UniFi access points is one (rrb-unifi, by d-malinowski).')));
 	return E('div', {}, parts);
+}
+// Every plugin the configuration asks for (/etc/config/openuf, conf.lua,
+// /etc/openuf/plugins.enabled) and whether openUF could load it. A plugin
+// that fails to load is skipped by openUF, so the reason is shown here.
+function pluginsBlock(s) {
+	const t = E('table', { 'class': 'table' }, [
+		E('tr', { 'class': 'tr table-titles' }, [
+			E('th', { 'class': 'th' }, _('Plugin')),
+			E('th', { 'class': 'th' }, _('State'))
+		])
+	]);
+	for (const p of arr(s.plugins)) {
+		const state = p.loaded
+			? E('span', { 'class': 'label success' }, _('loaded'))
+			: E('span', { 'class': 'label warning' }, _('not loaded: %s').format(p.reason || _('see the system log')));
+		t.appendChild(E('tr', { 'class': 'tr' }, [
+			E('td', { 'class': 'td' }, p.name),
+			E('td', { 'class': 'td' }, state)
+		]));
+	}
+	return t;
 }
 
 function ledgerBlock(s) {

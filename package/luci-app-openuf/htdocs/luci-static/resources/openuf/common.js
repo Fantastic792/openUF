@@ -47,6 +47,8 @@ return baseclass.extend({
 				uci.set('openuf', 'main', k, c[k] ? '1' : '0');
 		if (arr(c.keep_wlan_sections).length)
 			uci.set('openuf', 'main', 'keep_wlan_section', c.keep_wlan_sections);
+		if (arr(c.plugins).length)
+			uci.set('openuf', 'main', 'plugin', c.plugins);
 	},
 
 	// What openUF needs installed. The package brings every dependency in

@@ -1,5 +1,7 @@
 -- Tests for openuf/plugins.lua (opt-in third-party edits to per-VAP UCI
--- options) and its use in ucihelper.apply_config.
+-- options) and its use in ucihelper.apply_config. Upstream's twelve
+-- (jonasevcik/openUF 8287ecf + 9159efd) as they are, plus this tree's: the
+-- UCI list source and M.list() for the LuCI pages.
 -- Run from project root: lua tests/run_tests.lua
 
 local plugins   = dofile("openuf/plugins.lua")
@@ -437,6 +439,55 @@ return {
 			inform._reconcile_plugins(none, {})
 			assert_eq(none.cfgversion, "v1", "no plugins ever -> untouched")
 			inform._state, inform._plugins = orig_state, orig_plugins
+		end
+	},
+	{
+		name = "plugins: list() reports every requested plugin's load state once, with the reason",
+		fn = function()
+			with_plugins({good = plugin_src("return"), bad = "return {api = 7, vap_options = function() end}"},
+				function(logged)
+					local orig = plugins._read_file
+					plugins._read_file = function(path)
+						if path == plugins.LIST then return "good\n# a comment\nmissing\n" end
+						return orig(path)
+					end
+					local rows = plugins.list(cfg_of("good", "bad", "good"))
+					plugins._read_file = orig
+					assert_eq(#rows, 3, "deduped across conf.lua and plugins.enabled")
+					assert_eq(rows[1].name .. ":" .. tostring(rows[1].loaded), "good:true", "a loadable plugin")
+					assert_eq(rows[2].name .. ":" .. tostring(rows[2].loaded), "bad:false", "a refused one")
+					assert_true(rows[2].reason:find("api 7", 1, true) ~= nil, "with the reason: " .. tostring(rows[2].reason))
+					assert_eq(rows[3].name, "missing", "a name with no file")
+					assert_true(rows[3].reason:find("cannot read", 1, true) ~= nil, "says so")
+					assert_true(has_log(logged, "bad: not loaded"), "the refusal is logged as for enabled()")
+				end)
+		end
+	},
+	{
+		name = "plugins: a UCI-managed device lists plugins as `list plugin`, which uciconf hands to the same hook",
+		fn = function()
+			local uciconf = dofile("openuf/uciconf.lua")
+			local cursor = {
+				get_all = function(_, config, section)
+					if config == "openuf" and section == "main" then
+						return {[".type"] = "openuf", [".name"] = "main", plugin = {"rrb-unifi", "other"}}
+					end
+				end,
+				foreach = function(_, config, stype, fn)
+					if config == "openuf" and stype == "openuf" then
+						fn({[".type"] = "openuf", [".name"] = "main", plugin = {"rrb-unifi", "other"}})
+					end
+				end,
+			}
+			local got = uciconf.load(cursor, {dev = {conf = {net = {}}, openuf = {uap = {ufmodel = "u6iw"}}},
+				config = {plugins = {}}})
+			if got then
+				assert_eq(#got.config.plugins, 2, "both names")
+				with_plugins({}, function()
+					local rows = plugins.list(got)
+					assert_eq(rows[1].name, "rrb-unifi", "the UCI list reaches plugins.lua as conf.lua's would")
+				end)
+			end
 		end
 	},
 }

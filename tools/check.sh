@@ -212,6 +212,29 @@ _ft=$(uci -q get openuf.rrb.ft_iface 2>/dev/null); _ft=${_ft:-vft0}
 [ -f /var/run/openuf/rrb-peers.json ] && info "UniFi APs heard on the LAN: $(grep -o '"[0-9a-f][0-9a-f]:[0-9a-f:]*":{' /var/run/openuf/rrb-peers.json | wc -l | tr -d ' ')"
 echo ""
 
+# ── Plugins ──────────────────────────────────────────────────────────────────
+# Third-party plugins (USAGE.md "Plugins"), among them d-malinowski's rrb-unifi
+# for 802.11r roaming with genuine UniFi APs. Informational.
+echo "[ Plugins ]"
+if [ -s /etc/openuf/plugins.enabled ]; then
+	info "enabled by /etc/openuf/plugins.enabled: $(sed 's/#.*//' /etc/openuf/plugins.enabled | tr -s ' \n' ' ')"
+else
+	info "none enabled by /etc/openuf/plugins.enabled"
+fi
+_pl=$(uci -q get openuf.main.plugin 2>/dev/null); [ -n "$_pl" ] && info "enabled by openuf.main plugin: $_pl"
+if [ -f /etc/openuf/plugins/rrb-unifi.lua ]; then
+	ok "rrb-unifi plugin present (802.11r roaming with genuine UniFi APs)"
+	if [ -x /etc/init.d/rrb-unifi ]; then
+		/etc/init.d/rrb-unifi running >/dev/null 2>&1 && ok "rrb-unifi translator running" || info "rrb-unifi translator not running (rrb-unifi-setup verify)"
+	else
+		info "the rrb-unifi translator service is missing (rrb-unifi-setup install)"
+	fi
+fi
+if [ -f /etc/init.d/openuf-rrb ] || uci -q get network.openuf_ftveth >/dev/null 2>&1; then
+	info "leftovers of openUF's former built-in translator found; the daemon removes its veth after the next push (USAGE.md § 6)"
+fi
+echo ""
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo "==========================="
 echo "Results: $PASS passed, $FAIL failed"

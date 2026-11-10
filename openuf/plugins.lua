@@ -1,14 +1,26 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
 --[[
 	plugins.lua -- opt-in third-party extensions to the per-VAP UCI options.
+
+	The hook, its `api = 1` contract and its guard rails are jonasevcik/openUF's
+	(8287ecf and 9159efd, 2026-10-25/28), taken as they are so that a plugin
+	written for upstream runs here unchanged -- d-malinowski's rrb-unifi plugin
+	(https://github.com/d-malinowski/unifi-openwrt-roaming, openuf-plugin/) is
+	the first one on real hardware, and the reason this tree carries no
+	802.11r translator of its own any more. This tree adds one thing: the
+	plugin list may also come from UCI (`openuf.main`, `list plugin 'name'`,
+	through uciconf.lua), and M.list() reports every requested plugin's load
+	state for the LuCI pages.
 
 	openUF cannot carry every interoperability recipe, and some depend on
 	software that changes the stock OpenWrt install (daemons, extra netdevs).
 	A plugin lets such a recipe live in its own project and be switched on per
 	device, while openUF itself stays what ships on a clean OpenWrt.
 
-	Off by default. conf.lua's `config.plugins = {"name", ...}` is an explicit
-	allowlist: nothing in the plugin directory is loaded unless it is named.
-	With the list empty or absent, apply_config's output is unchanged.
+	Off by default. conf.lua's `config.plugins = {"name", ...}` (or the UCI
+	list) is an explicit allowlist: nothing in the plugin directory is loaded
+	unless it is named. With the list empty or absent, apply_config's output
+	is unchanged.
 
 	A plugin is /etc/openuf/plugins/<name>.lua, which returns
 
@@ -53,8 +65,8 @@ local util = package.loaded["openuf.util"]
 
 M.API = 1
 M.DIR = "/etc/openuf/plugins"
--- Second opt-in source beside conf.lua: one plugin name per line, `#` starts a
--- comment. An installer edits this, never the user's conf.lua.
+-- Second opt-in source beside conf.lua / UCI: one plugin name per line, `#`
+-- starts a comment. An installer edits this, never the user's conf.lua.
 M.LIST = "/etc/openuf/plugins.enabled"
 
 -- Injectable seams.
@@ -86,6 +98,10 @@ end
 -- Forget what has been loaded (tests).
 function M._reset() loaded = {} end
 
+-- Why `name` could not be loaded, remembered beside the load result so that
+-- M.list can say it without a second attempt.
+local reasons = {}
+
 local function get(name)
 	if loaded[name] == nil then
 		local mod, err
@@ -108,12 +124,13 @@ local function get(name)
 			M._log(string.format("%s: not loaded: %s", tostring(name), tostring(err)))
 		end
 		loaded[name] = mod or false
+		reasons[name] = (not mod) and tostring(err) or nil
 	end
 	return loaded[name] or nil
 end
 
--- The plugin names asked for: conf.lua's list first, then M.LIST's lines. A
--- name listed twice appears once.
+-- The plugin names asked for: conf.lua's (or UCI's) list first, then M.LIST's
+-- lines. A name listed twice appears once.
 local function names_of(cfg)
 	local names = cfg and cfg.config and cfg.config.plugins
 	local all = {}
@@ -168,6 +185,21 @@ function M.enabled(cfg)
 		end
 	end
 	if M._pass then M._pass_list = {cfg = cfg, list = out} end
+	return out
+end
+
+-- Every requested plugin with its load state, for `openuf probe status` and
+-- the LuCI pages: {{name=, loaded=, reason=}, ...}, deduped, in order.
+function M.list(cfg)
+	local out, seen = {}, {}
+	for _, name in ipairs(names_of(cfg)) do
+		if not seen[name] then
+			seen[name] = true
+			local mod = get(name)
+			out[#out + 1] = {name = tostring(name), loaded = mod ~= nil,
+				reason = (not mod) and reasons[name] or nil}
+		end
+	end
 	return out
 end
 
