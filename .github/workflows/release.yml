@@ -273,17 +273,28 @@ jobs:
     env:
       TAG: ${{ needs.version.outputs.tag }}
     steps:
+      - uses: actions/checkout@v4   # for keys/openuf-feed.pem
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          FEED_KEY: ${{ secrets.OPENUF_FEED_KEY }}
         run: |
           set -eu
+          # setup.sh and update.sh refuse a release whose SHA256SUMS is not signed
+          # (keys/openuf-feed.pem), so a release with no key would be uninstallable.
+          [ -n "$FEED_KEY" ] || { echo "::error::OPENUF_FEED_KEY is not set: cannot sign SHA256SUMS"; exit 1; }
+          pub="$PWD/keys/openuf-feed.pem"
           mkdir assets && cd assets
           gh release download "$TAG"
-          rm -f SHA256SUMS
+          rm -f SHA256SUMS SHA256SUMS.sig
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
-          gh release upload "$TAG" --clobber SHA256SUMS
+          key="$RUNNER_TEMP/openuf-sums-private.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$FEED_KEY" > "$key")
+          openssl dgst -sha256 -sign "$key" -out SHA256SUMS.sig SHA256SUMS
+          openssl dgst -sha256 -verify "$pub" -signature SHA256SUMS.sig SHA256SUMS
+          gh release upload "$TAG" --clobber SHA256SUMS SHA256SUMS.sig
 
   # The signed apk feed: the 25.12 apks under apk/ on gh-pages, with a
   # packages.adb signed by OPENUF_FEED_KEY. Pages serves it at

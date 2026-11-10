@@ -50,7 +50,7 @@ VERSION="1.1"
 # Overridable so a fork, a release, a branch or a local checkout can be
 # installed without editing this file:
 #   OPENUF_REPO=owner/repo  OPENUF_REF=v0.2.0  sh setup.sh   # a release tag
-#   OPENUF_BRANCH=main sh setup.sh               # a branch: UNVERIFIED
+#   OPENUF_BRANCH=main OPENUF_UNVERIFIED=1 sh setup.sh   # a branch: no checksum
 #   OPENUF_SRC=/root/openUF sh setup.sh          # a tree already on the device
 # A release (the latest one by default) is the only source with a checksum:
 # its SHA256SUMS covers setup.sh, the source archive and every package, and
@@ -63,6 +63,7 @@ OPENUF_BRANCH=${OPENUF_BRANCH:-}
 OPENUF_SRC=${OPENUF_SRC:-}
 OPENUF_TARBALL_URL=${OPENUF_TARBALL_URL:-}
 OPENUF_TARBALL_SHA256=${OPENUF_TARBALL_SHA256:-}
+OPENUF_UNVERIFIED=${OPENUF_UNVERIFIED:-}   # 1: allow a branch or archive with no checksum
 if [ -n "$OPENUF_REF" ]; then
 	_api_rel="releases/tags/$OPENUF_REF"
 	RELEASE_DL="https://github.com/$OPENUF_REPO/releases/download/$OPENUF_REF"
@@ -82,7 +83,7 @@ fi
 # SHA256SUMS beside them.
 OPENUF_RELEASE_URL=${OPENUF_RELEASE_URL:-"https://api.github.com/repos/$OPENUF_REPO/$_api_rel"}
 OPENUF_PKG_DIR=${OPENUF_PKG_DIR:-}
-export OPENUF_REPO OPENUF_REF OPENUF_BRANCH OPENUF_TARBALL_URL OPENUF_TARBALL_SHA256 \
+export OPENUF_REPO OPENUF_REF OPENUF_BRANCH OPENUF_TARBALL_URL OPENUF_TARBALL_SHA256 OPENUF_UNVERIFIED \
 	OPENUF_SELF_URL OPENUF_RELEASE_URL
 
 INSTALL_DIR=/opt/openuf      # the headless (file) install
@@ -159,6 +160,20 @@ check_sha256() {
 # release_asset <release.json> <file-name BRE>: the asset's download URL. The
 # API serves the JSON on one line to a plain client, so it is split at the
 # commas first (an URL carries none).
+# verify_sums_sig <SHA256SUMS> <SHA256SUMS.sig>: the list was signed by the release
+# key built in below (keys/openuf-feed.pem). A checksum that comes from the same place
+# as the file only shows the download is whole; the signature shows the maintainer made it.
+verify_sums_sig() {
+	command -v openssl >/dev/null 2>&1 || { warn "no openssl on this image to check the signature with"; return 1; }
+	_pub="$1.pub"
+	cat > "$_pub" <<'PEM'
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYJEk/j4lcP30UQBA7Xglqu+8hhkr
+XhbAV+eV5dfX/VXbhQ/7nTBrNdPJ7V7mh4OdVyB+GMB48B20r5V9VvdbfA==
+-----END PUBLIC KEY-----
+PEM
+	openssl dgst -sha256 -verify "$_pub" -signature "$2" "$1" >/dev/null 2>&1
+}
 release_asset() {
 	tr ',' '\n' < "$1" \
 		| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\/'"$2"'\)".*/\1/p'
@@ -211,6 +226,8 @@ if [ -z "${OPENUF_REEXEC:-}" ] && [ ! -t 0 ]; then
 			# The copy about to run as root is the release's, by its checksum.
 			if [ -z "$OPENUF_BRANCH" ] && [ "$OPENUF_SELF_URL" = "$RELEASE_DL/setup.sh" ]; then
 				{ fetch "$RELEASE_DL/SHA256SUMS" "$_selfdir/SHA256SUMS" \
+					&& fetch "$RELEASE_DL/SHA256SUMS.sig" "$_selfdir/SHA256SUMS.sig" \
+					&& verify_sums_sig "$_selfdir/SHA256SUMS" "$_selfdir/SHA256SUMS.sig" \
 					&& check_sha256 "$_self" "$_selfdir/SHA256SUMS"; } \
 					|| die "the downloaded setup.sh could not be checked against the release's
        SHA256SUMS; not running it"
@@ -590,7 +607,9 @@ else
 				|| die "the archive does not match OPENUF_TARBALL_SHA256; not installing it"
 			ok "sha256 matches OPENUF_TARBALL_SHA256"
 		else
-			warn "UNVERIFIED source: $_tgz_url has no checksum (OPENUF_TARBALL_SHA256 gives one)"
+			[ "$OPENUF_UNVERIFIED" = 1 ] || die "$_tgz_url has no checksum, so nothing says it is
+       genuine. Give one with OPENUF_TARBALL_SHA256, or set OPENUF_UNVERIFIED=1 to install it anyway."
+			warn "UNVERIFIED source: $_tgz_url (OPENUF_UNVERIFIED=1)"
 		fi
 	else
 		# A release: its source archive, checked against its SHA256SUMS.
@@ -603,8 +622,14 @@ else
        its files against (a release made before checksums). Use a newer release,
        or OPENUF_BRANCH=<branch> to install a branch unverified."
 		info "$_tgz_url"
+		_sig_url=$(release_asset "$WORK/release.json" 'SHA256SUMS\.sig' | head -1)
+		[ -n "$_sig_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS.sig, so its
+       checksums are not signed. Use a newer release, or OPENUF_BRANCH=<branch> OPENUF_UNVERIFIED=1."
 		fetch "$_tgz_url" "$WORK/$(basename "$_tgz_url")" && fetch "$_sums_url" "$WORK/SHA256SUMS" \
-			|| die "$_dl_fail"
+			&& fetch "$_sig_url" "$WORK/SHA256SUMS.sig" || die "$_dl_fail"
+		verify_sums_sig "$WORK/SHA256SUMS" "$WORK/SHA256SUMS.sig" \
+			|| die "SHA256SUMS is not signed by the openUF release key; not installing it"
+		ok "SHA256SUMS signature matches the release key"
 		check_sha256 "$WORK/$(basename "$_tgz_url")" "$WORK/SHA256SUMS" \
 			|| die "the source archive does not match the release's SHA256SUMS; not installing it"
 		ok "sha256 matches the release's SHA256SUMS"

@@ -2544,4 +2544,14 @@ return {
 			sysinfo._mac_swept_at = nil
 		end
 	},
+	{
+		name = "sysinfo: shq() leaves plain names alone and quotes the rest",
+		fn = function()
+			assert_eq(sysinfo._shq("wlan0"), "wlan0", "plain name unchanged")
+			assert_eq(sysinfo._shq("br-lan.10"), "br-lan.10", "dots and dashes unchanged")
+			assert_eq(sysinfo._shq("a;reboot"), "'a;reboot'", "a separator is quoted")
+			assert_eq(sysinfo._shq("a'b"), "'a'\\''b'", "a single quote is closed, escaped, reopened")
+			assert_eq(sysinfo._shq("x y"), "'x y'", "a space is quoted")
+		end
+	},
 }

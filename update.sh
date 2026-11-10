@@ -4,7 +4,7 @@
 #
 #   openuf-update                        # the latest release, sha256-checked
 #   openuf-update --ref v1.2.0           # that release instead, sha256-checked
-#   openuf-update --branch main          # a branch: UNVERIFIED, no checksum
+#   openuf-update --branch main --unverified   # a branch: no checksum, so say so
 #   openuf-update --from /tmp/x.tar.gz   # a tarball already on the device
 #   openuf-update --from /tmp/openUF     # an unpacked tree already on the device
 #   openuf-update --check                # show what is installed; change nothing
@@ -55,6 +55,7 @@ die()  { printf '\nerror %s\n' "$*" >&2; exit 1; }
 # ─── Options ────────────────────────────────────────────────────────────────
 FROM=""
 CHECK=0
+UNVERIFIED=0
 ROLLBACK=1
 RESTART=1
 KEEP_WORK=0
@@ -63,6 +64,7 @@ while [ $# -gt 0 ]; do
 		--from)        shift; [ $# -gt 0 ] || die "--from needs a path"; FROM=$1 ;;
 		--ref)         shift; [ $# -gt 0 ] || die "--ref needs a release tag"; OPENUF_REF=$1 ;;
 		--branch)      shift; [ $# -gt 0 ] || die "--branch needs a branch name"; OPENUF_BRANCH=$1 ;;
+		--unverified)  UNVERIFIED=1 ;;
 		--check)       CHECK=1 ;;
 		--no-rollback) ROLLBACK=0 ;;
 		--no-restart)  RESTART=0 ;;
@@ -167,6 +169,20 @@ check_sha256() {
 	[ "$_got" = "$_want" ] || { warn "$_n: sha256 $_got, but $(basename "$2") says $_want"; return 1; }
 	return 0
 }
+# verify_sums_sig <SHA256SUMS> <SHA256SUMS.sig>: the list was signed by the release
+# key built in below (keys/openuf-feed.pem). A checksum that comes from the same place
+# as the file only shows the download is whole; the signature shows the maintainer made it.
+verify_sums_sig() {
+	command -v openssl >/dev/null 2>&1 || { warn "no openssl on this image to check the signature with"; return 1; }
+	_pub="$1.pub"
+	cat > "$_pub" <<'PEM'
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYJEk/j4lcP30UQBA7Xglqu+8hhkr
+XhbAV+eV5dfX/VXbhQ/7nTBrNdPJ7V7mh4OdVyB+GMB48B20r5V9VvdbfA==
+-----END PUBLIC KEY-----
+PEM
+	openssl dgst -sha256 -verify "$_pub" -signature "$2" "$1" >/dev/null 2>&1
+}
 release_asset() {
 	tr ',' '\n' < "$1" \
 		| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\/'"$2"'\)".*/\1/p'
@@ -205,7 +221,9 @@ else
 				|| die "the archive does not match OPENUF_TARBALL_SHA256; not installing it"
 			ok "sha256 matches OPENUF_TARBALL_SHA256"
 		else
-			warn "UNVERIFIED source: $OPENUF_TARBALL_URL has no checksum (OPENUF_TARBALL_SHA256 gives one)"
+			[ "$UNVERIFIED" = 1 ] || die "$OPENUF_TARBALL_URL has no checksum, so nothing says it is
+      genuine. Give one with OPENUF_TARBALL_SHA256, or add --unverified to install it anyway."
+			warn "UNVERIFIED source: $OPENUF_TARBALL_URL (--unverified)"
 		fi
 		_what="$OPENUF_REPO @ ${OPENUF_BRANCH:-$OPENUF_TARBALL_URL}"
 	else
@@ -217,10 +235,17 @@ else
 		[ -n "$_tgz_url" ] || die "the release at $OPENUF_RELEASE_URL has no openuf-<version>.tar.gz"
 		[ -n "$_sums_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS to check
       its archive against (a release made before checksums). Use a newer release,
-      or --branch <branch> to update from a branch unverified."
+      or --branch <branch> --unverified to update from a branch."
 		info "$_tgz_url"
 		_tgz="$WORK/$(basename "$_tgz_url")"
-		fetch "$_tgz_url" "$_tgz" && fetch "$_sums_url" "$WORK/SHA256SUMS" || die "$_dl_fail"
+		_sig_url=$(release_asset "$WORK/release.json" 'SHA256SUMS\.sig' | head -1)
+		[ -n "$_sig_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS.sig, so its
+      checksums are not signed. Use a newer release, or --branch <branch> --unverified."
+		fetch "$_tgz_url" "$_tgz" && fetch "$_sums_url" "$WORK/SHA256SUMS" \
+			&& fetch "$_sig_url" "$WORK/SHA256SUMS.sig" || die "$_dl_fail"
+		verify_sums_sig "$WORK/SHA256SUMS" "$WORK/SHA256SUMS.sig" \
+			|| die "SHA256SUMS is not signed by the openUF release key; not installing it"
+		ok "SHA256SUMS signature matches the release key"
 		check_sha256 "$_tgz" "$WORK/SHA256SUMS" \
 			|| die "the source archive does not match the release's SHA256SUMS; not installing it"
 		ok "sha256 matches the release's SHA256SUMS"

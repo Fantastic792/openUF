@@ -15,6 +15,16 @@ M._read_file = util.read_file
 -- Injectable: override in tests to return fixture command output
 M._run_cmd = util.capture
 
+-- A name for a shell command line: left as is when it is plain (so the command reads the
+-- same), else single-quoted. Interface, bridge and phy names reach these commands from
+-- the device's own config and from the controller.
+local function shq(s)
+	s = tostring(s)
+	if s:match("^[%w%.%-_:/]+$") then return s end
+	return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+M._shq = shq
+
 
 -- ─── Lookup pass ────────────────────────────────────────────────────────────
 --
@@ -246,7 +256,7 @@ local SURVEY_FIELDS = {
 -- Returns a table: {freq, noise, channel_time, channel_time_busy, channel_time_rx, channel_time_tx}
 function M.radio_stats(ifname)
 	if not ifname then return {} end
-	local output = M._run_cmd("iw dev " .. ifname .. " survey dump")
+	local output = M._run_cmd("iw dev " .. shq(ifname) .. " survey dump")
 	local result = {}
 	local current = nil
 	for line in output:gmatch("[^\n]+") do
@@ -365,7 +375,7 @@ end
 -- `station dump` output, confirmed via `strings /usr/sbin/iw`.
 function M.sta_table(ifname)
 	if not ifname then return {} end
-	local output = M._run_cmd("iw dev " .. ifname .. " station dump")
+	local output = M._run_cmd("iw dev " .. shq(ifname) .. " station dump")
 	local clients = {}
 	local cur = nil
 	for line in output:gmatch("[^\n]+") do
@@ -843,7 +853,7 @@ local SCAN_LINE = {
 
 function M.scan_table(ifname)
 	if not ifname then return {} end
-	local output = M._run_cmd("iw dev " .. ifname .. " scan dump")
+	local output = M._run_cmd("iw dev " .. shq(ifname) .. " scan dump")
 	-- For the [boottime] form of "last seen" below: /proc/uptime and the
 	-- driver's stamp are both on the CLOCK_BOOTTIME axis.
 	local now_up = M.uptime()
@@ -1120,7 +1130,7 @@ function M._phy_info(phy)
 	local now = M._time()
 	local c = M._phy_info_cache[phy]
 	if c and (now - c.at) < M.PHY_INFO_TTL then return c.text, c.caps end
-	local text = M._run_cmd("iw phy#" .. phy .. " info")
+	local text = M._run_cmd("iw phy#" .. shq(phy) .. " info")
 	if not text or text == "" then return text, nil end
 	local caps = parse_phy_info(text)
 	M._phy_info_cache[phy] = {text = text, caps = caps, at = now}
@@ -1135,7 +1145,7 @@ end
 -- read; the sweep then runs in one go, as it always did.
 function M.phy_frequencies(ifname)
 	if not ifname then return nil end
-	local dev_info = M._run_cmd("iw dev " .. ifname .. " info") or ""
+	local dev_info = M._run_cmd("iw dev " .. shq(ifname) .. " info") or ""
 	local phy = dev_info:match("wiphy%s+(%d+)")
 	if not phy then return nil end
 	local text = M._phy_info(phy)
@@ -1199,7 +1209,7 @@ local function iw_dev_info(ifname)
 		for name, l in pairs(map) do map[name] = table.concat(l, "\n") .. "\n" end
 		return map
 	end)
-	return by_ifname and by_ifname[ifname] or M._run_cmd("iw dev " .. ifname .. " info")
+	return by_ifname and by_ifname[ifname] or M._run_cmd("iw dev " .. shq(ifname) .. " info")
 end
 
 function M.radio_caps(ifname)
@@ -1254,7 +1264,7 @@ function M.phy_channels(ifname)
 	local dev_info = iw_dev_info(ifname)
 	local phy = dev_info and dev_info:match("wiphy%s+(%d+)")
 	if not phy then return nil end
-	local text = M._run_cmd("iw phy#" .. phy .. " channels")
+	local text = M._run_cmd("iw phy#" .. shq(phy) .. " channels")
 	if not text or text == "" then return nil end
 	return text
 end
@@ -1509,7 +1519,7 @@ function M.mac_table(ifname, bridge, allow_tap)
 	if bridge then
 		macs = hosts_by_port(M.bridge_fdb_ports(bridge))[ifname]
 	else
-		local fdb_out = M._run_cmd("bridge fdb show dev " .. ifname)
+		local fdb_out = M._run_cmd("bridge fdb show dev " .. shq(ifname))
 		macs = {}
 		for line in fdb_out:gmatch("[^\n]+") do
 			if not line:find("self") and not line:find("permanent") and line:find("master") then
@@ -1632,7 +1642,7 @@ function M.bridge_fdb_ports(bridge)
 	-- strict subset of what is already here.
 	return pass_memo("fdb_br:" .. bridge, function()
 	local ports = {}
-	local out = M._run_cmd("bridge fdb show br " .. bridge)
+	local out = M._run_cmd("bridge fdb show br " .. shq(bridge))
 	if not out or out == "" then return ports end
 	for line in out:gmatch("[^\n]+") do
 		if line:find("master") and not line:find("self")
@@ -1692,7 +1702,7 @@ end
 -- is no per-port packet or error count to be had from this interface.
 function M.switch_status(device)
 	local status = {ports = {}, arl = {}}
-	local out = M._run_cmd("swconfig dev " .. (device or "switch0") .. " show")
+	local out = M._run_cmd("swconfig dev " .. shq(device or "switch0") .. " show")
 	if not out or out == "" then return status end
 
 	local cur   -- physical port whose section is being parsed
