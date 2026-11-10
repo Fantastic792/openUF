@@ -26,8 +26,10 @@
 ]]--
 
 local cjson = require("cjson")
+-- util.lua sits next to this file: found by our own path, never the working
+-- directory (syswrapper loads this by absolute path, as root, from any cwd).
 local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
+	or assert(loadfile(((debug.getinfo(1, "S").source or ""):match("^@(.*/)") or "") .. "util.lua"))()
 
 local M = {}
 

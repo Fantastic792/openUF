@@ -570,6 +570,24 @@ return {
 		end
 	},
 	{
+		-- syswrapper loads state.lua by absolute path, as root, from the
+		-- caller's cwd: util.lua must come from beside it, not from there.
+		name = "state: loads from another working directory and ignores a util.lua planted there",
+		fn = function()
+			local pwd = io.popen("pwd"); local root = pwd:read("*l"); pwd:close()
+			local dir = os.tmpname(); os.remove(dir)
+			assert_eq(os.execute("mkdir -p " .. dir), 0, "mkdir")
+			local f = io.open(dir .. "/util.lua", "w")
+			f:write("PLANTED = true return {}\n"); f:close()
+			local lua = (arg and arg[-1]) or "lua"
+			local p = io.popen("cd " .. dir .. " && " .. lua .. " -e 'package.loaded[\"openuf.util\"]=nil; "
+				.. "local s = dofile(\"" .. root .. "/openuf/state.lua\"); print(PLANTED == nil and type(s.save))' 2>&1")
+			local out = p:read("*a"); p:close()
+			os.execute("rm -rf " .. dir)
+			assert_contains(out, "function", "state.lua loads from a foreign cwd: " .. out)
+		end
+	},
+	{
 		-- The SSH bootstrap account reads and writes state.json through its
 		-- group (openuf-bootstrap.sh: root:<gid> 0660). A save must keep that.
 		name = "state: with a bootstrap group the file is 0660 in that group, before the rename",

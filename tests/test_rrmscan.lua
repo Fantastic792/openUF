@@ -839,8 +839,13 @@ return {
 			-- Names off the event file never reach a shell unchecked.
 			assert_nil(rrmscan.iface_bssid("phy0;reboot"), "bad ifname refused")
 			assert_nil(rrmscan.sta_signal("phy0-ap1", "x; reboot"), "bad station refused")
-			assert_nil(rrmscan.iface_bssid("-h"), "an option-like ifname refused")
-			assert_nil(rrmscan.sta_signal("-h", "aa:bb:cc:dd:ee:ff"), "an option-like ifname refused")
+			local reached, o_popen = false, rrmscan._popen
+			rrmscan._popen = function() reached = true; return "" end
+			local r1, r2 = rrmscan.iface_bssid("-h"), rrmscan.sta_signal("-h", "aa:bb:cc:dd:ee:ff")
+			rrmscan._popen = o_popen
+			assert_nil(r1, "an option-like ifname refused")
+			assert_nil(r2, "an option-like ifname refused")
+			assert_false(reached, "an option-like ifname never reaches the shell")
 		end
 	},
 	{
