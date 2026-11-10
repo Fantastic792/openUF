@@ -56,7 +56,7 @@ jobs:
       # checked out yet.
       ref: ${{ steps.pick.outputs.ref }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0   # every tag, to find the newest version
       - id: pick
@@ -122,7 +122,7 @@ jobs:
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.version.outputs.ref }}
       - name: Install Lua 5.1 and the bindings the suite needs
@@ -196,7 +196,7 @@ jobs:
           - sdk: x86_64-25.12-SNAPSHOT
             format: apk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.version.outputs.ref }}
       - name: Point the Makefiles at this release's archive
@@ -239,7 +239,7 @@ jobs:
           # under logs/, uploaded below when something fails.
       - name: Keep the per-package build logs when the SDK fails
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sdk-logs-${{ matrix.format }}
           path: logs/
@@ -249,7 +249,7 @@ jobs:
           mkdir -p out
           find bin -type f \( -name 'openuf*.ipk' -o -name 'openuf*.apk' -o -name 'luci-app-openuf*.ipk' -o -name 'luci-app-openuf*.apk' -o -name 'luci-theme-halo*.ipk' -o -name 'luci-theme-halo*.apk' \) -exec cp -v {} out/ \;
           ls -l out
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: openuf-${{ matrix.format }}
           path: out/*
@@ -273,7 +273,7 @@ jobs:
     env:
       TAG: ${{ needs.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4   # for keys/openuf-feed.pem
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4   # for keys/openuf-feed.pem
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -327,11 +327,11 @@ jobs:
             echo "have=no" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.key.outputs.have == 'yes'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.version.outputs.ref }}
       - if: steps.key.outputs.have == 'yes'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: openuf-apk
           path: feed
