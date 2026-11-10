@@ -47,18 +47,6 @@
 				"/usr/bin/openuf deps --check": [
 					"exec"
 				],
-				"/etc/init.d/openuf restart": [
-					"exec"
-				],
-				"/etc/init.d/openuf start": [
-					"exec"
-				],
-				"/etc/init.d/openuf stop": [
-					"exec"
-				],
-				"/usr/bin/openuf reset-inform": [
-					"exec"
-				],
 				"/usr/bin/openuf 11k-scan": [
 					"exec"
 				],
@@ -82,6 +70,18 @@
 					"exec"
 				],
 				"/usr/bin/openuf deps --install *": [
+					"exec"
+				],
+				"/etc/init.d/openuf restart": [
+					"exec"
+				],
+				"/etc/init.d/openuf start": [
+					"exec"
+				],
+				"/etc/init.d/openuf stop": [
+					"exec"
+				],
+				"/usr/bin/openuf reset-inform": [
 					"exec"
 				]
 			},

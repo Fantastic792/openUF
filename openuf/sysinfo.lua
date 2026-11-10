@@ -15,14 +15,7 @@ M._read_file = util.read_file
 -- Injectable: override in tests to return fixture command output
 M._run_cmd = util.capture
 
--- A name for a shell command line: left as is when it is plain (so the command reads the
--- same), else single-quoted. Interface, bridge and phy names reach these commands from
--- the device's own config and from the controller.
-local function shq(s)
-	s = tostring(s)
-	if s:match("^[%w%.%-_:/]+$") then return s end
-	return "'" .. s:gsub("'", "'\\''") .. "'"
-end
+local shq = util.shq
 M._shq = shq
 
 

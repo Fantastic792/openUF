@@ -548,6 +548,28 @@ return {
 		end
 	},
 	{
+		-- The body holds the authkey: the mode must be on the file before any
+		-- of it is written, or it sits at the umask's 0644 for a moment.
+		name = "state: the temp file is made owner-only before the body is written",
+		fn = function()
+			with_tmp(function()
+				local o_exec, size = state._execute, nil
+				state._execute = function(c)
+					if size == nil and c:find("chmod", 1, true) then
+						local f = io.open(TMP .. ".tmp", "rb")
+						size = #f:read("*a"); f:close()
+					end
+					return 0
+				end
+				local ok, err = pcall(state.save, {adopted = true, authkey = "aabbccddeeff00112233445566778899",
+					cfgversion = "", inform_url = "http://x/inform"})
+				state._execute = o_exec
+				if not ok then error(err, 0) end
+				assert_eq(size, 0, "temp file still empty when the mode is set")
+			end)
+		end
+	},
+	{
 		-- The SSH bootstrap account reads and writes state.json through its
 		-- group (openuf-bootstrap.sh: root:<gid> 0660). A save must keep that.
 		name = "state: with a bootstrap group the file is 0660 in that group, before the rename",
@@ -560,11 +582,12 @@ return {
 					cfgversion = "", inform_url = "http://x/inform"})
 				state._execute, state.share_gid = o_exec, nil
 				if not ok then error(err, 0) end
-				assert_eq(#cmds, 1, "one command")
+				assert_eq(#cmds, 2, "mode, then flush")
 				local q = "'" .. TMP .. ".tmp'"
-				assert_eq(cmds[1], "chgrp 900 " .. q .. " && chmod 660 " .. q .. " || chmod 600 " .. q
-					.. "; fsync " .. q .. " 2>/dev/null || sync " .. q .. " 2>/dev/null",
-					"on the temp file, owner-only when the group is gone, then flushed")
+				assert_eq(cmds[1], "chgrp 900 " .. q .. " && chmod 660 " .. q .. " || chmod 600 " .. q,
+					"on the temp file, owner-only when the group is gone")
+				assert_eq(cmds[2], "fsync " .. q .. " 2>/dev/null || sync " .. q .. " 2>/dev/null",
+					"then flushed")
 			end)
 		end
 	},

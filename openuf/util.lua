@@ -68,6 +68,14 @@ function M.valid_ifname(s)
 		and s ~= "." and s ~= ".."
 end
 
+-- A string for a shell command line: left as is when plain (so the command reads the
+-- same), else single-quoted; `always` quotes it even then.
+function M.shq(s, always)
+	s = tostring(s)
+	if not always and s:match("^[%w%.%-_:/]+$") then return s end
+	return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
 -- band/bor/bxor/lshift/rshift: LuaBitOp, bit32, or 5.3+ integer operators.
 -- Built on first use, so a module that never needs it does not fail to load
 -- on a Lua that has none of the three.

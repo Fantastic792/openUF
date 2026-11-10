@@ -26,6 +26,8 @@
 ]]--
 
 local cjson = require("cjson")
+local util = package.loaded["openuf.util"]
+	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 local M = {}
 
@@ -321,7 +323,7 @@ end
 M.share_gid = nil
 M._execute  = os.execute
 local function protect(path)
-	local q = "'" .. path .. "'"
+	local q = util.shq(path, true)
 	local gid = tonumber(M.share_gid)
 	local mode
 	if gid then
@@ -332,7 +334,11 @@ local function protect(path)
 	else
 		mode = "chmod 600 " .. q
 	end
-	M._execute(mode .. "; fsync " .. q .. " 2>/dev/null || sync " .. q .. " 2>/dev/null")
+	M._execute(mode)
+end
+local function flush(path)
+	local q = util.shq(path, true)
+	M._execute("fsync " .. q .. " 2>/dev/null || sync " .. q .. " 2>/dev/null")
 end
 
 M.last_written = nil
@@ -350,12 +356,15 @@ function M.save(st)
 	local f = io.open(tmp, "w")
 	if not f then
 		local dir = M._state_file:match("^(.*)/[^/]+$")
-		if dir then os.execute("mkdir -p '" .. dir .. "'") end
+		if dir then os.execute("mkdir -p " .. util.shq(dir, true)) end
 		f = io.open(tmp, "w")
 		if not f then
 			error("state.save: cannot write to " .. tmp)
 		end
 	end
+	-- The mode goes on the EMPTY file: the body holds the authkey, and a file
+	-- made with the writer's umask (0644) must never hold it, even briefly.
+	protect(tmp)
 	local body = cjson.encode(st)
 	-- A full overlay fails the write or the close, not the open. Renaming that
 	-- short file over the good one cost the adoption on the next start (the
@@ -367,7 +376,7 @@ function M.save(st)
 		error("state.save: cannot write " .. tmp .. ": " .. tostring(werr or cerr)
 			.. " -- keeping the previous state file")
 	end
-	protect(tmp)
+	flush(tmp)
 	local ok, err = os.rename(tmp, M._state_file)
 	if not ok then
 		os.remove(tmp)
