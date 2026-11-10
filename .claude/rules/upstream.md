@@ -34,7 +34,7 @@ credited to this repo), so diff before assuming a commit is new.
   portal's walled garden came in that round (`348fccb`, `94aa2ed`). Earlier: the fork point
   `677f732`; sync 1 (2026-09-06) to `d7d7e21`; sync 2 (2026-09-13) to `12b4db0`; sync 3
   (2026-09-28) to `08d0003` (v0.9.3); sync 4 (2026-10-18) to `2f263f3` (v0.11.0).
-  Each sync is a row in REVERSE-ENGINEERING.md's session log and an "Adopted from upstream,
+  Each sync is a row in docs/journal/session-log.md and an "Adopted from upstream,
   <date>" section in PROTOCOL-VALIDATION.md -- update both, and move this line.
 - **More forks are remotes too: `dmalinowski` → d-malinowski/openUF and `yesrab` → yesrab/openUF.**
   d-malinowski's `pr/unifi-ft-interop` (`94ac182`) was adopted on 2026-10-25 as `ftinterop.lua`
