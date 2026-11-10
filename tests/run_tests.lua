@@ -301,6 +301,7 @@ local test_files = {
 	"tests/test_uciconf.lua",
 	"tests/test_probe.lua",
 	"tests/test_plugins.lua",
+	"tests/test_rrb_unifi_compat.lua",
 }
 
 do
