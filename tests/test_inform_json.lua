@@ -465,6 +465,13 @@ return {
 		end
 	},
 	{
+		name = "inform json: inform_min_interval is 1, the live-statistics cadence",
+		fn = function()
+			local d = build()
+			assert_eq(d.inform_min_interval, 1, "inform_min_interval")
+		end
+	},
+	{
 		name = "inform json: mac matches state",
 		fn = function()
 			local d = build()

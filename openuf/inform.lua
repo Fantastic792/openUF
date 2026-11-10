@@ -2454,6 +2454,15 @@ function M.build_json(st, cfg, ufhw)
 	local iip = M.inform_ip(st.inform_url)
 	if iip then payload.inform_ip = iip end
 
+	-- The shortest heartbeat this device will run, in seconds. Real APs send
+	-- it. The controller (10.6.109, decompiled) sets a watched device's noop
+	-- `interval` to it while a UI session has the device or a client panel
+	-- open, and the client panel draws its live dBm graph only when the uplink
+	-- AP reports exactly 1. _sane_interval accepts 1 for that reason.
+	-- (yesrab/openUF b8797df. Its cost figure, 37 ms average and 125 ms worst
+	-- per build_json + build_packet in a test VM, is not measured here.)
+	payload.inform_min_interval = 1
+
 	-- conf.lua debug_payload_extra: research-only top-level fields merged in
 	-- verbatim (an `uplink` object, say, to see what shape the controller
 	-- accepts) -- same caveat, same log line at startup as debug_caps. A key
@@ -4278,9 +4287,12 @@ end
 -- and amd989/unifi-gateway both adopt it; openUF ran a fixed 10 s and threw
 -- the field away. Clamped, because pre-adoption responses arrive in plain
 -- HTTP under the well-known key: a forged noop must not be able to make the
--- device hammer the controller or go quiet for an hour. nil (no field, or
--- not a number) means "back to the default".
-M.INTERVAL_MIN = 5
+-- device go quiet for an hour. The floor is 1 s: that is what the controller
+-- sends a watched device whose inform carries `inform_min_interval: 1`
+-- (build_json does, as real APs do), the cadence the firmware itself runs
+-- while someone looks at it (yesrab/openUF b8797df). nil (no field, or not a
+-- number) means "back to the default".
+M.INTERVAL_MIN = 1
 M.INTERVAL_MAX = 300
 M._controller_interval = nil
 
@@ -4305,7 +4317,11 @@ local KNOWN_TYPES = {
 }
 local KNOWN_TOP_FIELDS = {
 	noop     = {_type = true, interval = true, include_blocks = true,
-	            server_time_in_utc = true},
+	            server_time_in_utc = true,
+	            -- Controller 10.6.109 puts it on every noop: true only for a
+	            -- gateway with usg2 bit 16 on a watched site, so always false
+	            -- here. Named so the ledger does not record it.
+	            live_update = true},
 	setparam = {_type = true, mgmt_cfg = true, system_cfg = true,
 	            server_time_in_utc = true, include_blocks = true, cfgversion = true,
 	            -- read by M._sync_blocked_stas; listing it keeps client MACs
