@@ -6832,6 +6832,106 @@ return {
 		end
 	},
 	{
+		name = "inform: _vap_watch opens the five VAP resync gates when the ifname list changes, not otherwise",
+		fn = function()
+			local orig = {uci = inform._ucihelper, sig = inform._vaps_sig, until_ = inform._vap_settle_until}
+			local live = {"phy0-ap0"}
+			inform._ucihelper = {ap_ifnames = function() return live end}
+			local function arm()
+				inform._guest_next, inform._l2guard_next, inform._bcfilt_next = 99, 99, 99
+				inform._hairpin_next, inform._usteer_filter_next = 99, 99
+			end
+			local function zeroed()
+				return inform._guest_next == 0 and inform._l2guard_next == 0 and inform._bcfilt_next == 0
+					and inform._hairpin_next == 0 and inform._usteer_filter_next == 0
+			end
+			inform._vap_settle_until, inform._vaps_sig = nil, nil
+			arm()
+			local first = inform._vap_watch(1000)
+			local z1 = zeroed()
+			arm()
+			local same = inform._vap_watch(1001)
+			local z2 = inform._guest_next == 99 and inform._l2guard_next == 99 and inform._bcfilt_next == 99
+				and inform._hairpin_next == 99 and inform._usteer_filter_next == 99
+			live = {"phy0-ap0", "phy0-ap1"}
+			local changed = inform._vap_watch(1002)
+			local z3 = zeroed()
+			inform._ucihelper, inform._vaps_sig, inform._vap_settle_until = orig.uci, orig.sig, orig.until_
+			inform._guest_next, inform._l2guard_next, inform._bcfilt_next = 0, 0, 0
+			inform._hairpin_next, inform._usteer_filter_next = 0, 0
+			assert_true(first and z1, "a first sight of the list opens the gates")
+			assert_false(same, "unchanged list: false")
+			assert_true(z2, "and the gates are left alone")
+			assert_true(changed and z3, "a changed list opens them")
+		end
+	},
+	{
+		name = "inform: _vap_watch keeps the gates open for VAP_SETTLE after _deny_reloaded, and a clock step back does not stretch it",
+		fn = function()
+			local orig = {uci = inform._ucihelper, sig = inform._vaps_sig, until_ = inform._vap_settle_until,
+				time = inform._time, ds = inform._deny_settle}
+			inform._ucihelper = {ap_ifnames = function() return {"phy0-ap0"} end}
+			local now = 3000
+			inform._time = function() return now end
+			inform._vaps_sig = "phy0-ap0"
+			inform._vap_settle_until = nil
+			inform._deny_reloaded()
+			local r = {}
+			for _, dt in ipairs({0, 30, 59}) do
+				now = 3000 + dt
+				inform._l2guard_next = 99
+				r[#r + 1] = inform._vap_watch(now) and inform._l2guard_next == 0
+			end
+			now = 3060
+			inform._l2guard_next = 99
+			local over = inform._vap_watch(now)
+			local kept = inform._l2guard_next
+			inform._deny_reloaded()
+			now = 3060 - 86400
+			local back = inform._vap_watch(now)
+			inform._ucihelper, inform._vaps_sig, inform._vap_settle_until =
+				orig.uci, orig.sig, orig.until_
+			inform._time, inform._deny_settle = orig.time, orig.ds
+			inform._l2guard_next = 0
+			assert_true(r[1] and r[2] and r[3], "open every tick inside the window")
+			assert_false(over, "closed once VAP_SETTLE has passed")
+			assert_eq(kept, 99, "and the gate is left alone")
+			assert_false(back, "a clock stepped back a day does not keep it open")
+		end
+	},
+	{
+		name = "inform: a new VAP name plus _vap_watch makes _l2guard_resync rebuild at once, inside its 60 s gate",
+		fn = function()
+			local orig = {l2 = inform._l2guard, uci = inform._ucihelper, time = inform._time,
+				save = inform._state.save, stderr = io.stderr, sig = inform._vaps_sig,
+				until_ = inform._vap_settle_until}
+			io.stderr = {write = function() end}
+			local rebuilt = {}
+			inform._l2guard = {reconcile = function(_, names) rebuilt[#rebuilt + 1] = table.concat(names, ",") end}
+			inform._state.save = function() end
+			local live = {"phy0-ap0"}
+			inform._ucihelper = {ap_ifnames = function() return live end}
+			local now = 7000
+			inform._time = function() return now end
+			inform._vap_settle_until, inform._vaps_sig = nil, nil
+			local st = {l2guard = {bpdu = true, tagdrop = true, ifnames = {"phy0-ap0"}}}
+			inform._vap_watch(now)
+			inform._l2guard_resync(st)            -- gate now 60 s ahead
+			live = {"phy0-ap0", "phy0-ap1"}
+			now = now + 5
+			local stuck = inform._l2guard_resync(st)
+			inform._vap_watch(now)
+			local fast = inform._l2guard_resync(st)
+			inform._l2guard, inform._ucihelper, inform._time, inform._state.save, io.stderr =
+				orig.l2, orig.uci, orig.time, orig.save, orig.stderr
+			inform._vaps_sig, inform._vap_settle_until = orig.sig, orig.until_
+			inform._l2guard_next = 0
+			assert_false(stuck, "without the watch the gate holds")
+			assert_true(fast, "with it the new VAP rebuilds on that tick")
+			assert_eq(rebuilt[1], "phy0-ap0,phy0-ap1", "with the new name")
+		end
+	},
+	{
 		name = "inform: _l2guard_resync rebuilds once a minute when the VAP list changed, never on an empty answer",
 		fn = function()
 			local orig = {l2 = inform._l2guard, uci = inform._ucihelper, time = inform._time,

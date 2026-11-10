@@ -5941,10 +5941,39 @@ end
 --     then the client can associate, and the nft drop still stops its traffic.
 M.DENY_INTERVAL = 60
 M.DENY_SETTLE   = 60
+-- The per-VAP rule resyncs below (guest portal, l2guard, broadcast filter,
+-- hairpin, usteer filter) each wait up to 60 s on a timer that nothing reset
+-- when a VAP appeared. After a `wifi reload` netifd raises VAPs
+-- asynchronously (a DFS radio can take over a minute), so a new or renamed
+-- VAP ran without its nft rules for up to a minute. _vap_watch opens their
+-- gates on the tick the VAP name set changes, and on every tick for
+-- VAP_SETTLE after a reload. Each resync still rebuilds only on a real change.
+M.VAP_SETTLE = 60
+M._vap_settle_until = nil
+M._vaps_sig = nil
+function M._vap_rules_due()
+	M._guest_next, M._l2guard_next, M._bcfilt_next = 0, 0, 0
+	M._hairpin_next, M._usteer_filter_next = 0, 0
+end
+function M._vap_watch(now)
+	local sig = table.concat(M._l2guard_live_ifnames(), " ")
+	if sig ~= M._vaps_sig then
+		M._vaps_sig = sig
+		M._vap_rules_due()
+		return true
+	end
+	-- _not_due also rejects a window a clock stepped back a day would stretch.
+	if M._vap_settle_until and M._not_due(M._vap_settle_until, now, M.VAP_SETTLE) then
+		M._vap_rules_due()
+		return true
+	end
+	return false
+end
 M._deny_pending = true
 M._deny_at, M._deny_socks, M._deny_settle = nil, nil, nil
 function M._deny_reloaded()
 	M._deny_settle = M._time() + M.DENY_SETTLE
+	M._vap_settle_until = M._time() + M.VAP_SETTLE
 end
 function M._block_resync(st)
 	local list = st and st.blocked_stas or {}
@@ -8130,6 +8159,8 @@ function M._tick(st, cfg, ufhw, ctx)
 	-- The controller's nightly dfs-reset (syswrapper.sh dfs-reset): put a
 	-- radio a radar hit moved back on its configured DFS channel.
 	pcall(M._maybe_service_dfs_reset, cfg)
+	-- Before the resyncs: opens their gates when the VAP set changed.
+	pcall(M._vap_watch, M._time())
 	pcall(M._l2guard_resync, st)
 	pcall(M._bcfilt_resync)
 	pcall(M._backhaul_tick, st, cfg)

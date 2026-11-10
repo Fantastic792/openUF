@@ -4674,6 +4674,40 @@ Wiphy phy2
 		end
 	},
 	{
+		name = "ucihelper: ap_ifnames forks hostapd bss_info once per pass for an OWE-transition VAP",
+		fn = function()
+			local orig = ucihelper._popen
+			local forks = 0
+			ucihelper._popen = function(cmd)
+				if cmd:find("hostapd bss_info", 1, true) then
+					forks = forks + 1
+					return '{"owe_transition_ifname":"phy0-ap1"}'
+				end
+				return '{"radio0":{"up":true,"interfaces":[{"section":"c","ifname":"phy0-ap0",'
+					.. '"config":{"mode":"ap","ssid":"x","owe_transition":true}}]}}'
+			end
+			ucihelper.end_pass()
+			local ok, err = pcall(function()
+				ucihelper.begin_pass()
+				local a = table.concat(ucihelper.ap_ifnames(), ",")
+				ucihelper.ap_ifnames()
+				assert_eq(a, "phy0-ap0,phy0-ap1", "the transition peer is listed")
+				assert_eq(forks, 1, "two calls in one pass: one bss_info fork")
+				ucihelper.end_pass()
+				ucihelper.begin_pass()
+				ucihelper.ap_ifnames()
+				assert_eq(forks, 2, "a new pass asks again")
+				ucihelper.end_pass()
+				ucihelper.ap_ifnames()
+				ucihelper.ap_ifnames()
+				assert_eq(forks, 4, "outside a pass every call forks")
+			end)
+			ucihelper.end_pass()
+			ucihelper._popen = orig
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "ucihelper: two radios on one band expose only the ciphers BOTH can program",
 		fn = function()
 			with_ucihelper(function()

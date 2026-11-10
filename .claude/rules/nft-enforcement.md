@@ -43,3 +43,12 @@ Landmines moved from CLAUDE.md; they load when a matching file is touched.
   rule, and both installers add them. `os.execute` returns the raw exit status on Lua 5.1
   (0 = success, non-zero = failure, BOTH truthy), so any "did it work" check needs
   `exec_ok`, not a bare truth test.
+- **Per-VAP rule resyncs are woken by `_vap_watch`, not only by their 60 s timers.** VAP
+  ifnames are runtime names from netifd, raised asynchronously after `wifi reload` (a DFS
+  radio: over a minute). `_vap_watch` runs each tick before the resyncs and zeroes the five
+  gates (`_guest_next`, `_l2guard_next`, `_bcfilt_next`, `_hairpin_next`,
+  `_usteer_filter_next`) when the AP ifname list changed, and on every tick for `VAP_SETTLE`
+  after `_deny_reloaded()`. A new per-VAP resync with a timer gate goes into
+  `_vap_rules_due` too, or its rules lag a new VAP by up to a minute. The window left is one
+  heartbeat. `ap_ifnames` must stay fork-free inside a pass (the OWE `bss_info` lookup is
+  `pass_memo`'d for that).

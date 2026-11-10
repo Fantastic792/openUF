@@ -3638,13 +3638,18 @@ local function owe_transition_ifname(iface)
 	end
 	local cjson = get_cjson()
 	if not cjson then return nil end
-	local out = M._popen("ubus call hostapd bss_info '{\"iface\":\"" .. iface.ifname .. "\"}'")
-	local ok, info = pcall(cjson.decode, out or "")
-	local peer = ok and type(info) == "table" and info.owe_transition_ifname
-	if type(peer) == "string" and peer:match("^[%w%-%._]+$") and peer ~= iface.ifname then
-		return peer
-	end
-	return nil
+	-- One fork per VAP per pass: inform's _vap_watch asks for the VAP list on
+	-- every tick, and an uncached bss_info per OWE VAP would add a fork each
+	-- time. Outside a pass pass_memo recomputes, as before.
+	return pass_memo("owe_peer:" .. iface.ifname, function()
+		local out = M._popen("ubus call hostapd bss_info '{\"iface\":\"" .. iface.ifname .. "\"}'")
+		local ok, info = pcall(cjson.decode, out or "")
+		local peer = ok and type(info) == "table" and info.owe_transition_ifname
+		if type(peer) == "string" and peer:match("^[%w%-%._]+$") and peer ~= iface.ifname then
+			return peer
+		end
+		return nil
+	end)
 end
 
 -- The VLAN netdevs of one VAP (private pre-shared keys: a client whose key
