@@ -10,7 +10,7 @@ jobs:
     name: Lua unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Lua and dependencies
         run: |
@@ -31,7 +31,7 @@ jobs:
     name: End-to-end adoption simulation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install dependencies
         run: |
@@ -66,7 +66,7 @@ jobs:
     name: Field reports
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Every report is published as it is: the checker refuses unknown feature
       # ids, results without evidence, and anything that looks like a secret or
       # a public address (tools/field_report.py, field-reports/README.md).
@@ -77,7 +77,7 @@ jobs:
     name: Python controller syntax check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check syntax
         run: python3 -m py_compile tools/test_controller.py && echo "OK"
 
@@ -85,7 +85,7 @@ jobs:
     name: Shell script syntax check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check the shell scripts
         run: |
           # Every tracked shell script, the init scripts and the uci-defaults
@@ -105,7 +105,7 @@ jobs:
     name: Packaging and installer scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The package's maintainer scripts, install.sh, setup.sh, update.sh and
       # the tools, run against a scratch root with uci, init scripts and
       # package managers stubbed (tools/test-packaging.sh). Nothing on the
@@ -117,7 +117,7 @@ jobs:
     name: Device page, LuCI views and theme script syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Plain browser JavaScript with no build step: a syntax error ships as a
       # blank page on every router, so parse each file before it can.
       - name: Parse every shipped script

@@ -13,11 +13,11 @@ end
 
 return {
 	{
-		name = "acl: read cannot restart, start, stop or reset-inform; write can",
+		name = "acl: read cannot restart, start, stop, reset-inform or 11k-scan; write can",
 		fn = function()
 			local a = acl()
 			for _, cmd in ipairs({"/etc/init.d/openuf restart", "/etc/init.d/openuf start",
-				"/etc/init.d/openuf stop", "/usr/bin/openuf reset-inform"}) do
+				"/etc/init.d/openuf stop", "/usr/bin/openuf reset-inform", "/usr/bin/openuf 11k-scan"}) do
 				assert_eq(a.read.file[cmd], nil, "read must not grant: " .. cmd)
 				assert_true(a.write.file[cmd] ~= nil, "write grants: " .. cmd)
 			end

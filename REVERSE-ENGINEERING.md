@@ -649,6 +649,8 @@ and the app's behaviour while the device reports `spectrum_scanning`.
 
 ## Investigation 3 — The STUN channel  ✅ RESOLVED (upstream 2026-10-10, adopted 2026-10-18)
 
+> `tools/stun-probe.lua`, named in the notes below, was deleted as unused; git history has it.
+
 **Resolution.** Upstream read `mcad` in the plaintext UAP BZ2 4.0.15 firmware and ran the
 result against their 10.6 controller: the AP is the STUN **client**. It sends an RFC 3489
 Binding Request -- zero transaction id, a CHANGE-REQUEST attribute -- to `stun_url` every

@@ -47,9 +47,6 @@
 				"/usr/bin/openuf deps --check": [
 					"exec"
 				],
-				"/usr/bin/openuf 11k-scan": [
-					"exec"
-				],
 				"/proc/cpuinfo": [
 					"read"
 				]
@@ -82,6 +79,9 @@
 					"exec"
 				],
 				"/usr/bin/openuf reset-inform": [
+					"exec"
+				],
+				"/usr/bin/openuf 11k-scan": [
 					"exec"
 				]
 			},
