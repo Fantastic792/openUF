@@ -122,7 +122,7 @@ test("every st field the code assigns is named in state.lua TYPED", function()
 end)
 
 test("_tick's resyncs and the TICK table name the same steps", function()
-	local tick = strip_comments(body(INFORM, "_tick"))
+	local tick = strip_comments(body(slurp("openuf/mainloop.lua"), "_tick"))
 	local cut = assert(tick:find("M.http_post(", 1, true), "_tick no longer POSTs")
 	tick = tick:sub(1, cut)
 	local seen, problems = {}, {}

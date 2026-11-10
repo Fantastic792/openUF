@@ -41,6 +41,7 @@ openuf/
   rrbguard.lua      repairs hostapd's stale 802.11r key-exchange socket (wpad restart)
   rulesync.lua      guest portal, blocked stations, rate limits, per-VAP rules (installs onto inform.lua's M)
   hostwatch.lua     l2guard, neighbour scan, rrbguard, blackout schedule, uplink monitor, STUN (installs onto inform.lua's M)
+  mainloop.lua      dfs-reset, neighbour sweep, notification queue, heartbeat tick, startup (installs onto inform.lua's M)
   hangwatch.lua     background sh loop that kills a command the inform loop hangs on (60 s)
   util.lua          shared helpers: file/command reads, exec_ok, is_mac, bit shim, sysfs
                     master_of/driver_of, nft_apply (one `nft -f` transaction per table)
