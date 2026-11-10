@@ -45,7 +45,10 @@ Landmines moved from CLAUDE.md; they load when a matching file is touched.
   live there, and `_warn_identity_change` only works because the previous MAC comes back.
   `load()` used to whitelist the eight and drop the rest on every start. The write is
   temp-file-and-rename, because a truncated file reads as "defaults" and un-adopts the
-  device.
+  device -- and the temp file is flushed (`fsync`, else `sync`) BEFORE the rename: on
+  UBIFS an unflushed rename leaves an empty file after a power cut. `load()` clears
+  `adopted` together with an authkey that is not 32 hex (adopted + default key is a
+  state nothing leaves).
 - **The inform loop is `_tick()`, and every stage in it is pcall-wrapped.** `build_json`
   shells out to a dozen tools; one nil in one field once crash-looped the daemon under
   procd. A bad cycle costs one heartbeat and one log line. Keep new stages inside the

@@ -95,8 +95,32 @@ return {
 					io.stderr = real
 					assert_true(ok, tostring(loaded))
 					assert_eq(loaded.authkey, state.DEFAULT_KEY, "default key instead of " .. bad)
+					assert_eq(loaded.adopted, false, "and unadopted, so a re-adoption's key is taken: " .. bad)
 					assert_true(table.concat(buf):find("not 32 hex", 1, true) ~= nil, "logged for " .. bad)
 				end
+			end)
+		end
+	},
+	{
+		-- rename orders the names, not the data: without a flush first, a
+		-- power cut on UBIFS leaves an empty state.json (= unadopted).
+		name = "state: the temp file is flushed to disk before the rename",
+		fn = function()
+			with_tmp(function()
+				local o_exec, o_rename, order = state._execute, os.rename, {}
+				state._execute = function(c)
+					if c:find("fsync '" .. TMP .. ".tmp'", 1, true)
+						and c:find("|| sync '" .. TMP .. ".tmp'", 1, true) then
+						order[#order + 1] = "flush"
+					end
+					return 0
+				end
+				os.rename = function(a, b) order[#order + 1] = "rename"; return o_rename(a, b) end
+				local ok, err = pcall(state.save, {adopted = false, authkey = "x",
+					cfgversion = "", inform_url = "http://x/inform"})
+				state._execute, os.rename = o_exec, o_rename
+				if not ok then error(err, 0) end
+				assert_eq(table.concat(order, ","), "flush,rename", "flush first")
 			end)
 		end
 	},
@@ -538,8 +562,9 @@ return {
 				if not ok then error(err, 0) end
 				assert_eq(#cmds, 1, "one command")
 				local q = "'" .. TMP .. ".tmp'"
-				assert_eq(cmds[1], "chgrp 900 " .. q .. " && chmod 660 " .. q .. " || chmod 600 " .. q,
-					"on the temp file, and owner-only when the group is gone")
+				assert_eq(cmds[1], "chgrp 900 " .. q .. " && chmod 660 " .. q .. " || chmod 600 " .. q
+					.. "; fsync " .. q .. " 2>/dev/null || sync " .. q .. " 2>/dev/null",
+					"on the temp file, owner-only when the group is gone, then flushed")
 			end)
 		end
 	},

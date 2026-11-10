@@ -257,6 +257,11 @@ function M.load()
 		io.stderr:write("state: " .. M._state_file .. " authkey is not 32 hex digits -- "
 			.. "using the default key; the device will need adopting again\n")
 		st.authkey = M.DEFAULT_KEY
+		-- And unadopted with it. "Adopted, on the default key" is a state
+		-- nothing leaves: handle_response takes the controller's authkey only
+		-- while adopted is false, so the device informed on the default key
+		-- for good and every re-adoption was ignored.
+		st.adopted = false
 	end
 
 	return st
@@ -295,19 +300,30 @@ end
 -- /etc/passwd, and a save keeps it. Set on the temp file, before the rename,
 -- so state.json never exists with another mode. Not a umask on the daemon:
 -- hostapd runs as user network and reads files the daemon writes.
+--
+-- The same command then flushes the temp file to the flash, still before the
+-- rename. rename(2) orders the NAMES, not the data: on UBIFS (every NAND
+-- board) a power cut soon after an unflushed write-and-rename leaves
+-- state.json present and EMPTY, which load() reads as defaults -- the device
+-- comes back unadopted on the well-known key. busybox has `fsync FILE`;
+-- where it is missing, `sync FILE` (a whole-filesystem sync on a busybox
+-- without the per-file form) does the job. Best effort: a failed flush is
+-- no worse than no flush.
 M.share_gid = nil
 M._execute  = os.execute
 local function protect(path)
 	local q = "'" .. path .. "'"
 	local gid = tonumber(M.share_gid)
+	local mode
 	if gid then
 		-- A gone group (the account removed since /etc/passwd was read) falls
 		-- back to owner-only, never to the writer's umask.
-		M._execute("chgrp " .. math.floor(gid) .. " " .. q .. " && chmod 660 " .. q
-			.. " || chmod 600 " .. q)
+		mode = "chgrp " .. math.floor(gid) .. " " .. q .. " && chmod 660 " .. q
+			.. " || chmod 600 " .. q
 	else
-		M._execute("chmod 600 " .. q)
+		mode = "chmod 600 " .. q
 	end
+	M._execute(mode .. "; fsync " .. q .. " 2>/dev/null || sync " .. q .. " 2>/dev/null")
 end
 
 M.last_written = nil
