@@ -554,7 +554,7 @@ say "  luci       $([ "$HAS_LUCI" = 1 ] && echo installed || echo 'not installed
 # a file install (/opt/openuf). Both at once is the state this script refuses
 # to produce -- see the "Web interface" question.
 FILES_INSTALLED=0
-[ -f "$INSTALL_DIR/inform.lua" ] && FILES_INSTALLED=1
+[ -f "$INSTALL_DIR/inform.lua" ] && [ ! -L "$INSTALL_DIR" ] && FILES_INSTALLED=1
 PKG_INSTALLED=0
 if pkg_installed openuf || [ -f "$PKG_DIR/inform.lua" ]; then PKG_INSTALLED=1; fi
 ALREADY_INSTALLED=0

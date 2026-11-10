@@ -465,6 +465,17 @@ check "the workflow's PKG_HASH substitution lands in the Makefile" grep -qx "PKG
 check "release.yml refuses a missing or malformed sha256" grep -q 'sha256 is not 64 hex digits' .github/workflows/release.yml
 check "release.yml re-reads the substituted PKG_HASH" grep -q 'grep -qx "PKG_HASH:=\$SHA256"' .github/workflows/release.yml
 
+# ── /opt/openuf link (plugin installers look there) ────────────────────────
+check "postinst links /opt/openuf to /usr/lib/openuf when the path is free" \
+	grep -q 'ln -s /usr/lib/openuf /opt/openuf' package/openuf/Makefile
+check "the postrm removes only a link that points at the package" \
+	grep -q 'readlink /opt/openuf.*= /usr/lib/openuf' package/openuf/Makefile
+check "preinst does not take the link for a file install" \
+	grep -q '\[ ! -L /opt/openuf \] && \[ -f /opt/openuf/inform.lua \] && \[ ! -f /opt/openuf/.package-replaces \]' package/openuf/Makefile
+check "update.sh refuses to run on a package install" grep -q 'openUF is installed as the openuf package' update.sh
+check "setup.sh does not count the link as a file install" \
+	grep -q '! -L "\$INSTALL_DIR" \] && FILES_INSTALLED=1' setup.sh
+
 # ── dist.sh: a script's --help header survives the strip ───────────────────
 # openuf-convert/-deps/-bootstrap and the openuf CLI print their usage
 # with `sed -n 'M,Np' "$0"`; a stripped header made them print code instead

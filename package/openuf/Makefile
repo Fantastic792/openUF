@@ -60,7 +60,10 @@ define Package/openuf/description
   Third-party plugins (/etc/openuf/plugins/<name>.lua, api 1, the same hook
   as upstream openUF's) extend the WLAN options; 802.11r fast roaming with
   genuine UniFi APs is one, d-malinowski's rrb-unifi, which setup.sh offers
-  to install (PLUGINS.md).
+  to install (PLUGINS.md). The postinst links /opt/openuf to /usr/lib/openuf
+  (unless that path exists already) so that plugin installers written against
+  upstream's documented detection path find the hook; the postrm removes that
+  link.
 
   Needs a FULL wpad build (wpad-openssl, wpad-wolfssl or wpad-mbedtls; a
   wpad-basic-* build rejects the 802.11v option every controller WLAN
@@ -90,7 +93,14 @@ if [ -z "$${IPKG_INSTROOT}" ] && ! grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/d
 	echo "openuf: hostapd is a basic build (no 802.11v): openUF will not start until a full wpad is installed." >&2
 	echo "openuf: run 'openuf deps --install', or use the button on LuCI's openUF overview." >&2
 fi
-if [ -z "$${IPKG_INSTROOT}" ] && [ -f /opt/openuf/inform.lua ]; then
+# upstream's plugin contract (PLUGINS.md) names /opt/openuf/plugins.lua as the
+# hook's detection path, and every third-party installer looks there. A link,
+# made here rather than shipped as a package file, so a link setup.sh (or a
+# hand) made earlier is simply kept and never a file conflict.
+if [ -z "$${IPKG_INSTROOT}" ] && [ ! -e /opt/openuf ] && [ ! -L /opt/openuf ]; then
+	mkdir -p /opt && ln -s /usr/lib/openuf /opt/openuf
+fi
+if [ -z "$${IPKG_INSTROOT}" ] && [ ! -L /opt/openuf ] && [ -f /opt/openuf/inform.lua ]; then
 	echo "openuf: a file install of openUF is also present under /opt/openuf. The service now" >&2
 	echo "openuf: runs this package's copy and reads /etc/config/openuf, not /opt/openuf/conf.lua:" >&2
 	echo "openuf: carry that configuration over (LuCI: Services > openUF > Settings), then" >&2
@@ -140,7 +150,7 @@ endef
 define Package/openuf/preinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
-if [ -f /opt/openuf/inform.lua ] && [ ! -f /opt/openuf/.package-replaces ]; then
+if [ ! -L /opt/openuf ] && [ -f /opt/openuf/inform.lua ] && [ ! -f /opt/openuf/.package-replaces ]; then
 	echo "openuf: a file install of openUF is present under /opt/openuf. Remove it first" >&2
 	echo "openuf: (sh install.sh uninstall; its state in /etc/openuf stays), then install the" >&2
 	echo "openuf: package: two copies have shown up in a controller as two devices." >&2
@@ -156,7 +166,8 @@ endef
 # so). default_prerm sources this in a subshell, then stops and disables the
 # init scripts. With a file install still present those belong to it.
 define Package/openuf/prerm-pkg
-if [ -z "$${IPKG_INSTROOT}" ] && [ "$${PKG_UPGRADE}" != 1 ] && [ ! -f /opt/openuf/inform.lua ]; then
+if [ -z "$${IPKG_INSTROOT}" ] && [ "$${PKG_UPGRADE}" != 1 ] \
+		&& { [ -L /opt/openuf ] || [ ! -f /opt/openuf/inform.lua ]; }; then
 	if uci -q get network.openuf_ftveth >/dev/null 2>&1; then
 		for _s in openuf_ftveth openuf_ftlink openuf_ftpeer; do uci -q delete network.$$_s; done
 		uci commit network
@@ -176,6 +187,15 @@ if [ -z "$${IPKG_INSTROOT}" ] && [ "$${PKG_UPGRADE}" != 1 ] && [ ! -f /opt/openu
 	if [ -f /etc/shells ]; then
 		sed -i '/^\/usr\/lib\/openuf\/hook\/adopt-shell\.sh$$/d' /etc/shells
 	fi
+fi
+endef
+
+# The compatibility link above, when it is ours (points at this package).
+define Package/openuf/postrm
+#!/bin/sh
+if [ -z "$${IPKG_INSTROOT}" ] && [ -L /opt/openuf ] \
+		&& [ "$$(readlink /opt/openuf)" = /usr/lib/openuf ]; then
+	rm -f /opt/openuf
 fi
 endef
 
