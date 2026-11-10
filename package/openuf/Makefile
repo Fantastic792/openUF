@@ -44,7 +44,7 @@ define Package/openuf
   # postinst-pkg names either one when this device needs it.
   DEPENDS:=+lua +luabitop +lua-cjson +luasocket +lua-openssl +libuci-lua +iw \
 	+lldpd +ip-bridge +hostapd-utils +usteer +nftables +kmod-nft-bridge \
-	+tc-tiny +kmod-ifb +kmod-sched-act-police +ucode-mod-socket +kmod-veth
+	+tc-tiny +kmod-ifb +kmod-sched-act-police
   PKGARCH:=all
 endef
 
@@ -57,9 +57,10 @@ define Package/openuf/description
   presets or a custom one, the identity to present, the inform URL). The web
   front end is luci-app-openuf.
 
-  Includes the 802.11r translator for roaming between this AP and genuine
-  UniFi APs (the openuf-rrb service, see /usr/lib/openuf/rrb/README.md),
-  which needs ucode-mod-socket and kmod-veth.
+  Third-party plugins (/etc/openuf/plugins/<name>.lua, api 1, the same hook
+  as upstream openUF's) extend the WLAN options; 802.11r fast roaming with
+  genuine UniFi APs is one, d-malinowski's rrb-unifi, which setup.sh offers
+  to install (PLUGINS.md).
 
   Needs a FULL wpad build (wpad-openssl, wpad-wolfssl or wpad-mbedtls; a
   wpad-basic-* build rejects the 802.11v option every controller WLAN
@@ -109,12 +110,27 @@ if [ -z "$${IPKG_INSTROOT}" ]; then
 	fi
 fi
 if [ -z "$${IPKG_INSTROOT}" ]; then
-	for _openuf_svc in openuf openuf-rrb; do
+	for _openuf_svc in openuf; do
 		if [ -x "/etc/init.d/$$_openuf_svc" ] && "/etc/init.d/$$_openuf_svc" running >/dev/null 2>&1; then
 			"/etc/init.d/$$_openuf_svc" restart >/dev/null 2>&1 \
 				&& echo "openuf: restarted $$_openuf_svc on the new version" >&2
 		fi
 	done
+fi
+# Before 2026-11-02 the package carried its own 802.11r translator (the
+# openuf-rrb service). Its init script is gone with this upgrade; its daemon
+# and rc links are not, so they go here. Its veth sections in
+# /etc/config/network stay until the daemon's next push has rewritten the
+# WLANs without ft_iface (inform._migrate_legacy_rrb): a BSS whose ft_iface
+# vanishes under it fails.
+if [ -z "$${IPKG_INSTROOT}" ] && ls /etc/rc.d/*openuf-rrb >/dev/null 2>&1; then
+	rm -f /etc/rc.d/*openuf-rrb
+	for p in $$(pidof ucode 2>/dev/null); do
+		tr '\0' ' ' < /proc/$$p/cmdline 2>/dev/null | grep -q 'rrb/rrb-unifi.uc' && kill $$p
+	done
+	echo "openuf: the former built-in 802.11r translator (openuf-rrb) was removed; its veth goes" >&2
+	echo "openuf: after the controller's next push. For fast roaming with genuine UniFi APs" >&2
+	echo "openuf: install the rrb-unifi plugin (USAGE.md section 6)." >&2
 fi
 endef
 
@@ -189,12 +205,8 @@ define Package/openuf/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(LN) ../lib/openuf/hook/openuf-convert.sh $(1)/usr/sbin/openuf-convert
 	$(LN) ../lib/openuf/hook/openuf-deps.sh $(1)/usr/sbin/openuf-deps
-	$(INSTALL_DIR) $(1)/usr/lib/openuf/rrb
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/rrb/rrb-unifi.uc $(1)/usr/lib/openuf/rrb/
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/openuf/rrb/README.md $(PKG_BUILD_DIR)/openuf/rrb/LICENSE $(1)/usr/lib/openuf/rrb/
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/etc/init.d/openuf $(1)/etc/init.d/openuf
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/openuf/etc/init.d/openuf-rrb $(1)/etc/init.d/openuf-rrb
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/openuf.config $(1)/etc/config/openuf
 	$(INSTALL_DIR) $(1)/etc/openuf

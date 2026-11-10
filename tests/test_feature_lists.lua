@@ -79,7 +79,6 @@ local TICK = {
 	_block_resync            = {forget = "M._firewall.reconcile"},
 	_sched_resync            = {state = {"sched_vaps_down"}},
 	_rrbguard_tick           = {none = "watches hostapd's own socket; no controller setting"},
-	_rrb_peers_tick          = {state = {"rrb_peers"}},
 	_refresh_net_info        = {none = "reads the address; changes nothing"},
 	_shaper_resync           = {forget = "M._shaper.sync"},
 }

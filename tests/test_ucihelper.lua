@@ -107,7 +107,7 @@ local function with_ucihelper(fn)
 		ucihelper._uci, ucihelper._popen, ucihelper._read_file, ucihelper._run_cmd
 	local orig_bcf, orig_shaper, orig_ifnames_vap =
 		ucihelper._bcfilter, ucihelper._shaper, ucihelper.get_ifnames_for_vap
-	local orig_fti, orig_ifname_vap = ucihelper._ftinterop, ucihelper.get_ifname_for_vap
+	local orig_ifname_vap = ucihelper.get_ifname_for_vap
 	ucihelper._uci = m.mock
 	ucihelper._popen = function() return "" end       -- no live ifname resolution in tests
 	-- Hardware capability probing is cached (it describes hardware); clear it
@@ -128,7 +128,7 @@ local function with_ucihelper(fn)
 		orig_uci, orig_popen, orig_read, orig_run
 	ucihelper._bcfilter, ucihelper._shaper, ucihelper.get_ifnames_for_vap =
 		orig_bcf, orig_shaper, orig_ifnames_vap
-	ucihelper._ftinterop, ucihelper.get_ifname_for_vap = orig_fti, orig_ifname_vap
+	ucihelper.get_ifname_for_vap = orig_ifname_vap
 	ucihelper._phy_caps_cache = nil
 	ucihelper._phy_caps_unstable_until = nil
 	ucihelper._phy_caps_read_at = nil
@@ -5947,23 +5947,55 @@ Wiphy phy2
 		end
 	},
 	{
+		name = "ucihelper: the veth of the former built-in translator is found and removed after the reload",
+		fn = function()
+			with_ucihelper(function(db, cmds, commits)
+				local c = ucihelper._uci.cursor()
+				assert_false(ucihelper.legacy_ft_veth_present(), "none on a clean device")
+				c:set("network", "openuf_ftveth", "device")
+				c:set("network", "openuf_ftlink", "interface")
+				c:set("network", "openuf_ftpeer", "interface")
+				assert_true(ucihelper.legacy_ft_veth_present(), "found by its device section")
+				ucihelper.apply_config({radio_table = {}, vap_table = {
+					{ssid = "corp", radio = "radio0", security = "wpa2",
+					 x_passphrase = "hunter22", fast_roaming_enabled = true},
+				}}, {config = {unifi_ft_interop = true}})
+				-- An old conf.lua still saying unifi_ft_interop = true changes nothing.
+				for name, s in pairs(db.wireless or {}) do
+					assert_nil(s.hostapd_bss_options, name .. ": no ft_iface line is written any more")
+				end
+				for _, name in ipairs({"openuf_ftveth", "openuf_ftlink", "openuf_ftpeer"}) do
+					assert_nil(db.network and db.network[name], name .. " removed")
+				end
+				local wifi_at, net_after
+				for i, cmd in ipairs(cmds) do
+					if cmd == "wifi reload" then wifi_at = i end
+					if wifi_at and cmd:find("network reload", 1, true) and i > wifi_at then net_after = i end
+				end
+				assert_true(wifi_at ~= nil and net_after ~= nil,
+					"the network reload that drops the veth comes AFTER wifi reload")
+				assert_false(ucihelper.remove_legacy_ft_veth(), "nothing left to remove")
+				assert_false(ucihelper.legacy_ft_veth_present(), "gone")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: a push that raises mid-loop commits no wireless change, so the old WLANs stay",
 		fn = function()
 			with_ucihelper(function(db, _, commits)
 				local c = ucihelper._uci.cursor()
 				c:set("wireless", "openuf_radio0_old", "wifi-iface")
 				c:set("wireless", "openuf_radio0_old", "device", "radio0")
-				-- Any raise between the clear and the commit: here ftinterop's.
-				ucihelper._ftinterop = {
-					translator_active = function() return false end,
-					apply = function() error("fti: boom") end,
-				}
+				-- Any raise between the clear and the commit: here wlan_add's.
+				local orig_add = ucihelper.wlan_add
+				ucihelper.wlan_add = function() error("wlan_add: boom") end
 				local ok, err = pcall(ucihelper.apply_config, {radio_table = {}, vap_table = {
 					{ssid = "corp", radio = "radio0", security = "wpa2",
 					 x_passphrase = "hunter22", fast_roaming_enabled = true},
-				}}, {config = {unifi_ft_interop = true}})
+				}}, {config = {}})
+				ucihelper.wlan_add = orig_add
 				assert_false(ok, "the raise reaches the caller")
-				assert_contains(tostring(err), "fti: boom", "unchanged")
+				assert_contains(tostring(err), "wlan_add: boom", "unchanged")
 				assert_nil(commits.wireless,
 					"the clear was only staged: on libuci the previous WLANs stay on disk")
 			end)

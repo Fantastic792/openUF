@@ -69,9 +69,9 @@ done
 
 # Preserve the executable bit the installer relies on: every init script and
 # hook script, not a hand-kept list (openuf-bootstrap.sh and openuf-deps.sh
-# were missing from one), and the translator. tools/test-packaging.sh checks
+# were missing from one). tools/test-packaging.sh checks
 # that every file git marks executable comes out executable.
-chmod +x "$STAGE"/etc/init.d/* "$STAGE"/hook/*.sh "$STAGE/rrb/rrb-unifi.uc"
+chmod +x "$STAGE"/etc/init.d/* "$STAGE"/hook/*.sh
 
 # Build stamp: which commit this tarball is, so `openuf-update --check` on a
 # device can say what it runs. "-dirty" means uncommitted changes were in the

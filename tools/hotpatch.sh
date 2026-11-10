@@ -13,9 +13,8 @@
 #
 # Every replaced file is kept beside the new one as <file>.pre-hotpatch (first
 # patch only, never overwritten), conf.lua and the modelmap/ufmodel profiles are
-# left alone, /etc/init.d/openuf and /etc/init.d/openuf-rrb are replaced when the
-# tree's copy differs (their backups live inside the tree; a running openuf-rrb
-# is restarted), and a BUILD stamp names this checkout. A lab tool: it writes into
+# left alone, /etc/init.d/openuf is replaced when the
+# tree's copy differs (its backup lives inside the tree), and a BUILD stamp names this checkout. A lab tool: it writes into
 # a package-managed tree, so `apk fix openuf` (or a reinstall) is the way back.
 set -u
 cd "$(dirname "$0")/.." || exit 2
@@ -67,16 +66,12 @@ COPYFILE_DISABLE=1 tar -C build/openuf -cf - \
 	# Ship it too when it differs, or a hotpatched device keeps an init script
 	# older than the daemon it starts (AP1, 2026-10-03: the package's 0.0.3
 	# script, without the full-wpad refusal). The backup stays INSIDE the tree:
-	# a stray file in /etc/init.d/ would be enumerated as a service. Both
-	# services: the 802.11r translator has its own script, and a running one
-	# is restarted on the new script (openuf itself restarts below).
-	for s in openuf openuf-rrb; do
+	# a stray file in /etc/init.d/ would be enumerated as a service.
+	# openuf itself restarts below.
+	for s in openuf; do
 		if [ -f \"\$D/etc/init.d/\$s\" ] && ! cmp -s \"\$D/etc/init.d/\$s\" /etc/init.d/\$s; then
 			[ -f /etc/init.d/\$s ] && [ ! -f \"\$D/etc/init.d/\$s.pre-hotpatch\" ] && cp /etc/init.d/\$s \"\$D/etc/init.d/\$s.pre-hotpatch\"
 			cp \"\$D/etc/init.d/\$s\" /etc/init.d/\$s && chmod 755 /etc/init.d/\$s && echo \"  updated /etc/init.d/\$s\"
-			if [ \$s = openuf-rrb ] && /etc/init.d/openuf-rrb running >/dev/null 2>&1; then
-				/etc/init.d/openuf-rrb restart && echo '  restarted openuf-rrb'
-			fi
 		fi
 	done
 	if [ '$REPUSH' = 1 ] && [ -f /etc/openuf/state.json ]; then

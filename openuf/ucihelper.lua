@@ -20,7 +20,6 @@ M._bcfilter   = nil  -- nil = load openuf/bcfilter.lua on first use
 -- "WiFi Speed Limit" enforcement (tc). Injectable for the same reason.
 -- Minimum RSSI's constants (wire offset, refusal margin).
 M._minrssi    = nil  -- nil = load openuf/minrssi.lua on first use
-M._ftinterop  = nil  -- nil = load openuf/ftinterop.lua on first use
 M._run_cmd    = os.execute
 
 -- Injectable: command execution that captures stdout (for read-only introspection,
@@ -125,7 +124,6 @@ end
 
 local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end
 local function get_minrssi()  return get_sibling("minrssi",  M._minrssi)  end
-local function get_ftinterop() return get_sibling("ftinterop", M._ftinterop) end
 local _plugins_mod
 local function get_plugins()
 	if M._plugins then return M._plugins end
@@ -639,10 +637,9 @@ local SECURITY_MAP = {
 -- Append one raw per-BSS hostapd line to an `extra` table, creating the list
 -- on first use. Appending rather than assigning on purpose: hostapd_bss_options
 -- has more than one producer, and a bare `extra.hostapd_bss_options = {...}`
--- from a second one would silently drop the first one's lines. ftinterop.lua
--- writes the list first, and leaves M.DELETE there when it has no line of its
--- own: that is the shared sentinel, so it counts as empty and gets replaced,
--- never appended to.
+-- from a second one would silently drop the first one's lines. A plugin
+-- (plugins.lua) may have left M.DELETE there: that is the shared sentinel, so
+-- it counts as empty and gets replaced, never appended to.
 local function add_bss_option(extra, line)
 	local t = extra.hostapd_bss_options
 	if type(t) ~= "table" or t == M.DELETE then
@@ -1443,96 +1440,45 @@ function M.vap_bssid(radio, ssid)
 	return mac_of(M.get_ifname_for_vap(radio, ssid))
 end
 
--- ─── The translator's veth pair (unifi_ft_interop) ───────────────────────────
--- hostapd's ft_iface moves onto vft0 and the openuf-rrb daemon holds vft1
--- (rrb/README.md). The pair is a netifd `config device` of type veth plus two
--- proto-none interfaces, so netifd creates it at boot before the radios come
--- up (a BSS whose ft_iface is missing fails to start) and `forget` removes
--- it. The names come from openuf.rrb (ft_iface / peer_iface, as the service
--- reads them).
-M.FT_VETH_SECTIONS = {"openuf_ftveth", "openuf_ftlink", "openuf_ftpeer"}
+-- ─── The veth pair an earlier openUF wrote for its own translator ──────────
+-- Until 2026-11-02 this tree vendored the rrb-unifi translator and wrote its
+-- veth pair into /etc/config/network as these three sections (apply_config
+-- created them on the first push with an FT WLAN). The translator is a
+-- separate install now, with its own sections (`vft`, d-malinowski's names),
+-- so an upgraded device still carrying ours has them removed -- AFTER the
+-- push that rewrote the WLANs without `ft_iface=vft0`, never before: a BSS
+-- whose ft_iface vanishes under it fails. inform.run asks for that push.
+M.LEGACY_FT_VETH_SECTIONS = {"openuf_ftveth", "openuf_ftlink", "openuf_ftpeer"}
 
--- What the openuf-rrb daemon takes from the wireless config, as one string:
--- per BSS on the veth its section, radio, network (the LAN bridge, opened
--- once at start), mobility domain, BSSID override and wildcard r0kh key
--- (UBNT_ROAM's wlan_id and key). The other r0kh lines are left out: hostapd
--- holds the key holders, the daemon never reads them, and a learned peer
--- adds one. apply_config restarts the daemon only when this changes.
-local function as_text(v)
-	if type(v) == "table" then return table.concat(v, " ") end
-	return tostring(v or "")
-end
-
-function M.rrb_signature(cursor)
-	local parts = {}
-	cursor:foreach("wireless", "wifi-iface", function(s)
-		local veth = false
-		if type(s.hostapd_bss_options) == "table" then
-			for _, l in ipairs(s.hostapd_bss_options) do
-				if tostring(l):match("^ft_iface=") then veth = true end
-			end
-		end
-		if not veth or s.disabled == "1" then return end
-		local key = ""
-		if type(s.r0kh) == "table" then
-			for _, e in ipairs(s.r0kh) do
-				if tostring(e):match("^ff:ff:ff:ff:ff:ff,") then key = tostring(e) end
-			end
-		end
-		parts[#parts + 1] = table.concat({as_text(s[".name"]), as_text(s.device),
-			as_text(s.network), as_text(s.mobility_domain), as_text(s.macaddr), key}, "|")
-	end)
-	table.sort(parts)
-	return table.concat(parts, "\n")
-end
-
-local function ft_veth_names(cursor)
-	local ft = cursor and cursor:get("openuf", "rrb", "ft_iface")
-	local peer = cursor and cursor:get("openuf", "rrb", "peer_iface")
-	if type(ft) ~= "string" or not util.valid_ifname(ft) then ft = "vft0" end
-	if type(peer) ~= "string" or not util.valid_ifname(peer) then peer = "vft1" end
-	return ft, peer
-end
-
--- True when hostapd's end of the pair exists afterwards. Writes the sections
--- only when they are missing or name other interfaces, reloads the network
--- at once (the push that called this is about to write the VAPs that use the
--- veth, and ftinterop decides per VAP on whether the netdev exists), and
--- gives netifd a few seconds to create it.
-function M.ensure_ft_veth(cursor)
+function M.legacy_ft_veth_present(cursor)
 	cursor = cursor or get_uci().cursor()
-	local ft, peer = ft_veth_names(cursor)
-	local function present()
-		return M._read_file("/sys/class/net/" .. ft .. "/ifindex") ~= nil
+	local present = false
+	cursor:foreach("network", "device", function(s)
+		if s[".name"] == M.LEGACY_FT_VETH_SECTIONS[1] then present = true end
+	end)
+	return present
+end
+
+-- Removes the pair's sections when present and marks the network dirty for
+-- the caller's reload; true when something was removed.
+function M.remove_legacy_ft_veth(cursor)
+	cursor = cursor or get_uci().cursor()
+	local present = {}
+	for _, t in ipairs({"device", "interface"}) do
+		cursor:foreach("network", t, function(s) present[s[".name"]] = true end)
 	end
-	if present() then return true end
-	-- A new veth: the daemon's end of the old one went with it, so the
-	-- translator is restarted after this push whatever rrb_signature says.
-	M._rrb_sig = nil
-	local dev, link, peerif = M.FT_VETH_SECTIONS[1], M.FT_VETH_SECTIONS[2], M.FT_VETH_SECTIONS[3]
-	if cursor:get("network", dev, "name") ~= ft
-		or cursor:get("network", dev, "peer_name") ~= peer then
-		cursor:set("network", dev, "device")
-		cursor:set("network", dev, "type", "veth")
-		cursor:set("network", dev, "name", ft)
-		cursor:set("network", dev, "peer_name", peer)
-		cursor:set("network", link, "interface")
-		cursor:set("network", link, "proto", "none")
-		cursor:set("network", link, "device", ft)
-		cursor:set("network", peerif, "interface")
-		cursor:set("network", peerif, "proto", "none")
-		cursor:set("network", peerif, "device", peer)
+	local removed = false
+	for _, sec in ipairs(M.LEGACY_FT_VETH_SECTIONS) do
+		if present[sec] then
+			cursor:delete("network", sec)
+			removed = true
+		end
+	end
+	if removed then
 		cursor:commit("network")
+		M._network_dirty = true
 	end
-	M._run_cmd("/etc/init.d/network reload 2>/dev/null")
-	M._network_dirty = false
-	for _ = 1, 5 do
-		if present() then return true end
-		M._run_cmd("sleep 1")
-	end
-	io.stderr:write("openuf: the translator's veth " .. ft .. " did not appear after the "
-		.. "network reload; hostapd stays on the bridge this push\n")
-	return false
+	return removed
 end
 
 -- The bridge a netdev is enslaved to, or nil when it carries its own address.
@@ -2248,14 +2194,14 @@ end
 
 -- Security values whose BSS needs a passphrase (psk2, sae, sae-mixed).
 -- One BSS's NAS-Identifier when two producers want it. The controller's
--- RADIUS NAS-ID arrives as nas_identifier; under unifi_ft_interop ftinterop
+-- RADIUS NAS-ID arrives as nas_identifier; the rrb-unifi plugin (plugins.lua)
 -- writes nasid = this BSS's BSSID, UniFi's R0KH-ID. They are one hostapd
 -- field, and OpenWrt 25.12 lets nasid win in either order (checked on a VM,
 -- 2026-10-31). A NAS-ID shared by every AP cannot be an R0KH-ID, so FT wins:
 -- the controller's NAS-ID is dropped on these WLANs, and on the first push,
 -- before the BSSID is known, hostapd's own default (the BSSID) applies
 -- instead of the shared NAS-ID. RADIUS sees the BSSID as NAS-Identifier.
--- The same holds without interop: hostapd uses nas_identifier as the
+-- The same holds without the plugin: hostapd uses nas_identifier as the
 -- R0KH-ID there too, so with a shared one an FT-EAP roam to another openUF
 -- AP never pulls its key (seen in the lab, 2026-10-31). "keep" (both
 -- written, nasid wins once known) and "radius" (nasid dropped, UniFi FT
@@ -2499,23 +2445,6 @@ function M.apply_config(resp, cfg, opts)
 	-- Every VLAN this push still wants an L2 for; anything else gets pruned
 	-- after the loop.
 	local wanted_vlans = {}
-	-- Whether ftinterop put a BSS on the translator's veth this push (the
-	-- openuf-rrb service is restarted after the reload below).
-	local interop_veth = false
-	-- unifi_ft_interop: the translator's veth pair is created here, before
-	-- the VAPs are written, so ftinterop sees it on this very push. Only with
-	-- the translator installed and enabled: a veth nobody forwards would
-	-- swallow every key exchange, openUF-to-openUF too.
-	if cfg and cfg.config and cfg.config.unifi_ft_interop then
-		local fti = get_ftinterop()
-		if fti and fti.translator_active(get_uci().cursor()) then
-			local any_ft = false
-			for _, vap in ipairs(vap_table) do
-				if vap.fast_roaming_enabled or vap.wpa3_fast_roaming_enabled then any_ft = true end
-			end
-			if any_ft then M.ensure_ft_veth(get_uci().cursor()) end
-		end
-	end
 	-- One read of the plugin list for the whole loop instead of one per VAP
 	-- (plugins.lua's begin_pass note). Closed after the commit below.
 	do
@@ -2602,31 +2531,6 @@ function M.apply_config(resp, cfg, opts)
 					extra.r0kh = { "ff:ff:ff:ff:ff:ff,*," .. vap.iapp_key }
 					extra.r1kh = { "00:00:00:00:00:00,00:00:00:00:00:00,"
 						.. vap.iapp_key }
-				end
-				-- unifi_ft_interop: fast roaming with genuine UniFi APs through
-				-- the translator (rrb/, the openuf-rrb service). ftinterop.lua
-				-- rewrites the options above (UniFi's mobility domain,
-				-- ft_psk_generate_local=0 with explicit key holders for the
-				-- UniFi peers the translator heard or openuf.rrb lists, nasid =
-				-- BSSID, hostapd's ft_iface on the translator's veth). Off, the
-				-- section is exactly what the block above produced.
-				if cfg and cfg.config and cfg.config.unifi_ft_interop then
-					local fti = get_ftinterop()
-					if fti then
-						fti.apply(extra, vap, M.vap_bssid(vap.radio, vap.ssid),
-							get_uci().cursor(), M.DELETE, opts and opts.rrb_peers)
-						-- Only a BSS really put on the veth: the list may be
-						-- M.DELETE (no line) or hold other writers' lines.
-						local bo = extra.hostapd_bss_options
-						if type(bo) == "table" and bo ~= M.DELETE then
-							for _, l in ipairs(bo) do
-								if tostring(l):match("^ft_iface=") then interop_veth = true end
-							end
-						end
-					else
-						io.stderr:write("openuf: unifi_ft_interop is on but "
-							.. "ftinterop.lua is missing\n")
-					end
 				end
 			end
 			if opts and (opts.band_steering_active or opts.roam_assist_active) then
@@ -3262,22 +3166,12 @@ function M.apply_config(resp, cfg, opts)
 
 	-- Reload wireless
 	M._run_cmd("wifi reload")
-	-- unifi_ft_interop: a BSS was just put on the translator's veth. The
-	-- daemon derives the served BSSes and the LAN bridge from the running
-	-- hostapd configs at start, and its own reload trigger fires on LuCI's
-	-- reload_config, never on this `wifi reload`. So it is restarted here,
-	-- after the reload has written the configs it will read, and only when
-	-- what it reads changed (M.rrb_signature): every WLAN edit is a push,
-	-- and the lab showed a restart on each one. The daemon keeps what it
-	-- learned in its peers file.
-	if interop_veth then
-		local sig = M.rrb_signature(wcursor)
-		if sig ~= M._rrb_sig and M._read_file("/etc/init.d/openuf-rrb") then
-			M._run_cmd("/etc/init.d/openuf-rrb restart")
-			M._rrb_sig = sig
-		end
-	else
-		M._rrb_sig = nil
+	-- An earlier openUF's own translator veth (LEGACY_FT_VETH_SECTIONS): the
+	-- WLANs that pointed hostapd at it were just rewritten without it, so it
+	-- can go now, and only now.
+	if M.remove_legacy_ft_veth() then
+		M._run_cmd("/etc/init.d/network reload 2>/dev/null")
+		M._network_dirty = false
 	end
 	-- netifd may hand the interfaces new netdev names on the way back up, and
 	-- the wireless config this reload just wrote is the very thing the radio
@@ -3354,23 +3248,9 @@ function M.forget()
 	M.wlan_clear()
 	M.prune_vlan_networks({})
 	M.set_wlan_exclusive(false)
-	-- The translator's veth pair (ensure_ft_veth): a controller's FT WLANs
-	-- were what used it.
-	local present = {}
-	for _, t in ipairs({"device", "interface"}) do
-		cursor:foreach("network", t, function(s) present[s[".name"]] = true end)
-	end
-	local removed = false
-	for _, s in ipairs(M.FT_VETH_SECTIONS) do
-		if present[s] then
-			cursor:delete("network", s)
-			removed = true
-		end
-	end
-	if removed then
-		cursor:commit("network")
-		M._network_dirty = true
-	end
+	-- An earlier openUF's own translator veth, if this device still has it:
+	-- a controller's FT WLANs were what used it.
+	M.remove_legacy_ft_veth(cursor)
 	if M._network_dirty then
 		M._run_cmd("/etc/init.d/network reload 2>/dev/null")
 		M._network_dirty = false

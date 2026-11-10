@@ -62,7 +62,6 @@ local shaper    = _require_sibling("shaper")
 local rrbguard  = _require_sibling("rrbguard")
 local uplinkmon = _require_sibling("uplinkmon")
 local guestportal = _require_sibling("guestportal")
-local ftinterop = _require_sibling("ftinterop")
 local hangwatch = _require_sibling("hangwatch")
 
 local M = {}
@@ -106,7 +105,6 @@ M._satisfaction = satisfaction
 M._stun      = stun
 M._rrbguard  = rrbguard
 M._guestportal = guestportal
-M._ftinterop = ftinterop
 M._hangwatch = hangwatch
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
@@ -4938,8 +4936,7 @@ function M.handle_response(json_str, st, cfg)
 							device_name = device_name, model_name = M._model,
 							keep_vlans = port_vlans,
 							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac),
-							backhaul = backhaul_plan,
-							rrb_peers = st and st.rrb_peers})
+							backhaul = backhaul_plan})
 					if not ok_ac then
 						-- The wireless config is committed once, at the end of
 						-- apply_config, so a raise before it leaves the previous
@@ -7176,81 +7173,22 @@ function M._rrbguard_tick()
 	return g.tick(now, hour)
 end
 
--- ─── UniFi peers the translator heard (ftinterop.lua, rrb/rrb-unifi.uc) ────
-
--- Every heartbeat: the openuf-rrb daemon records each UniFi BSSID it hears on
--- the LAN, with the mobility domain once a roam announcement verified with
--- that WLAN's key names it (its peers file). A BSSID with a domain is a key
--- holder for that WLAN: it goes into st.rrb_peers (state.json, so a reboot
--- keeps it) and, on an adopted AP, cfgversion is forgotten so the controller
--- pushes the full config again and apply_config writes the new r0kh/r1kh
--- lines. At most one such re-push every RRB_PEERS_REPUSH_GAP, since a push
--- reloads the FT WLANs' BSSes, and only at a quiet moment, rrbguard's: no
--- client connected, or the 04:00 local hour. A re-push while clients were
--- connected reloaded Wi-Fi mid-use and once left a mesh child's AP silent
--- (Router B, 2026-10-29). Until then the new peers wait in st.rrb_peers,
--- which any other push also writes; they are not needed to roam, only for
--- this AP to push keys to them (an unlisted peer still pulls them).
---
--- Other openUF APs are learned too, by design: their own translator sends
--- UniFi-framed RRB frames and roam announcements under the WLAN's key, so
--- on the LAN they are UniFi APs, and listing them as key holders is right.
---
--- Returns nil (nothing new or pending), "learned" (kept, no re-push yet),
--- "deferred" (clients connected) or "repush".
-M.RRB_PEERS_REPUSH_GAP = 600
--- How often a pending re-push looks for a quiet moment (one `iw` per radio).
-M.RRB_PEERS_QUIET_CHECK = 60
-M._rrb_peers_next_repush = 0
-M._rrb_peers_pending = false
-function M._rrb_peers_tick(st, cfg)
-	if not (st and cfg and cfg.config and cfg.config.unifi_ft_interop) then return nil end
-	local fti = M._ftinterop
-	if not (fti and fti.learned) then return nil end
-	local learned = fti.learned(fti._read_file)
-	st.rrb_peers = st.rrb_peers or {}
-	local new = {}
-	for _, p in ipairs(learned) do
-		if p.md and st.rrb_peers[p.bssid] ~= p.md then
-			st.rrb_peers[p.bssid] = p.md
-			new[#new + 1] = p.bssid .. " (" .. p.md .. ")"
-		end
+-- Until 2026-11-02 openUF pointed hostapd at the veth of its own vendored
+-- 802.11r translator. A device upgraded from such a build still has those
+-- WLAN options and the veth sections; the sections may only go once the
+-- WLANs no longer name the veth (ucihelper.remove_legacy_ft_veth, after the
+-- reload of a push), so the controller is asked to push again, once.
+function M._migrate_legacy_rrb(st, cfg)
+	local ok, present = pcall(M._ucihelper.legacy_ft_veth_present)
+	if not (ok and present) then return false end
+	if st.adopted and st.cfgversion ~= "" then
+		st.cfgversion = ""
+		M._state.save(st)
+		io.stderr:write("openuf: this device still carries the veth of openUF's former built-in "
+			.. "802.11r translator; the controller is asked to push the WLANs again, after which "
+			.. "the veth is removed (the translator is a separate install now, see USAGE.md)\n")
 	end
-	local kept = nil
-	if #new > 0 then
-		io.stderr:write("openuf: rrb: UniFi peer(s) learned: " .. table.concat(new, ", ") .. "\n")
-		M._rrb_peers_pending = st.adopted == true
-		kept = "learned"
-	end
-	-- one save per tick: the re-push below saves the new peers with it
-	local function keep(r)
-		if kept then M._state.save(st) end
-		return r
-	end
-	if not M._rrb_peers_pending then return keep(kept) end
-	local now = M._time()
-	if M._not_due(M._rrb_peers_next_repush, now,
-		math.max(M.RRB_PEERS_REPUSH_GAP, M.RRB_PEERS_QUIET_CHECK)) then return keep(kept) end
-	local g = M._rrbguard
-	local hour = M._clock_trusted() and os.date("*t", now).hour or nil
-	if not (g and hour == g.NIGHT_HOUR) then
-		local n = g and g.station_count and g.station_count()
-		if n ~= 0 then
-			if kept then
-				io.stderr:write("openuf: rrb: re-push deferred while clients are connected; "
-					.. "it waits for none, or the 0" .. tostring(g and g.NIGHT_HOUR) .. ":00 hour\n")
-			end
-			M._rrb_peers_next_repush = now + M.RRB_PEERS_QUIET_CHECK
-			return keep(kept or "deferred")
-		end
-	end
-	st.cfgversion = ""
-	M._rrb_peers_pending = false
-	M._rrb_peers_next_repush = now + M.RRB_PEERS_REPUSH_GAP
-	M._state.save(st)
-	io.stderr:write("openuf: rrb: cfgversion forgotten so the controller pushes the "
-		.. "full config again; the new peer(s) become key holders then\n")
-	return "repush"
+	return true
 end
 
 -- ─── WiFi Blackout Schedule ─────────────────────────────────────────────────
@@ -8337,7 +8275,6 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._block_resync, st)
 	pcall(M._sched_resync, st)
 	pcall(M._rrbguard_tick)
-	pcall(M._rrb_peers_tick, st, cfg)
 	-- The address this inform reports, read now rather than at startup (see
 	-- _refresh_net_info: a DHCP lease that arrived after the daemon did).
 	pcall(M._refresh_net_info, st, cfg)
@@ -8530,6 +8467,7 @@ function M.run(cfg, ufhw)
 	M._warn_debug_overrides(cfg)
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	M._reconcile_plugins(st, cfg)
+	M._migrate_legacy_rrb(st, cfg)
 	-- Blocked-client nft rules are live kernel state, not persisted UCI --
 	-- reapply from state.json on every fresh start (mirrors the bootstrap
 	-- account reconciliation just above).

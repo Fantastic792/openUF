@@ -490,4 +490,36 @@ return {
 			end
 		end
 	},
+	{
+		name = "inform: a device that still carries the former translator's veth is pushed again, once",
+		fn = function()
+			OPENUF_TEST_MODE = true
+			local inform = dofile("openuf/inform.lua")
+			local saved, present = 0, true
+			local orig_state, orig_uh = inform._state, inform._ucihelper
+			inform._state = setmetatable({save = function() saved = saved + 1 end}, {__index = orig_state})
+			inform._ucihelper = {legacy_ft_veth_present = function() return present end}
+			local function st(t) t.cfgversion = "v1"; return t end
+
+			local s = st({adopted = true})
+			assert_true(inform._migrate_legacy_rrb(s, {}), "found")
+			assert_eq(s.cfgversion, "", "the controller is asked to push the WLANs again")
+			assert_eq(saved, 1, "saved")
+
+			s = st({adopted = false})
+			inform._migrate_legacy_rrb(s, {})
+			assert_eq(s.cfgversion, "v1", "an unadopted device has no push to wait for")
+
+			present = false
+			s = st({adopted = true})
+			assert_false(inform._migrate_legacy_rrb(s, {}), "nothing left")
+			assert_eq(s.cfgversion, "v1", "a clean device is left alone")
+
+			inform._ucihelper = {legacy_ft_veth_present = function() error("uci down") end}
+			s = st({adopted = true})
+			assert_false(inform._migrate_legacy_rrb(s, {}), "an error reads as not present")
+			assert_eq(s.cfgversion, "v1", "and changes nothing")
+			inform._state, inform._ucihelper = orig_state, orig_uh
+		end
+	},
 }

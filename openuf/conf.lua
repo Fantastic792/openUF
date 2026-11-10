@@ -71,26 +71,15 @@ config = {
 	-- already switched off is switched back on.
 	keep_wlan_sections = {},
 
-	-- 802.11r fast roaming with genuine UniFi APs (ftinterop.lua). Needs the
-	-- RRB translator openUF ships as the openuf-rrb service (rrb/rrb-unifi.uc,
-	-- vendored from d-malinowski's rrb-unifi; `openuf rrb status`), which
-	-- converts between OpenWrt's and UniFi's inter-AP key-exchange framing on
-	-- a veth pair. When on, every FT WLAN uses UniFi's mobility domain,
-	-- ft_psk_generate_local=0 with explicit key holders for the UniFi peers
-	-- the translator heard (or listed by hand as openuf.rrb `list peer`),
-	-- nas_identifier = BSSID without colons, and hostapd's ft_iface on the
-	-- translator's veth (only when that veth exists). On by default
-	-- for new installations: without the translator openUF APs still roam
-	-- among themselves, and a site with no UniFi AP notices nothing. Set
-	-- false on a site that has genuine UniFi APs but no translator: openUF's
-	-- own mobility domain then keeps clients from trying a fast transition
-	-- towards them that can only fall back to a full reconnect.
-	unifi_ft_interop = true,
-
-	-- Third-party plugins to load from /etc/openuf/plugins/<name>.lua, by name.
-	-- A plugin edits the UCI options of each WLAN openUF provisions, so it runs
-	-- as root with the same trust as this file: list only code you have read.
-	-- Empty (the default) loads nothing. See USAGE.md, "Plugins".
+	-- Third-party plugins to load from /etc/openuf/plugins/<name>.lua, by name
+	-- (plugins.lua). A plugin edits the UCI options of each WLAN openUF
+	-- provisions, so it runs as root with the same trust as this file: list
+	-- only code you have read. Empty (the default) loads nothing; an installer
+	-- adds its name to /etc/openuf/plugins.enabled instead of editing this
+	-- file, and a UCI-managed device lists it as `list plugin 'name'`. 802.11r
+	-- fast roaming with genuine UniFi APs is such a plugin: d-malinowski's
+	-- rrb-unifi (github.com/d-malinowski/unifi-openwrt-roaming), which
+	-- setup.sh offers to install. See USAGE.md, "Plugins".
 	plugins = {},
 
 	-- URL the inform loop posts to.  Overwritten at runtime when the controller
