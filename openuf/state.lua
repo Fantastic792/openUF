@@ -153,6 +153,9 @@ local TYPED = {
 	-- The last pushed mesh uplink ({radio, vport, devname}): a push that
 	-- leaves the uplink out (a wired child) rebuilds the station from it.
 	backhaul_ul               = "table",
+	-- The 802.11r key holders heard on the LAN ({bssid = mobility domain},
+	-- inform._rrb_peers_tick), kept so a reboot does not relearn them.
+	rrb_peers                 = "table",
 	-- The tagged SSIDs' VLANs carried over the mesh hop on a swconfig board
 	-- ({bridge, vids}, meshvlan.lua): kernel state, rebuilt at startup.
 	meshvlan                  = "table",
