@@ -10125,4 +10125,91 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		name = "inform: _not_due is false once the clock stepped back further than the interval",
+		fn = function()
+			assert_true(inform._not_due(160, 100, 60), "ahead within the interval: not due")
+			assert_false(inform._not_due(161, 100, 60), "ahead beyond the interval: clock stepped back, due")
+			assert_false(inform._not_due(100, 100, 60), "equal: due")
+			assert_false(inform._not_due(50, 100, 60), "in the past: due")
+		end
+	},
+	{
+		name = "inform: a clock stepped back a day does not stall the bcfilt resync",
+		fn = function()
+			local orig = {time = inform._time, u = inform._ucihelper, nxt = inform._bcfilt_next}
+			local runs = 0
+			inform._ucihelper = {resync_runtime_rules = function() runs = runs + 1; return true end}
+			inform._time = function() return 1000000 end
+			inform._bcfilt_next = 0
+			inform._bcfilt_resync()
+			assert_eq(runs, 1, "first call runs")
+			inform._bcfilt_resync()
+			assert_eq(runs, 1, "inside the interval it waits")
+			inform._time = function() return 1000000 - 86400 end
+			inform._bcfilt_resync()
+			assert_eq(runs, 2, "after a backward step it is due at once")
+			inform._time, inform._ucihelper, inform._bcfilt_next = orig.time, orig.u, orig.nxt
+		end
+	},
+	{
+		name = "inform: _idle returns after about the wait when the clock steps back mid-wait",
+		fn = function()
+			local t, slept = 1000, 0
+			local sock = {
+				gettime = function() return t end,
+				select = function(_, _, timeout)
+					slept = slept + timeout
+					if slept == timeout then t = t - 3600 end   -- NTP step on the first sleep
+					t = t + timeout
+					return {}
+				end,
+			}
+			local real = inform._guest_server
+			inform._guest_server = nil
+			local fast, st = inform._roam_fast, nil
+			inform._roam_fast = false
+			inform._idle(sock, 10, true)
+			inform._roam_fast, inform._guest_server = fast, real
+			assert_true(slept < 100, "slept " .. slept .. "s, not wait plus the step")
+		end
+	},
+	{
+		name = "inform: a failed build_json is written to the status file",
+		fn = function()
+			local orig = {build = inform.build_json, status = inform._write_status,
+				time = inform._time, scan = inform._maybe_scan_neighbours}
+			local got
+			inform.build_json = function() error("boom", 0) end
+			inform._write_status = function(_, f) got = f end
+			inform._maybe_scan_neighbours = function() end
+			inform._time = function() return 5000 end
+			local ret = inform._tick({inform_url = "u"}, {config = {}}, nil, {interval = 10, backoff = 10})
+			inform.build_json, inform._write_status = orig.build, orig.status
+			inform._time, inform._maybe_scan_neighbours = orig.time, orig.scan
+			assert_eq(ret, 10, "tick still returns the interval")
+			assert_eq(got and got.last_fail_msg, "build_json failed: boom", "status message")
+			assert_eq(got.last_fail, 5000, "status time")
+		end
+	},
+	{
+		name = "inform: a failed build_packet is written to the status file",
+		fn = function()
+			local orig = {build = inform.build_json, packet = inform.build_packet,
+				status = inform._write_status, time = inform._time,
+				scan = inform._maybe_scan_neighbours}
+			local got
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() error("bang", 0) end
+			inform._write_status = function(_, f) got = f end
+			inform._maybe_scan_neighbours = function() end
+			inform._time = function() return 5000 end
+			local ret = inform._tick({inform_url = "u"}, {config = {}}, nil, {interval = 10, backoff = 10})
+			inform.build_json, inform.build_packet = orig.build, orig.packet
+			inform._write_status, inform._time = orig.status, orig.time
+			inform._maybe_scan_neighbours = orig.scan
+			assert_eq(ret, 10, "tick still returns the interval")
+			assert_eq(got and got.last_fail_msg, "build_packet failed: bang", "status message")
+		end
+	},
 }

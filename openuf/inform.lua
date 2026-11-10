@@ -247,6 +247,11 @@ M._cu_cache = {}
 -- Injectable: override in tests to control elapsed time deterministically.
 M._time = os.time
 
+-- true while `next_at` is still ahead of `now`, but not further ahead than
+-- `interval` can explain (clock stepped back => due now). Without the bound,
+-- NTP pulling a fast clock back D seconds stalls every gate for D seconds.
+function M._not_due(next_at, now, interval) return now < next_at and (next_at - now) <= interval end
+
 -- Injectable: override in tests to return fixture command output
 M._run_cmd = util.capture
 
@@ -5554,7 +5559,8 @@ function M._guest_wg_resolve(st)
 		return true
 	end
 	local sig = guest_wg_sig(names)
-	if sig == M._guest_wg_sig and now < M._guest_wg_next then return false end
+	if sig == M._guest_wg_sig and M._not_due(M._guest_wg_next, now,
+		math.max(M.GUEST_WG_INTERVAL, M.GUEST_WG_RETRY)) then return false end
 	local store = type(st.guest_wg_ips) == "table" and st.guest_wg_ips or {}
 	local changed, partial = false, false
 	local out = {}
@@ -5590,7 +5596,8 @@ function M._guest_wg_resync(st)
 	-- that exists to do nothing allocated two tables per heartbeat.
 	if (spec.wg_allowed and #spec.wg_allowed or 0) == 0
 		and (spec.wg_restricted and #spec.wg_restricted or 0) == 0 then return false end
-	if M._time() < M._guest_wg_next then return false end
+	if M._not_due(M._guest_wg_next, M._time(),
+		math.max(M.GUEST_WG_INTERVAL, M.GUEST_WG_RETRY)) then return false end
 	if not M._guest_wg_resolve(st) then return false end
 	io.stderr:write("guestportal: walled-garden addresses changed -- rebuilding\n")
 	M._guest_enforce(st)
@@ -5662,7 +5669,7 @@ function M._guest_resync(st)
 	local spec = st and st.guest_portal
 	if not (M._guestportal and type(spec) == "table" and spec.enabled) then return false end
 	local now = M._time()
-	if now < M._guest_next then return false end
+	if M._not_due(M._guest_next, now, M.GUEST_RESYNC_INTERVAL) then return false end
 	M._guest_next = now + M.GUEST_RESYNC_INTERVAL
 	local vaps = M._guest_vaps(st)
 	if #vaps == 0 or guest_vaps_key(vaps) == M._guest_built then return false end
@@ -6643,7 +6650,7 @@ function M._l2guard_resync(st)
 	local g = st and st.l2guard
 	if not (M._l2guard and type(g) == "table" and (g.bpdu or g.tagdrop)) then return false end
 	local now = M._time()
-	if now < M._l2guard_next then return false end
+	if M._not_due(M._l2guard_next, now, M.L2GUARD_RESYNC_INTERVAL) then return false end
 	M._l2guard_next = now + M.L2GUARD_RESYNC_INTERVAL
 	local names = M._l2guard_live_ifnames()
 	if #names == 0 or same_names(names, g.ifnames) then return false end
@@ -6665,7 +6672,7 @@ function M._bcfilt_resync()
 	local u = M._ucihelper
 	if not (u and u.resync_runtime_rules) then return false end
 	local now = M._time()
-	if now < M._bcfilt_next then return false end
+	if M._not_due(M._bcfilt_next, now, M.BCFILT_RESYNC_INTERVAL) then return false end
 	M._bcfilt_next = now + M.BCFILT_RESYNC_INTERVAL
 	return u.resync_runtime_rules()
 end
@@ -6679,7 +6686,7 @@ M._hairpin_next = 0
 function M._hairpin_resync()
 	if not (M._l2guard and M._l2guard.reconcile_hairpin) then return 0 end
 	local now = M._time()
-	if now < M._hairpin_next then return 0 end
+	if M._not_due(M._hairpin_next, now, M.HAIRPIN_CHECK_INTERVAL) then return 0 end
 	M._hairpin_next = now + M.HAIRPIN_CHECK_INTERVAL
 	return M._l2guard.reconcile_hairpin()
 end
@@ -6695,7 +6702,7 @@ function M._usteer_filter_resync()
 	local u = M._usteer
 	if not (u and u.reconcile_filter and u.filter_wanted) then return false end
 	local now = M._time()
-	if now < M._usteer_filter_next then return false end
+	if M._not_due(M._usteer_filter_next, now, M.USTEER_FILTER_INTERVAL) then return false end
 	M._usteer_filter_next = now + M.USTEER_FILTER_INTERVAL
 	local names = {}
 	if u.filter_wanted() then
@@ -7152,7 +7159,8 @@ function M._rrb_peers_tick(st, cfg)
 	end
 	if not M._rrb_peers_pending then return keep(kept) end
 	local now = M._time()
-	if now < M._rrb_peers_next_repush then return keep(kept) end
+	if M._not_due(M._rrb_peers_next_repush, now,
+		math.max(M.RRB_PEERS_REPUSH_GAP, M.RRB_PEERS_QUIET_CHECK)) then return keep(kept) end
 	local g = M._rrbguard
 	local hour = M._clock_trusted() and os.date("*t", now).hour or nil
 	if not (g and hour == g.NIGHT_HOUR) then
@@ -7395,6 +7403,12 @@ function M._idle(socket, wait, state_changed)
 	local guests = true
 	while true do
 		local left = deadline - socket.gettime()
+		-- A backward clock step (NTP) makes `left` exceed the whole wait and
+		-- the daemon stops informing for the step's length: restart the wait.
+		if left > wait then
+			deadline = socket.gettime() + wait
+			left = wait
+		end
 		if left <= 0 then return end
 		local step = fast and math.min(left, M.ROAM_POLL_S) or left
 		if watch then step = math.min(step, M.CARRIER_POLL_S) end
@@ -7765,7 +7779,8 @@ function M._rrm_tick(cfg, st)
 	table.sort(live, function(a, b) return a.bssid < b.bssid end)
 	M._rrm_neighbours = live
 
-	if now < M._rrm_next_request then return true end
+	if M._not_due(M._rrm_next_request, now, math.max(
+		tonumber(cfg.config.rrm_request_interval) or 0, M.RRM_REQUEST_INTERVAL)) then return true end
 	M._rrm_next_request = now +
 		(tonumber(cfg.config.rrm_request_interval) or M.RRM_REQUEST_INTERVAL)
 
@@ -8141,6 +8156,8 @@ function M._tick(st, cfg, ufhw, ctx)
 	if M._sysinfo and M._sysinfo.end_pass then pcall(M._sysinfo.end_pass) end
 	if not ok_b then
 		io.stderr:write("inform: build_json failed: " .. tostring(json_str) .. "\n")
+		pcall(M._write_status, st, {last_fail = M._time(),
+			last_fail_msg = "build_json failed: " .. tostring(json_str)})
 		return ctx.interval
 	end
 	-- build_json cleared a stale upgrade mark (see reported_uptime).
@@ -8156,6 +8173,8 @@ function M._tick(st, cfg, ufhw, ctx)
 	local ok_p, pkt = pcall(M.build_packet, json_str, st)  -- use_gcm read from st.use_gcm
 	if not ok_p then
 		io.stderr:write("inform: build_packet failed: " .. tostring(pkt) .. "\n")
+		pcall(M._write_status, st, {last_fail = M._time(),
+			last_fail_msg = "build_packet failed: " .. tostring(pkt)})
 		return ctx.interval
 	end
 
