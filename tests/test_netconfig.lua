@@ -180,4 +180,52 @@ return {
 			assert_false(netconfig.is_ipv4(nil), "nil")
 		end
 	},
+	{
+		name = "netconfig: snapshot reads addresses, default route and DNS; restore puts them back",
+		fn = function()
+			local tmp = os.tmpname()
+			local f = assert(io.open(tmp, "w"))
+			f:write("# x\nnameserver 192.0.2.53\nnameserver bad\n")
+			f:close()
+			local o_read, o_exec, o_rc = netconfig._read, netconfig._exec, netconfig.RESOLV_CONF
+			local cmds = {}
+			netconfig.RESOLV_CONF = tmp
+			netconfig._read = function(cmd)
+				if cmd:find("addr show", 1, true) then
+					return "2: br0    inet 192.0.2.10/24 brd 192.0.2.255 scope global br0\n"
+						.. "2: br0    inet 198.51.100.7/16 scope global br0\n"
+				end
+				return "default via 192.0.2.1 dev br0 proto static\n"
+			end
+			netconfig._exec = function(c) cmds[#cmds + 1] = c return true end
+			local ok, err = pcall(function()
+				local s = netconfig.snapshot("br0")
+				assert_eq(table.concat(s.addrs, " "), "192.0.2.10/24 198.51.100.7/16", "both addresses")
+				assert_eq(s.gw, "192.0.2.1", "gateway")
+				assert_eq(table.concat(s.dns, " "), "192.0.2.53", "valid nameservers only")
+				assert_true(netconfig.restore("br0", s), "restored")
+				assert_eq(cmds[1], "ip -4 addr flush dev br0 2>/dev/null", "flush first")
+				assert_eq(cmds[2], "ip addr add 192.0.2.10/24 dev br0 2>/dev/null", "first address")
+				assert_eq(cmds[3], "ip addr add 198.51.100.7/16 dev br0 2>/dev/null", "second")
+				assert_eq(cmds[4], "ip route replace default via 192.0.2.1 2>/dev/null", "route")
+				assert_contains(cmds[5], "nameserver 192.0.2.53", "dns")
+				cmds = {}
+				assert_false(netconfig.restore("br0", {addrs = {"192.0.2.4/24; reboot",
+					"300.1.1.1/24", "192.0.2.4/40", 7}, gw = "x; y", dns = "z"}), "all bad: refused")
+				assert_eq(#cmds, 0, "and no flush, the port keeps what it has")
+				assert_true(netconfig.restore("br0", {addrs = {"192.0.2.4/24", "x; reboot"},
+					gw = "x; y", dns = "z"}), "a bad entry next to a good one")
+				assert_eq(#cmds, 2, "flush and the good address only")
+				cmds = {}
+				assert_true(netconfig.restore("br0", {addrs = {}}), "port had no address")
+				assert_eq(#cmds, 1, "flush only: back to nothing")
+				assert_false(netconfig.restore(nil, s), "no iface")
+				assert_false(netconfig.restore("br0", {addrs = "x"}), "malformed record")
+				assert_eq(netconfig.snapshot(nil), nil, "no iface, no snapshot")
+			end)
+			netconfig._read, netconfig._exec, netconfig.RESOLV_CONF = o_read, o_exec, o_rc
+			os.remove(tmp)
+			if not ok then error(err, 0) end
+		end
+	},
 }

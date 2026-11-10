@@ -40,6 +40,8 @@ inform._guestportal._exec = function() return 0 end
 -- "WSL loses its default route" quirk). Tests that check the commands
 -- install their own recorder and put this one back.
 inform._netconfig._exec = function() return true end
+-- The rollback snapshot reads `ip addr`/`ip route`; never the host's.
+inform._netconfig._read = function() return "" end
 inform._guestportal.listen = function() return {close = function() end} end
 
 -- Deterministic IV for the TEST FILE's own crypto instance -- affects only
@@ -6306,8 +6308,9 @@ return {
 			local orig_uci = inform._ucihelper
 			inform._netconfig._exec = function() return true end
 			inform._state.save = function(t)
-				-- snapshot, so a later save cannot mask an earlier omission
-				saved = saved or {ip_mode = t.ip_mode, static_ip = t.static_ip,
+				-- A copy of the last save before the raise (the rollback arm
+				-- saves once before the change; nothing saves after the raise).
+				saved = {ip_mode = t.ip_mode, static_ip = t.static_ip,
 					static_netmask = t.static_netmask, static_gateway = t.static_gateway}
 			end
 			-- Everything after the IP branch blows up, the way usteer did
@@ -10481,6 +10484,158 @@ return {
 				assert_eq(st.push_fail, nil, "with its time")
 			end)
 			io.stderr, inform._status.push_ok = o_err, o_ok
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: a management address change arms a rollback; the next reply confirms it",
+		fn = function()
+			local o_snap = inform._netconfig.snapshot
+			local ok, err = pcall(with_tick_env, function()
+				local snap = {addrs = {"192.0.2.10/24"}, gw = "192.0.2.1", dns = {}}
+				inform._netconfig.snapshot = function(iface)
+					assert_eq(iface, "eth0", "snapshot of the management port")
+					return snap
+				end
+				inform._time = function() return 5000 end
+				-- The DHCP revert re-reads the port through announce.
+				inform._announce.get_mac = function() return {2, 0, 0, 0, 0, 1} end
+				local st, cfg = sample_state(), {net = {lan_cpueth = "eth0"}}
+				inform._state.save(st)  -- no record left on disk by an earlier test
+				local push = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n'
+					.. 'netconf.1.netmask=255.255.255.0\\nroute.1.gateway=198.51.100.1\\n"}'
+				-- The record is on disk before the first command of the change.
+				local o_exec, on_disk = inform._netconfig._exec, nil
+				inform._netconfig._exec = function()
+					if on_disk == nil then on_disk = inform._state.load().ip_rollback ~= nil end
+					return true
+				end
+				inform.handle_response(push, st, cfg)
+				inform._netconfig._exec = o_exec
+				assert_eq(on_disk, true, "saved before the change")
+				local rb = st.ip_rollback
+				assert_true(type(rb) == "table", "armed")
+				assert_eq(rb.snap, snap, "with what was on the port")
+				assert_eq(rb.mode, nil, "and the old mode (never pushed)")
+				assert_eq(rb.at, 5000, "and when")
+				assert_eq(inform._state.load().ip_rollback.snap.addrs[1], "192.0.2.10/24",
+					"saved before the change, so a reboot keeps it")
+				-- The same push again (steady state) does not re-arm.
+				st.ip_rollback = nil
+				inform.handle_response(push, st, cfg)
+				assert_eq(st.ip_rollback, nil, "unchanged push: no arm")
+				-- A new gateway is a change.
+				inform.handle_response(push:gsub("198%.51%.100%.1\\n", "198.51.100.2\\n"), st, cfg)
+				assert_eq(st.ip_rollback.ip, "198.51.100.50", "old static recorded")
+				assert_eq(st.ip_rollback.mode, "static", "old mode recorded")
+				-- Back to DHCP from our static is a change; DHCP on DHCP is not.
+				st.ip_rollback = nil
+				local dhcp = '{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n'
+					.. 'dhcpc.1.status=enabled\\n"}'
+				inform.handle_response(dhcp, st, cfg)
+				assert_eq(st.ip_rollback.mode, "static", "dhcp revert armed")
+				st.ip_rollback = nil
+				inform.handle_response(dhcp, st, cfg)
+				assert_eq(st.ip_rollback, nil, "dhcp on dhcp: no arm")
+				-- Any reply from the controller confirms, an HTTP error too.
+				st.ip_rollback = {at = 5000, snap = snap}
+				inform._http_post = function() return response('{"_type":"noop"}', st) end
+				with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				assert_eq(st.ip_rollback, nil, "confirmed by a reply")
+				assert_eq(inform._state.load().ip_rollback, nil, "and saved")
+				st.ip_rollback = {at = 5000, snap = snap}
+				inform._http_post = function() return nil, "HTTP 404" end
+				with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				assert_eq(st.ip_rollback, nil, "an HTTP error is a reply too")
+				st.ip_rollback = {at = 5000, snap = snap}
+				inform._http_post = function() return nil, "HTTP nil" end
+				with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				assert_eq(st.ip_rollback.fails, 1, "an empty answer is not a reply")
+				-- The reply that carries the change does not confirm it.
+				st = sample_state()
+				inform._http_post = function() return response(push, st) end
+				with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				assert_eq(st.static_ip, "198.51.100.50", "push applied by the tick")
+				assert_true(type(st.ip_rollback) == "table", "still waiting for the next reply")
+				-- A restart starts the window again.
+				st.ip_rollback.fails, st.ip_rollback.at = 2, 1
+				inform._time = function() return 7000 end
+				inform._ip_rollback_boot(st)
+				assert_eq(st.ip_rollback.fails, 0, "boot resets the count")
+				assert_eq(st.ip_rollback.at, 7000, "and the clock")
+			end)
+			inform._netconfig.snapshot = o_snap
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: no reply 3 times and 90 s after an address change puts the old one back",
+		fn = function()
+			local o_restore = inform._netconfig.restore
+			local ok, err = pcall(with_tick_env, function()
+				local restored
+				inform._netconfig.restore = function(iface, s) restored = {iface, s} return true end
+				local now = 1000
+				inform._time = function() return now end
+				local snap = {addrs = {"192.0.2.10/24"}, gw = "192.0.2.1", dns = {"192.0.2.53"}}
+				local cfg = {net = {lan_cpueth = "eth0"}}
+				local st = sample_state({ip_mode = "static", static_ip = "198.51.100.50",
+					static_netmask = "255.255.255.0", static_gateway = "198.51.100.1",
+					ip_rollback = {mode = "static", ip = "192.0.2.10", mask = "255.255.255.0",
+						gw = "192.0.2.1", dns = {"192.0.2.53"}, at = 990, snap = snap}})
+				inform._http_post = function() return nil, "connection refused" end
+				for _ = 1, 3 do
+					now = now + 10
+					with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				end
+				assert_eq(restored, nil, "3 failures inside 90 s: not yet")
+				now = 1080
+				local out = with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				assert_true(restored ~= nil, "rolled back")
+				assert_eq(restored[1], "eth0", "on the management port")
+				assert_eq(restored[2], snap, "to what was there")
+				assert_eq(st.ip_rollback, nil, "record spent")
+				assert_eq(st.ip_mode, "static", "old mode back")
+				assert_eq(st.static_ip, "192.0.2.10", "old address back")
+				assert_eq(st.static_gateway, "192.0.2.1", "old gateway back")
+				assert_eq(st.static_dns[1], "192.0.2.53", "old DNS back")
+				assert_eq(st.ip, "192.0.2.10", "reported address follows")
+				assert_contains(out, "old management address put back", "logged")
+				assert_contains(st.push_fail_stages or "", "ip_rollback", "shown as a failed stage")
+				local saved = inform._state.load()
+				assert_eq(saved.static_ip, "192.0.2.10", "saved, so a reboot reapplies the old one")
+				assert_eq(saved.ip_rollback, nil, "record gone from disk")
+				-- Clock went back (reboot, no RTC): failures alone decide.
+				restored = nil
+				st.ip_rollback = {mode = nil, at = 999999, snap = snap}
+				st.ip_mode, st.static_ip = "static", "198.51.100.50"
+				for _ = 1, 3 do
+					with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				end
+				assert_true(restored ~= nil, "rolled back after a clock jump")
+				assert_eq(st.ip_mode, nil, "never-pushed mode back")
+				assert_eq(st.static_ip, nil, "no static address left")
+				-- A malformed record is dropped, not acted on.
+				restored = nil
+				st.ip_rollback = {at = 0, snap = "x"}
+				for _ = 1, 3 do
+					with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				end
+				assert_eq(restored, nil, "malformed: no restore")
+				assert_eq(st.ip_rollback, nil, "and dropped")
+				-- restore refuses the snapshot: the port is untouched, so is st.
+				inform._netconfig.restore = function() return false end
+				st.ip_rollback = {mode = "dhcp", at = 0, snap = {addrs = {"bad"}}}
+				st.ip_mode, st.static_ip = "static", "198.51.100.50"
+				local out2 = ""
+				for _ = 1, 3 do
+					out2 = out2 .. with_stderr(function() inform._tick(st, cfg, nil, fresh_ctx()) end)
+				end
+				assert_contains(out2, "record unusable", "logged")
+				assert_eq(st.ip_rollback, nil, "record dropped")
+				assert_eq(st.static_ip, "198.51.100.50", "st still matches the port")
+			end)
+			inform._netconfig.restore = o_restore
 			if not ok then error(err, 0) end
 		end
 	},

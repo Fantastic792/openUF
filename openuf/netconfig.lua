@@ -103,6 +103,67 @@ function M.apply_static(iface, ip, netmask, gateway, dns)
 	return true
 end
 
+-- Injectable: run a command and return its output ("" when it cannot run).
+M._read = function(cmd)
+	local p = io.popen(cmd)
+	if not p then return "" end
+	local s = p:read("*a") or ""
+	p:close()
+	return s
+end
+
+local function is_cidr(s)
+	if type(s) ~= "string" then return false end
+	local a, p = s:match("^(%d+%.%d+%.%d+%.%d+)/(%d+)$")
+	return a ~= nil and is_ipv4(a) and tonumber(p) <= 32
+end
+
+-- What iface carries now, for a commit-confirm rollback (inform.lua):
+-- {addrs = {"a.b.c.d/nn", ...}, gw = "a.b.c.d" or nil, dns = {...}}.
+-- The kernel's view, not ours: it is right whether the address came from a
+-- lease, the router's own config or an earlier push. nil without an iface.
+function M.snapshot(iface)
+	if not iface then return nil end
+	local snap = {addrs = {}, dns = {}}
+	local out = M._read(string.format("ip -4 -o addr show dev %s 2>/dev/null", iface))
+	for cidr in out:gmatch("inet (%d+%.%d+%.%d+%.%d+/%d+)") do
+		if is_cidr(cidr) then snap.addrs[#snap.addrs + 1] = cidr end
+	end
+	local gw = M._read("ip -4 route show default 2>/dev/null"):match("default via (%d+%.%d+%.%d+%.%d+)")
+	if is_ipv4(gw) then snap.gw = gw end
+	local f = io.open(M.RESOLV_CONF, "r")
+	if f then
+		for ns in (f:read("*a") or ""):gmatch("nameserver%s+([%d%.]+)") do
+			if is_ipv4(ns) then snap.dns[#snap.dns + 1] = ns end
+		end
+		f:close()
+	end
+	return snap
+end
+
+-- Put a snapshot back. It comes from state.json, so every entry is checked
+-- again before it reaches a command line; a bad one is skipped. DNS is only
+-- rewritten when the snapshot had nameservers (apply_dns's own rule).
+function M.restore(iface, snap)
+	if not iface or type(snap) ~= "table" or type(snap.addrs) ~= "table" then return false end
+	local good = {}
+	for _, cidr in ipairs(snap.addrs) do
+		if is_cidr(cidr) then good[#good + 1] = cidr end
+	end
+	-- Had addresses, none usable: a corrupt record. Flushing would leave
+	-- the port with nothing, worse than the push it means to undo.
+	if #snap.addrs > 0 and #good == 0 then return false end
+	M._exec(string.format("ip -4 addr flush dev %s 2>/dev/null", iface))
+	for _, cidr in ipairs(good) do
+		M._exec(string.format("ip addr add %s dev %s 2>/dev/null", cidr, iface))
+	end
+	if is_ipv4(snap.gw) then
+		M._exec(string.format("ip route replace default via %s 2>/dev/null", snap.gw))
+	end
+	if type(snap.dns) == "table" then M.apply_dns(snap.dns) end
+	return true
+end
+
 -- Release any static config and let a DHCP client re-acquire an address.
 -- Best-effort: real hardware's netifd handles this natively; here we shell
 -- out to udhcpc directly (present on both Alpine and OpenWrt).

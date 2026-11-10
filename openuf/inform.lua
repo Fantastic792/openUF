@@ -4790,6 +4790,11 @@ function M.handle_response(json_str, st, cfg)
 
 			if ip then
 				local iface = cfg and cfg.net and cfg.net.lan_cpueth
+				-- pcall'd: a failed arm must not stop the push it guards.
+				local ok_arm, err_arm = pcall(M._arm_ip_rollback, st, iface, dhcp, ip, netmask, gateway)
+				if not ok_arm then
+					io.stderr:write("inform: ip rollback arm: " .. tostring(err_arm) .. "\n")
+				end
 				if dhcp then
 					-- Only genuinely ACT when reverting our own prior static
 					-- config -- a fresh device's first-ever system_cfg (and
@@ -7916,7 +7921,7 @@ end
 -- a stage that refuses without raising (switchvlan on a board with no port
 -- map) is in the log only.
 M.PUSH_HINT = "Force Provision this device in the controller (or change one of its settings)"
-function M._note_push(st, failed, full)
+function M._note_push(st, failed, full, quiet)
 	M._push_open = false
 	if type(st) ~= "table" then return end
 	local names = {}
@@ -7935,10 +7940,93 @@ function M._note_push(st, failed, full)
 	end
 	if type(failed) == "table" and #failed > 0 then st.push_fail = M._time() end
 	st.push_fail_stages = table.concat(names, ",")
-	if type(failed) == "table" and #failed > 0 then
+	if type(failed) == "table" and #failed > 0 and not quiet then
 		io.stderr:write("inform: config push applied in part, not applied: " .. st.push_fail_stages
 			.. " -- " .. M.PUSH_HINT .. " to send it again\n")
 	end
+end
+
+-- Commit-confirm for the management address (audit #10). A push that
+-- really changes it (mode, address, netmask or gateway; not the
+-- steady-state repeat of the same values) first saves the old ip_mode and
+-- static_* fields plus a kernel snapshot of the port in st.ip_rollback, on
+-- disk before the change, so a reboot inside the window still rolls back.
+-- Any controller reply after that (an HTTP error too: the controller was
+-- reached) confirms it. With no reply IP_ROLLBACK_FAILS times in a row and
+-- IP_ROLLBACK_SECS since the change, the old address is put back. The
+-- cfgversion stays recorded, so the controller does not push the bad
+-- address again by itself; a later full push carries it again and costs
+-- one more window. Known limits: snapshot and apply act on lan_cpueth, so
+-- on a board whose address sits on the bridge master the old address can
+-- confirm the new one (apply_static's own limit); a rollback to a leased
+-- address leaves renewal to the DHCP client that was already running.
+M.IP_ROLLBACK_FAILS = 3
+M.IP_ROLLBACK_SECS = 90
+function M._arm_ip_rollback(st, iface, dhcp, ip, netmask, gateway)
+	local change
+	if dhcp then
+		change = st.ip_mode == "static"
+	else
+		change = st.ip_mode ~= "static" or st.static_ip ~= ip
+			or (st.static_netmask or "") ~= (netmask or "")
+			or (st.static_gateway or "") ~= (gateway or "")
+	end
+	if not change then return end
+	local snap = M._netconfig.snapshot and M._netconfig.snapshot(iface)
+	if type(snap) ~= "table" then return end
+	st.ip_rollback = {mode = st.ip_mode, ip = st.static_ip, mask = st.static_netmask,
+		gw = st.static_gateway, dns = st.static_dns, at = M._time(), snap = snap}
+	M._state.save(st)
+end
+
+-- At startup: the window starts again. Failures before the reboot, and the
+-- arm time on a clock that may have reset, say nothing about this boot,
+-- where the first POSTs can fail only because the link is still coming up.
+function M._ip_rollback_boot(st)
+	local rb = st.ip_rollback
+	if type(rb) == "table" then rb.fails, rb.at = 0, M._time() end
+end
+
+-- Called once per inform POST while st.ip_rollback is set. reached: the
+-- controller answered (any HTTP status).
+function M._ip_rollback_check(st, cfg, reached)
+	local rb = st.ip_rollback
+	if type(rb) ~= "table" or type(rb.snap) ~= "table" then
+		st.ip_rollback = nil
+		pcall(M._state.save, st)
+		return
+	end
+	if reached then
+		st.ip_rollback = nil
+		io.stderr:write("inform: new management address confirmed by the controller\n")
+		pcall(M._state.save, st)
+		return
+	end
+	rb.fails = (tonumber(rb.fails) or 0) + 1
+	local since = M._time() - (tonumber(rb.at) or 0)
+	-- since < 0: the clock went back (a reboot without an RTC); count only.
+	if rb.fails < M.IP_ROLLBACK_FAILS or (since >= 0 and since < M.IP_ROLLBACK_SECS) then
+		return
+	end
+	st.ip_rollback = nil
+	local iface = cfg and cfg.net and cfg.net.lan_cpueth
+	if not M._netconfig.restore(iface, rb.snap) then
+		-- Nothing was changed on the port, so the record of it stays too.
+		io.stderr:write("inform: ip rollback record unusable, dropped\n")
+		pcall(M._state.save, st)
+		return
+	end
+	local function s(v) return type(v) == "string" and v or nil end
+	st.ip_mode, st.static_ip, st.static_netmask, st.static_gateway =
+		s(rb.mode), s(rb.ip), s(rb.mask), s(rb.gw)
+	st.static_dns = type(rb.dns) == "table" and rb.dns or nil
+	local first = type(rb.snap.addrs) == "table" and rb.snap.addrs[1]
+	st.ip = type(first) == "string" and first:match("^([%d%.]+)/") or st.ip
+	io.stderr:write("inform: controller not reached after a management address change; "
+		.. "old management address put back -- check IP Settings in the controller\n")
+	M._note_push(st, {"ip_rollback"}, false, true)
+	pcall(M._state.save, st)
+	pcall(M._write_status, st, {})
 end
 
 -- fields: {last_ok = epoch, last_type = "noop"} on success, or
@@ -8270,6 +8358,11 @@ function M._tick(st, cfg, ufhw, ctx)
 	end
 
 	local body, err = M.http_post(st.inform_url, pkt)
+	if st.ip_rollback ~= nil then
+		local reached = body ~= nil or (type(err) == "string" and err:match("^HTTP %d") ~= nil)
+		local ok_rb, err_rb = pcall(M._ip_rollback_check, st, cfg, reached)
+		if not ok_rb then io.stderr:write("inform: ip rollback: " .. tostring(err_rb) .. "\n") end
+	end
 	if not body then
 		if dump_tx then M._debug_append(cfg, "ERR", tostring(err)) end
 		pcall(M._write_status, st, {last_fail = M._time(), last_fail_msg = tostring(err)})
@@ -8388,6 +8481,7 @@ function M.run(cfg, ufhw)
 	-- reboot; put it back BEFORE the identity fields are read off the
 	-- interface, so the very first inform reports where the device actually
 	-- is. pcall'd: a malformed record must not stop the daemon.
+	pcall(M._ip_rollback_boot, st)
 	local ok_ip, err_ip = pcall(M._reapply_static_ip, st, cfg)
 	if not ok_ip then
 		io.stderr:write("inform: could not reapply static IP: " .. tostring(err_ip) .. "\n")
