@@ -203,7 +203,7 @@ The rest are in `.claude/rules/`, by the files they are about (see "More rules")
 openuf/        the daemon: inform.lua (core loop), ucihelper.lua (UCI writes), sysinfo.lua,
                the enforcement modules (firewall, bcfilter, shaper, l2guard, guestportal),
                mesh (backhaul, meshvlan), radio policy (minrssi, loadbalance, usteer,
-               roamassist, wlansched, uplinkmon), ftinterop + rrb/ (802.11r with UniFi),
+               roamassist, wlansched, uplinkmon), plugins (the rrb-unifi hook),
                util.lua, state.lua, unhandled.lua, conf.lua, modelmap/, ufmodel/, hook/
 package/       the OpenWrt feed: openuf, luci-app-openuf, luci-theme-halo
 setup.sh / install.sh / update.sh   guided install / headless install / on-device updater
@@ -235,7 +235,7 @@ Rules (`.claude/rules/`):
 - `lookup-passes.md`: the per-payload lookup passes and caches in sysinfo, ucihelper and inform.
 - `wlan-vaps.md`: WLANs and VAP netdevs, usteer and Roaming Assistant, Minimum RSSI, schedules, UCI names.
 - `radio-phy.md`: channel, width, PHY mode, regdomain and DFS (rf_config, ucihelper).
-- `fast-roaming.md`: ftinterop.lua and the rrb-unifi translator.
+- `fast-roaming.md`: 802.11r with genuine UniFi APs: the rrb-unifi plugin, its pin, the veth migration.
 - `nft-enforcement.md`: firewall, bcfilter, shaper, l2guard and every nft table.
 - `syswrapper-cron.md`: syswrapper verbs and controller-pushed cron (sysconf.lua).
 - `switch-ports-dsa.md`: switch ports, DSA bridges, per-port VLANs, LEDs, lldpd.

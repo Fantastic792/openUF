@@ -22,11 +22,12 @@ Other things to preserve:
   answers yes in places where the open then fails.
 - **Every question is asked before anything changes**, and each has a matching option so
   the same script runs unattended. Adding a prompt means adding an option.
-- **The 802.11r translator's packages go in the packages phase.** `ucode-mod-socket` and
-  `kmod-veth` are in `OPTIONAL`, so they arrive while the box still has internet; the daemon
-  itself is in the tree (`openuf/rrb/`) and `install.sh` enables its service, which `setup.sh`
-  also does on its package path. No question, no option: `openuf.rrb.enabled '0'` switches the
-  daemon off and `unifi_ft_interop` the whole feature.
+- **rrb-unifi (question 7) is fetched in the packages phase**, while the box still has internet:
+  `ucode-mod-socket` and `kmod-veth` join `OPTIONAL` only when it is on, the pinned release is
+  downloaded (`RRB_UNIFI_TAG`, `RRB_UNIFI_DIR`), its plugin must declare api 1 and match
+  `RRB_UNIFI_PLUGIN_SHA256`; the install itself runs after the openuf package, behind the
+  `/opt/openuf` link. A failure only skips the roaming plugin. `--unifi-roaming` /
+  `--no-unifi-roaming` answer the question.
 - **Value-taking options** must go through `need_val`, or a forgotten value silently
   configures the empty string.
 

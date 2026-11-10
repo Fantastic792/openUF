@@ -6,8 +6,8 @@
 #
 # Usage:
 #   ./install.sh install [--bootstrap-adopt] [--replace-conf]
-#                           — copy files, enable the openuf and openuf-rrb
-#                             services. An existing /opt/openuf/conf.lua is
+#                           — copy files, enable the openuf
+#                             service. An existing /opt/openuf/conf.lua is
 #                             KEPT unless --replace-conf
 #   ./install.sh uninstall  — remove files, disable service
 

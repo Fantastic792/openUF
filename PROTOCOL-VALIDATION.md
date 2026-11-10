@@ -2677,6 +2677,11 @@ Enhanced Open; Hotspot), Mesh Parent and Mesh Connect on, 5 GHz Minimum RSSI on.
 
 ## Adopted from d-malinowski/openUF (`pr/unifi-ft-interop`), 2026-10-25
 
+> **Superseded 2026-11-10.** `ftinterop.lua`, the vendored translator, `unifi_ft_interop` and
+> the `openuf-rrb` service described below were removed: 802.11r with genuine UniFi APs is now
+> d-malinowski's rrb-unifi installed as a plugin (USAGE.md § 6, `docs/PLUGINS.md`). The findings
+> about UniFi's framing, mobility domain and key holders still stand; the code paths named here do not.
+
 One commit (`94ac182`, 2026-10-22) from a third fork, not from upstream: `ftinterop.lua`, a
 hook in `apply_config`, the `unifi_ft_interop` switch, seven tests. Re-implemented here in
 this tree's layout (the switch also reaches `openuf.main`, `probe export` and both LuCI pages,

@@ -36,19 +36,17 @@ credited to this repo), so diff before assuming a commit is new.
   (2026-09-28) to `08d0003` (v0.9.3); sync 4 (2026-10-18) to `2f263f3` (v0.11.0).
   Each sync is a row in REVERSE-ENGINEERING.md's session log and an "Adopted from upstream,
   <date>" section in PROTOCOL-VALIDATION.md -- update both, and move this line.
-- **A third fork is a remote too: `dmalinowski` → d-malinowski/openUF.** Its
-  `pr/unifi-ft-interop` (one commit, `94ac182`) was adopted on 2026-10-25 as `ftinterop.lua`
-  (PROTOCOL-VALIDATION.md, "Adopted from d-malinowski/openUF"); it is proposed to upstream but
-  not merged there, so a later upstream sync may bring the same change back under
-  `openuf/ftinterop.lua` -- diff before re-applying. Their `pr/hh5a-modelmap` (a BT Home Hub 5A
-  map, lantiq/xrx200) was merged by jonasevcik on 2026-10-25 (`d6745b8`, the first upstream
-  commits past `2f263f3`) and is ported here (`cbc4c5b`, `cff4204`, `d72ec9d`). Their
-  hardware is a HH5A and a U7 Lite; label it. **The translator has an upstream of its own**:
-  `openuf/rrb/rrb-unifi.uc` is
-  https://github.com/d-malinowski/unifi-openwrt-roaming at 1.3 (`767a28c`), vendored
-  2026-10-25 with the changes marked `// openUF:`; take fixes from there (the local clone
-  `../unifi-openwrt-roaming` has it as `upstream`), re-apply the marked changes, and update
-  `openuf/rrb/README.md`'s commit. The fork `yesrab/unifi-openwrt-roaming` is not a source.
+- **More forks are remotes too: `dmalinowski` → d-malinowski/openUF and `yesrab` → yesrab/openUF.**
+  d-malinowski's `pr/unifi-ft-interop` (`94ac182`) was adopted on 2026-10-25 as `ftinterop.lua`
+  and is gone since 2026-11-10 (see `fast-roaming.md`); a later upstream sync may bring the same
+  change back under `openuf/ftinterop.lua` -- do not re-apply it. Their `pr/hh5a-modelmap` (a BT
+  Home Hub 5A map, lantiq/xrx200) was merged by jonasevcik on 2026-10-25 (`d6745b8`) and is
+  ported here (`cbc4c5b`, `cff4204`, `d72ec9d`). Their hardware is a HH5A and a U7 Lite; label
+  it. **The translator has an upstream of its own** and is not in this tree: take
+  https://github.com/d-malinowski/unifi-openwrt-roaming releases through
+  `tools/rrb-unifi-compat.sh --bump`. yesrab/openUF (`b8797df`, 2026-11-10) was reviewed and
+  ported by hand, not cherry-picked: b8797df, then 8a60095/97564d2 with the switch to the
+  external plugin (9e405c5's parts).
 - **Mechanics that worked in syncs 3 and 4:** `git add -A` first, then per commit **in
   upstream's order** `git show --format= <c> -- openuf/ tests/ ':!openuf/guestportal.lua'
   ':!tests/test_guestportal.lua' | git apply --3way` (the fetch puts their blobs in our

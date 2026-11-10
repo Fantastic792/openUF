@@ -40,11 +40,6 @@ openuf/
   stun.lua          the STUN client whose mapped address the controller wakes
   rrbguard.lua      repairs hostapd's stale 802.11r key-exchange socket (wpad restart)
   hangwatch.lua     background sh loop that kills a command the inform loop hangs on (60 s)
-  ftinterop.lua     802.11r with genuine UniFi APs (conf `unifi_ft_interop`, on by default
-                    for new installations; with the translator switched off it only changes
-                    the mobility-domain formula and FT-PSK's key path): UniFi's
-                    mobility domain, explicit key holders for the peers the rrb-unifi
-                    translator lists, nasid = BSSID, hostapd's ft_iface on the translator's veth
   util.lua          shared helpers: file/command reads, exec_ok, is_mac, bit shim, sysfs
                     master_of/driver_of, nft_apply (one `nft -f` transaction per table)
   unhandled.lua     /etc/openuf/unhandled.json: every _type, cmd, mgmt_cfg key and
@@ -73,14 +68,7 @@ openuf/
                     openuf-convert.sh (/usr/sbin/openuf-convert: setup.sh's AP
                     conversion as --check/--convert/--revert), openuf-deps.sh
                     (/usr/sbin/openuf-deps, `openuf deps`: what openUF needs
-                    installed as JSON, the basic-to-full wpad swap, and the
-                    translator service's start), openuf-rrb.sh (`openuf rrb
-                    status|peers|collect|verify`, adapted from rrb-unifi-setup)
-  rrb/              the 802.11r translator for genuine UniFi APs: rrb-unifi.uc
-                    (d-malinowski's, vendored; README.md there
-                    names the upstream commit and the `// openUF:` changes), run as
-                    etc/init.d/openuf-rrb; learns the UniFi APs on the LAN into
-                    /var/run/openuf/rrb-peers.json for ftinterop.lua
+                    installed as JSON and the basic-to-full wpad swap)
   etc/init.d/openuf procd service: announce + inform instances; finds either prefix
 package/            the OpenWrt feed: openuf (net/), luci-app-openuf (the LuCI pages, the device
                     page htdocs/openuf/ and its gate root/usr/share/ucode/openuf/gate.uc) and

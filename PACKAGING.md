@@ -58,15 +58,15 @@ openuf/uciconf.lua                /etc/config/openuf -> the `dev`/`config` table
 
 ## Decisions
 
-- **The 802.11r translator is part of the `openuf` package, not a package of its own**
-  (2026-10-25). d-malinowski's rrb-unifi (GPL-3.0-or-later) is vendored as `openuf/rrb/`
-  and installed to `/usr/lib/openuf/rrb/` with its LICENSE and README; its procd script is
-  `openuf/etc/init.d/openuf-rrb`; `DEPENDS` carries `+ucode-mod-socket +kmod-veth`;
-  `PKG_LICENSE` is `GPL-3.0-or-later` (the whole repository since 2026-10-25; NOTICE lists the copyright holders). The veth pair is written
-  by the daemon's user, openUF, into `/etc/config/network` on the first FT push, so neither a
-  uci-defaults nor a postinst touches the network. Fixes come from
-  https://github.com/d-malinowski/unifi-openwrt-roaming (see `openuf/rrb/README.md`), re-applied
-  with the `// openUF:` changes.
+- **The 802.11r translator is NOT part of the `openuf` package** (2026-11-10; it was, from
+  2026-10-25). d-malinowski's rrb-unifi is installed by `setup.sh` at a pinned release through
+  the plugin hook; the package carries only the hook (`plugins.lua`) and its detection path:
+  the postinst links `/opt/openuf` to `/usr/lib/openuf` when that path is free, the postrm
+  removes it, because plugin installers look there. `DEPENDS` no longer has `ucode-mod-socket`
+  and `kmod-veth` (the tool brings them). The upgrade postinst removes the old `openuf-rrb`
+  rc links and daemon; the veth sections in `/etc/config/network` go after the controller's
+  next push (`inform._migrate_legacy_rrb`). `PKG_LICENSE` stays `GPL-3.0-or-later` (the owner's
+  call, 2026-11-10; NOTICE lists the copyright holders).
 
 | Topic | Decision | Why |
 |---|---|---|

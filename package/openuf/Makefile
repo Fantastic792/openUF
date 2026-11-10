@@ -60,7 +60,7 @@ define Package/openuf/description
   Third-party plugins (/etc/openuf/plugins/<name>.lua, api 1, the same hook
   as upstream openUF's) extend the WLAN options; 802.11r fast roaming with
   genuine UniFi APs is one, d-malinowski's rrb-unifi, which setup.sh offers
-  to install (PLUGINS.md). The postinst links /opt/openuf to /usr/lib/openuf
+  to install (docs/PLUGINS.md). The postinst links /opt/openuf to /usr/lib/openuf
   (unless that path exists already) so that plugin installers written against
   upstream's documented detection path find the hook; the postrm removes that
   link.
@@ -93,7 +93,7 @@ if [ -z "$${IPKG_INSTROOT}" ] && ! grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/d
 	echo "openuf: hostapd is a basic build (no 802.11v): openUF will not start until a full wpad is installed." >&2
 	echo "openuf: run 'openuf deps --install', or use the button on LuCI's openUF overview." >&2
 fi
-# upstream's plugin contract (PLUGINS.md) names /opt/openuf/plugins.lua as the
+# upstream's plugin contract (docs/PLUGINS.md) names /opt/openuf/plugins.lua as the
 # hook's detection path, and every third-party installer looks there. A link,
 # made here rather than shipped as a package file, so a link setup.sh (or a
 # hand) made earlier is simply kept and never a file conflict.

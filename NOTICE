@@ -14,10 +14,11 @@ It contains work by several copyright holders:
     LuCI app and theme.
 
   Copyright (C) 2026 d-malinowski
-    openuf/rrb/rrb-unifi.uc, the 802.11r RRB translator for genuine UniFi
-    access points (https://github.com/d-malinowski/unifi-openwrt-roaming),
-    GPL-3.0-or-later, vendored with the changes marked "openUF:" in the file;
-    openuf/hook/openuf-rrb.sh is adapted from its setup tool.
+    The rrb-unifi translator and its openUF plugin
+    (https://github.com/d-malinowski/unifi-openwrt-roaming), GPL-3.0-or-later,
+    a separate project that setup.sh installs at a pinned release. It is not
+    part of this repository; tests/fixtures/rrb-unifi/ carries a copy of its
+    plugin (release v1.5) for the compatibility test.
 
   luci-theme-halo (package/luci-theme-halo) follows widget mechanics from
     luci-theme-bootstrap, Copyright 2012 Nut & Bolt / 2011 Twitter, Inc.,

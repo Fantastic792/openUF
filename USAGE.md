@@ -51,8 +51,7 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 | `hostapd-utils` | `hostapd_cli` — immediate deauth of a just-blocked wireless client, client kick (Roaming Assistance) and Minimum RSSI enforcement |
 | `tc-tiny` | `tc` — WiFi Speed Limit (`openuf/shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
 | `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `openuf/usteer.lua`. Roaming Assistant needs it too, for its view of which AP hears a client how loudly |
-| `openuf/rrb/rrb-unifi.uc` (part of openUF, not a package; the `openuf-rrb` service) | 802.11r fast roaming between openUF and **genuine UniFi APs** (§ 6): d-malinowski's rrb-unifi translator, vendored (`openuf/rrb/README.md`), a ucode daemon on a veth pair that converts hostapd's inter-AP key exchange to UniFi's framing and learns which UniFi APs are on the LAN. Switched off with `openuf.rrb.enabled '0'` |
-| `ucode-mod-socket`, `kmod-veth` | What the translator needs: raw packet sockets from ucode, and the veth pair hostapd's `ft_iface` moves onto. Optional like the others: without them only roaming to genuine UniFi APs is missing |
+| rrb-unifi (d-malinowski's, **not** an openUF file or package) | 802.11r fast roaming between openUF and **genuine UniFi APs** (§ 6): a ucode translator daemon on a veth pair that converts hostapd's inter-AP key exchange to UniFi's framing, plus an openUF plugin that writes the matching 802.11r options. `setup.sh` offers to install it from that project's latest release (default yes); its own tool `rrb-unifi-setup` installs, verifies and uninstalls it, and brings `ucode-mod-socket` and `kmod-veth` with it. Without it openUF APs still roam among themselves |
 | `wpad-wolfssl` (or `wpad-openssl`, `wpad-mbedtls`, `wpad`) | Full hostapd build with 802.11k/v support — required for BSS Transition and Band Steering. Any of the full builds will do; `wpad-basic-*` lacks `bss_transition` entirely and errors with "unknown configuration item 'bss_transition'" |
 
 `install.sh install` installs all of the above automatically when missing, so a
@@ -362,10 +361,8 @@ What `install.sh install` does:
   an old copy onto a new OpenWrt is a silent version mismatch
 - Symlinks `/opt/openuf/hook/syswrapper.sh` → `/usr/bin/syswrapper.sh`
 - Creates `/etc/init.d/openuf` with two procd service instances (announce + inform)
-- Installs and enables `/etc/init.d/openuf-rrb`, the 802.11r translator for genuine UniFi
-  APs (§ 6; the daemon is `openuf/rrb/rrb-unifi.uc`, copied with the tree). It idles until
-  a config push carries an FT WLAN. Its two packages, `ucode-mod-socket` and `kmod-veth`,
-  go in with the other optional ones
+- Removes the former built-in 802.11r translator's service (`openuf-rrb`) on a device upgraded from
+  such a build; fast roaming with genuine UniFi APs is the rrb-unifi plugin (§ 6), which `setup.sh` installs
 - Enables and starts the service
 - Enables and starts `lldpd`
 
@@ -840,7 +837,6 @@ reads nothing else, so what it shows is what the daemon would run.
 config = {
     use_only_unifi_wlan = true,  -- disable non-openuf_ SSIDs during provisioning
     keep_wlan_sections  = {},    -- AP sections that option must leave alone (see below)
-    unifi_ft_interop = true,     -- 802.11r with genuine UniFi APs; needs the rrb-unifi translator to do anything there, see § 6
     inform_url  = "http://unifi:8080/inform",   -- first-boot URL; state.json's wins once set
     state_file  = "/etc/openuf/state.json",     -- honoured by inform, announce and syswrapper
     l2_announce = true,          -- see below
@@ -1032,7 +1028,8 @@ offers the hook. **Third-party plugins are unsupported by openUF, and a plugin i
 root**: list only code you have read.
 
 Off by default. A plugin is `/etc/openuf/plugins/<name>.lua`, loaded only when named in
-`config.plugins` (`conf.lua`) or on a line of `/etc/openuf/plugins.enabled` (the file an installer
+`config.plugins` (`conf.lua`), `list plugin 'name'` in `openuf.main` (the LuCI settings page has
+the list; `openuf probe status` and the overview show each one's load state) or on a line of `/etc/openuf/plugins.enabled` (the file an installer
 should edit). A changed plugin set or plugin file makes openUF ask the controller for a fresh push
 at the next start; Force Provision does the same at once. Failures are logged
 (`logread | grep "openuf: plugin"`) and skipped, and the push goes on. The contract, the `ctx`
@@ -1433,78 +1430,70 @@ apart, force one with `hostapd_cli bss_tm_req` and read the target AP's log: `au
 **and no `EAPOL-4WAY-HS-COMPLETED`** is fast; `auth_alg=sae` followed by a 4-way is the
 fallback.
 
-**Fast roaming with genuine UniFi APs (`unifi_ft_interop`).** Stock hostapd and UniFi's
+**Fast roaming with genuine UniFi APs** is a plugin, not a switch. Stock hostapd and UniFi's
 hostapd use the same FT key hierarchy and the same AES-SIV protected RRB payloads, but UniFi
 frames RRB differently: it inserts the source and destination AP addresses (12 bytes) after
 the RRB type, because it sends from the AP's Ethernet MAC rather than the BSSID
-(PROTOCOL-VALIDATION.md, "802.11r with genuine UniFi APs"). openUF carries the translator
-that converts between the two framings: `openuf/rrb/rrb-unifi.uc`, d-malinowski's
-[rrb-unifi](https://github.com/d-malinowski/unifi-openwrt-roaming) vendored (that repository
-stays the source of fixes; `openuf/rrb/README.md` lists what was changed), run as the
-`openuf-rrb` service on a veth pair: hostapd's `ft_iface` is `vft0`, the daemon holds `vft1`
-and the LAN bridge. Nothing on the UniFi AP is changed. The switch is **on by default for new
-installations** (`unifi_ft_interop` in `conf.lua`, `option unifi_ft_interop` in
-`openuf.main`, a toggle on both LuCI pages). On, every FT WLAN gets what a UniFi peer needs:
+(PROTOCOL-VALIDATION.md, "802.11r with genuine UniFi APs"). d-malinowski's
+[rrb-unifi](https://github.com/d-malinowski/unifi-openwrt-roaming) converts between the two
+framings on a veth pair (hostapd's `ft_iface` is `vft0`, the daemon holds `vft1` and the LAN
+bridge; nothing on the UniFi AP changes), and since its release 1.4 ships an **openUF plugin**
+(`openuf-plugin/rrb-unifi.lua`) that rewrites every FT WLAN the way a UniFi peer needs:
 
-| UCI option | Off | On (default) |
+| UCI option | openUF alone | with the rrb-unifi plugin |
 |---|---|---|
 | `mobility_domain` | openUF's own hash of the SSID | UniFi firmware's: first two bytes of SHA1("salt" .. SSID zero-padded to 32 bytes) |
 | `ft_psk_generate_local` | unset (OpenWrt: 1 for PSK) | `0`, so the key holders below are written |
-| `nasid` (R0KH-ID) | unset (hostapd's default is already the BSSID) | this BSS's BSSID without colons, written explicitly so `openuf rrb verify` can read it |
-| `r0kh` / `r1kh` | wildcards keyed with `iapp_key` | one entry per UniFi peer BSS of the WLAN (learned, or listed by hand), plus the wildcards |
-| `hostapd_bss_options` | unset | `ft_iface=vft0`, the translator's veth end, only while the translator is installed and enabled and the veth exists |
+| `nasid` (R0KH-ID) | unset (hostapd's default is already the BSSID) | this BSS's BSSID without colons |
+| `r0kh` / `r1kh` | wildcards keyed with `iapp_key` | the same two wildcards (release 1.5: hostapd learns each UniFi peer from its first key exchange and pushes to it from then on), plus any peer pre-seeded in `/etc/config/rrb-unifi` |
+| `hostapd_bss_options` | unset | `ft_iface=vft0`, only while the translator's veth exists |
 | `reassociation_deadline` | 3000 | OpenWrt's default |
 
-**How the pieces fit.** The first config push that carries an FT WLAN writes the veth pair
-into `/etc/config/network` (`openuf_ftveth`, a `config device` of type veth, with two
-proto-none interfaces) and reloads the network, so netifd creates it at boot before the radios
-come up from then on; openUF restarts the daemon after every push that put a BSS on the veth,
-since the daemon derives the BSSes and the LAN bridge from the running hostapd configs when
-it starts. The daemon records every UniFi BSSID it hears on the LAN
-(`/var/run/openuf/rrb-peers.json`), with the WLAN's mobility domain once a roam announcement
-verified with that WLAN's key names it (a UniFi AP announces every client that joins it). The
-inform loop keeps those in `state.json` (`rrb_peers`) and, on an adopted AP, forgets
-`cfgversion` so the controller pushes the full config again and the new peer becomes a key
-holder, at most once every ten minutes. A UniFi AP's R0KH-ID is its BSSID without colons,
-their firmware's convention; `openuf.rrb` can list a peer by hand
-(`list peer 'bssid,r0kh-id'`) for a site where the daemon hears nothing. The daemon's other
-settings are the same section: `enabled`, `ft_iface`, `peer_iface`, `lan_iface`,
-`roam_announce`, `verbose`; the init script documents them. The veth goes with everything
-else on Forget.
+**Installing it.** `setup.sh` asks (question 7, default yes) and runs the project's own
+`rrb-unifi-setup install --yes` from a **pinned** release (v1.5, the one this openUF's test
+suite runs the plugin of: the plugin rewrites every 802.11r WLAN, so a release that changed
+what it expects of openUF must not reach a device before this tree was checked against it),
+confirms the tool's network watchdog, and puts the plugin in `/etc/openuf/plugins/rrb-unifi.lua`
+with its name in `/etc/openuf/plugins.enabled`. The pinned plugin's sha256 is verified and any
+release's plugin must declare `api 1`. `--unifi-roaming` / `--no-unifi-roaming` answer the
+question up front; `RRB_UNIFI_TAG=latest` installs the newest release unverified (or any tag by
+name), `RRB_UNIFI_DIR` an unpacked tree already on the device. Whether a newer release is still
+compatible, and moving the pin, is `tools/rrb-unifi-compat.sh` (it runs his contract tests
+against this tree and ours against his latest plugin; CI runs it weekly). On an existing device
+the same thing by hand:
 
-Without the translator's packages the switch costs nothing on a site with no genuine UniFi
-AP: every openUF AP computes the same (UniFi-formula) mobility domain and the wildcard key
-holders, so they keep roaming among themselves; FT-PSK keys are then pulled over RRB instead
-of derived locally, the path FT-SAE always took. `hostapd_bss_options` is only written while
-the daemon is installed, enabled and its veth exists, so hostapd is never pointed at a veth
-nobody forwards. The one case to turn the switch **off** is a site with genuine UniFi APs
-where the translator is switched off: with UniFi's mobility domain, clients try a fast
-transition towards those APs and fall back to a full reconnect, which is slower than never
-trying. Which installations get the new default: a fresh `setup.sh`/`install.sh` or a fresh
-package install; an `install.sh` upgrade keeps the device's older `conf.lua`, which has no
-such key, so it stays off there; a package upgrade ships the new `conf.lua` and a UCI-managed
-device takes its defaults for every option `openuf.main` leaves out, so it turns on unless
-`option unifi_ft_interop '0'` is set first.
+```sh
+# on the AP, with internet
+wget -qO /tmp/rrb.tgz https://github.com/d-malinowski/unifi-openwrt-roaming/archive/refs/tags/v1.5.tar.gz
+cd /tmp && tar xzf rrb.tgz && cd unifi-openwrt-roaming-*/
+sh rrb-unifi-setup install          # packages, translator, veth, the openUF plugin, a restart of openUF
+rrb-unifi-setup verify              # after the controller's next push (Force Provision makes it now)
+rrb-unifi-setup uninstall           # the safe order: plugin out, re-push, then the veth and the daemon
+```
 
-From the shell: `openuf rrb status` (the service, the veth, what the daemon derives),
-`openuf rrb peers` (heard and hand-listed peers), and, for a check against a UniFi AP's own
-settings, `openuf rrb collect <user>@<unifi-ap>` (reads its hostapd config over SSH, only a
-hash of the passphrase) followed by `openuf rrb verify`; `openuf rrb peers --write` lists the
-collected BSSes by hand. The raw `hostapd_bss_options` form is deliberate even on 25.12,
-which has a first-class `ft_iface` option: the translator learns a BSS's LAN bridge from the
-`ft_iface=` line OpenWrt generates before the override, and 24.10 has no such option.
+The tool finds openUF under `/opt/openuf`, upstream's documented detection path; on a package
+install `setup.sh` links that path to `/usr/lib/openuf` before running the tool, and the
+package's postinst makes the same link from its next release on (an existing link is kept). On
+a package device set up before 2026-11-02, make it by hand first -- `ln -s /usr/lib/openuf
+/opt/openuf` -- or the tool installs the translator but not the plugin, and its `verify` and
+`uninstall` run in the no-openUF mode (a pull request to probe `/usr/lib/openuf` too is open
+on the project). `setup.sh` also places the plugin itself and starts the translator in case
+the tool ran in that mode anyway. The controller then
+pushes the WLANs again within a few informs, because openUF notices the new plugin (the
+fingerprint in `state.json`, see "Plugins" below); Fast Roaming must be on for the WLAN in
+UniFi, or the controller sends no `iapp_key` and the plugin logs that. Only WPA2-PSK with
+FT-PSK is verified against a UniFi AP so far, and only by the plugin's author (a BT Home Hub
+5A against a U7 Lite, UniFi 8.7.11, Network 10.6, both directions, the controller recording
+paired fast roams); this lab has no genuine UniFi AP. FT-SAE should take the same path but is
+untested. hostapd's key-exchange socket then lives on the veth, and `rrbguard.lua`'s
+stale-socket check covers it the same way.
 
-Troubleshooting: openUF logs `ftinterop:` lines to the system log when something is missing.
-`the openuf-rrb translator service is not installed` means the init script is gone (reinstall
-openUF); `ft_iface not present` means the veth is not up (`openuf rrb status`; the daemon logs
-`waiting for the veth pair` until the first push with an FT WLAN); `no UniFi peer known for
-this WLAN yet` means nothing has been heard on the LAN and nothing is listed, so UniFi peers
-can pull keys from this AP but get none pushed; `the controller sent no iapp_key` means the
-push carried no FT key (Fast Roaming off for the WLAN). Only WPA2-PSK with FT-PSK is verified
-against a UniFi AP so far, and only by the translator's author (a BT Home Hub 5A against a U7
-Lite); this lab has no UniFi AP. FT-SAE should take the same path but is untested. hostapd's
-key-exchange socket then lives on the veth, and `rrbguard.lua`'s stale-socket check covers it
-the same way.
+**Upgrading from a tree that carried the translator built in** (openUF 0.2.x, 2026-10-25 to
+2026-11-02): the package upgrade removes the `openuf-rrb` service; the WLANs still point
+hostapd at its veth until the controller pushes again, which openUF asks for at its first start
+(the veth sections `openuf_ftveth`/`ftlink`/`ftpeer` are removed right after that push, never
+before: a BSS whose `ft_iface` vanishes fails). Then run the install above. The
+`unifi_ft_interop` option and the `openuf.rrb` section are gone and ignored.
 
 **VLAN-tagged SSIDs** (assigning a WiFi network to a non-native network) need three
 things on the AP, and openUF builds all three:
@@ -2308,8 +2297,8 @@ backlog row 23). Each is on by default and needs nothing in `conf.lua`.
   openUF AP on the WLAN is a peer without sharing the passphrase's derivation), PMK-R1 is
   pushed, and a stale key-exchange socket in hostapd (seen upstream after weeks of uptime)
   is repaired by restarting wpad when no client is connected or in the 04:00 hour. With
-  `unifi_ft_interop` on, the key holders also name the genuine UniFi APs the rrb-unifi
-  translator lists, and hostapd exchanges keys through the translator's veth (§ 6).
+  the rrb-unifi plugin installed, hostapd exchanges keys through the translator's veth and
+  learns genuine UniFi APs from their first key exchange (§ 6).
 - **Hygiene:** usteerd's AP-to-AP table broadcasts are dropped before they leave a VAP,
   the bridge hairpin flag is re-asserted on BSSes OpenWrt force-isolates (Multicast
   Enhancement, Proxy ARP), the nightly 11k-scan runs at two random times in the hour, and
@@ -2438,6 +2427,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | A wired AP with Wireless Meshing on does not fail over when its cable is pulled; the parent's downlink sees no join attempt | No uplink station: `uci show wireless \| grep openuf_bh_ul` is empty. The controller sends the station entry only to a device it last saw meshed, and builds before 2026-10-29 removed the station on the next push to a cabled AP. Now openUF builds it from the mesh block and logs `backhaul: no mesh uplink in the push -- the station is built from the mesh block on <radio>`; `... no 5 GHz radio -- this AP cannot fail over` means it found no radio to put it on |
 | A mesh child's SSID on the mesh radio (5 GHz on most boards) is missing from scans after a settings change, and `logread` has `hostapd: handle_probe_req: send failed` | The AP was left silent by the Wi-Fi reload (hostapd says ENABLED, `ip link show <phyN-apM>` says NO-CARRIER). openUF restarts its beacon within two heartbeats (`backhaul: <ifname> is up with no carrier while the station is joined -- restarted its beacon`). By hand: `hostapd_cli -i <ifname> raw STOP_AP; hostapd_cli -i <ifname> update_beacon` |
 | Fast roaming between two openUF APs fails, and `logread` has `rrb-unifi: ... ignored: clock differs by N s (NTP?)` | The two clocks disagree. openUF compares each controller answer's time with the local clock and, when they are more than 60 s apart, restarts ntpd (`openuf: the clock is N s behind the controller's -- restarting ntpd`), at most every 5 minutes and less often while that does not help. If it keeps saying so, ntpd cannot reach its servers (`uci show system.ntp`, DNS, a default route), or the controller's own clock is wrong |
+| Fast roaming towards a genuine UniFi AP falls back to a full reconnect | `rrb-unifi-setup verify` on the AP checks the plugin (hook present, file in `/etc/openuf/plugins/`, line in `plugins.enabled`, plugin errors in the log), the FT options in openUF's sections and the translator. `logread \| grep "openuf: plugin"` shows a plugin that was skipped; `uci show wireless \| grep ft_iface` must name `vft0` on every FT WLAN. Fast Roaming must be on for the WLAN in UniFi, or no `iapp_key` arrives |
 | Another openUF AP shows in Insights as a third-party AP broadcasting your SSID | Both APs must run a build with the sibling-AP element (2026-09-28 or later) and have had one config push since: `hostapd_cli -i <ifname> get_config` shows nothing for it, so check `uci get wireless.<section>.vendor_elements` (starts `dd0d026f55`), and on the other AP `ucode -e 'print(require("nl80211"))'` must not fail — the reader needs ucode's nl80211 module, which OpenWrt's own wifi scripts ship |
 | A client shows poor WiFi Experience | Since 2026-10-18 the score is the UniFi firmware's own (`satisfaction.lua`): the lowest of signal (SNR over a noise floor taken as no lower than −96 dBm: 15 dB → 90, 25 dB → 100), PHY rate (the mean of the last tx and rx rates in steps: 54 Mbit/s → 80, 200 → 90, 400 → 95) and retries over the last full minute (≤ 25 % → 100, then down to 0 at 100 %, minus a point per dropped frame); `satisfaction_reason` names the term that bound and `anomalies` the weak ones. A fresh client scores 100 on retries until its first minute is complete. Before that the score was the worst of three terms, all read from `iw dev <ifname> station get <mac>`. **Downlink airtime**: Δ`tx duration` per Δ`tx packets` against the ideal (a fixed cost per frame — 110 µs on 2.4 GHz, 250 µs on 5 GHz, where the HE preamble, the BlockAck and the driver's RTS/CTS make every unaggregated frame dearer — plus the payload at the client's ceiling rate). Anything well over ~130 µs for small frames on 2.4 GHz, or ~280 µs on 5 GHz, means frames are being re-sent: a weak or noisy link, or a power-saving client that dozes through them. A client sending interactive traffic (one small frame per PPDU) is NOT penalised for that; a MacBook at −43 dBm doing exactly that was scored Poor on 2026-10-03 until the 5 GHz figure existed. **Uplink** (only while the client sends ≥ 20 frames between heartbeats, since `rx bitrate` is the last frame's rate): `rx bitrate` against the client's ceiling (its streams, width and top MCS from `hostapd_cli -i <ifname> all_sta`, capped by the AP's own, one MCS below the top). **Coverage**: `signal` minus the radio's noise (`iw dev <ifname> survey dump`, the `[in use]` entry, taken as at least −95 dBm): under 20 dB is below Excellent, under ~17 dB below Good. Retry and failure counters are not used, since they mean different things per driver (see PROTOCOL-VALIDATION.md). Without `tx duration` the tx rate against the ceiling stands in, and a client with a legacy rate or no hostapd record is scored on SNR alone |
 | Locate/LED does nothing | `dev.conf.led` is `nil` in your modelmap — set it to a path from `ls /sys/class/leds` |

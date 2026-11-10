@@ -1,31 +1,40 @@
 ---
 paths:
-  - "openuf/ftinterop.lua"
-  - "openuf/rrb/**"
   - "openuf/rrbguard.lua"
+  - "openuf/plugins.lua"
   - "openuf/ucihelper.lua"
-  - "openuf/hook/openuf-rrb.sh"
+  - "tests/fixtures/rrb-unifi/**"
+  - "tools/rrb-unifi-compat.sh"
 ---
 
-# 802.11r with genuine UniFi APs (ftinterop, rrb-unifi)
+# 802.11r with genuine UniFi APs (the rrb-unifi plugin)
 
 Landmines moved from CLAUDE.md; they load when a matching file is touched.
 
-- **Never set `ft_psk_generate_local`.** It is FT-PSK-only, and pinning it stops OpenWrt
-  configuring the key holders FT-SAE needs, so WPA3 clients silently lose fast roaming.
-  The one exception is `ftinterop.lua` under `unifi_ft_interop`: it sets `0` and writes the
-  explicit `r0kh`/`r1kh` key holders in the same breath, so the relationship FT-SAE needs
-  exists; a UniFi AP never derives keys locally and pulls from this AP instead. That path also
-  needs the external rrb-unifi translator's veth as hostapd's `ft_iface`, written as the raw
-  `hostapd_bss_options` form (the translator reads the generated `ft_iface=<bridge>` line that
-  precedes it), and only when the veth exists: hostapd fails a BSS whose `ft_iface` is missing.
-- **hostapd is pointed at the translator's veth only while something forwards it.**
-  `ftinterop.ft_iface` writes `hostapd_bss_options 'ft_iface=vft0'` only when the `openuf-rrb`
-  service is installed, `openuf.rrb.enabled` is not `0`, and the netdev exists, and
-  `ucihelper.ensure_ft_veth` creates the pair only under the same conditions: a veth nobody
-  forwards would swallow every RRB frame, openUF-to-openUF key pulls included, and the symptom
-  would be "FT silently falls back to a full handshake" on every roam. The daemon's own changes
-  (waiting instead of exiting, the peers file) are marked `// openUF:` in a file whose upstream
-  is d-malinowski's repository, not this one: keep them small and re-applicable. The whole
-  repository is GPL-3.0-or-later since 2026-10-25 because of it; NOTICE carries the MIT notice
-  for jonasevcik's original work, which MIT requires to travel with the code.
+- **openUF carries no UniFi translator of its own since 2026-11-10.** d-malinowski's rrb-unifi
+  (translator daemon + `openuf-plugin/rrb-unifi.lua`) is a separate install: `setup.sh` offers
+  it at the pinned release (`RRB_UNIFI_TAG=v1.5`, `RRB_UNIFI_PLUGIN_SHA256`), through the plugin
+  hook (`plugins.lua`, api 1, `docs/PLUGINS.md`). The plugin rewrites every FT WLAN in
+  `vap_options` (UniFi's mobility domain, `ft_psk_generate_local 0`, nasid, `ft_iface=vft0`
+  while its veth exists). Nothing in ucihelper knows about it. Removed with the vendored
+  translator: `ftinterop.lua`, `openuf/rrb/`, the `openuf-rrb` service, `unifi_ft_interop`,
+  `state.rrb_peers`, the veth code. Our fixes to it (BSSID from sysfs first, restart only when
+  its inputs changed, quiet-moment re-push) no longer exist here: they are the external
+  project's to make.
+- **Never set `ft_psk_generate_local` in ucihelper.** It is FT-PSK-only, and pinning it stops
+  OpenWrt configuring the key holders FT-SAE needs, so WPA3 clients silently lose fast roaming.
+  Only the plugin sets it, together with the key holders.
+- **The NAS-ID rule stays in ucihelper** (`resolve_nas_id`, policy `ft`): hostapd uses
+  `nas_identifier` as the R0KH-ID, a controller NAS-ID is shared by every AP, so on FT WLANs it
+  is dropped and hostapd defaults to the BSSID. Without it an FT-EAP roam to another openUF AP
+  never pulls its key.
+- **The pin moves only through `tools/rrb-unifi-compat.sh`** (his contract tests through our
+  hook, ours against his latest plugin, a diff of the contract surface). `tests/test_rrb_unifi_compat.lua`
+  runs the pinned copy in `tests/fixtures/rrb-unifi/` on every suite run and checks its sha256
+  equals the one in `setup.sh`. A change to `plugins.lua`, `ctx` or the FT block must keep it green.
+- **A device upgraded from the vendored translator** still has the veth sections
+  `openuf_ftveth/ftlink/ftpeer`. They go AFTER the push that rewrote the WLANs without
+  `ft_iface=vft0` (`ucihelper.remove_legacy_ft_veth`; `inform._migrate_legacy_rrb` forgets
+  `cfgversion` once): a BSS whose `ft_iface` vanishes under it fails. Never remove them first.
+- **`rrbguard.lua` stays**: it repairs hostapd's own stale key-exchange socket, wherever
+  `ft_iface` points.

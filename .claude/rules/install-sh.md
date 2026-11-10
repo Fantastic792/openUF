@@ -45,13 +45,6 @@ registers it, also for an account that exists already, and `uninstall` removes i
 validation container's OpenSSH never checked, so this was invisible until a real L2 adoption
 (AP2, 2026-10-25).
 
-**The 802.11r translator for genuine UniFi APs ships with the tree.** `openuf/rrb/rrb-unifi.uc`
-(d-malinowski's rrb-unifi, vendored; `openuf/rrb/README.md` names the upstream
-commit and every change, each marked `// openUF:` in the file) runs as `/etc/init.d/openuf-rrb`,
-which `install.sh` copies from `openuf/etc/init.d/` and enables after openUF's own service.
-Its packages, `ucode-mod-socket` and `kmod-veth`, are two more `try_optional`s. The veth pair
-is NOT the installer's business: `ucihelper.ensure_ft_veth` writes it into `/etc/config/network`
-on the first config push that carries an FT WLAN, and `install.sh uninstall` and
-`ucihelper.forget` remove it. Fixes to the daemon come from
-https://github.com/d-malinowski/unifi-openwrt-roaming (the local clone
-`../unifi-openwrt-roaming` has it as `upstream`), never from a fork of it.
+**There is no 802.11r translator in the tree any more** (2026-11-10). `install.sh` removes the
+former `openuf-rrb` service and, on uninstall, the old veth sections; 802.11r with genuine UniFi
+APs is d-malinowski's rrb-unifi plugin, which `setup.sh` installs (`.claude/rules/fast-roaming.md`).
