@@ -2459,6 +2459,16 @@ Logs go to the system log via procd: `logread -e openuf` (follow with `logread -
 
 For development testing without hardware, see `tools/test_controller.py`.
 
+### Hang watchdog
+
+The inform daemon is one blocking loop, and a hung `iw`, `lldpctl`, `swconfig` or `nft`
+would stop informs, STUN and mesh failover until a restart. Stock OpenWrt ships no `timeout`
+applet (checked on 25.12.6), so at
+startup the daemon launches one small background shell loop (`hangwatch.lua`) that kills
+the process tree of any of its commands still running after about 60 s (`logread -e hangwatch`
+names what was stopped). It costs nothing per heartbeat. `touch /etc/openuf/no-hangwatch` and
+restart the service to switch it off.
+
 ### Measuring what a heartbeat costs on the device
 
 `tools/heartbeat-probe.lua` builds one real inform payload and reports every

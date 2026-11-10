@@ -63,6 +63,7 @@ local rrbguard  = _require_sibling("rrbguard")
 local uplinkmon = _require_sibling("uplinkmon")
 local guestportal = _require_sibling("guestportal")
 local ftinterop = _require_sibling("ftinterop")
+local hangwatch = _require_sibling("hangwatch")
 
 local M = {}
 local util = package.loaded["openuf.util"]
@@ -106,6 +107,7 @@ M._stun      = stun
 M._rrbguard  = rrbguard
 M._guestportal = guestportal
 M._ftinterop = ftinterop
+M._hangwatch = hangwatch
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
 -- flat list build_json merges from. Clients report asynchronously and only
@@ -8500,6 +8502,28 @@ function M._cycle(st, cfg, ufhw, ctx, socket)
 	end
 end
 
+-- Starts the hang watchdog (hangwatch.lua): one background sh loop that kills
+-- a command this blocking loop is stuck on, since a hung iw or nft would
+-- otherwise stop informs, STUN and mesh failover for good. Called from the
+-- entry block only, never from run(), so the tests of run() spawn nothing.
+function M._start_hangwatch()
+	local hw = M._hangwatch
+	local msg
+	if type(hw) == "table" and type(hw.start) == "function" then
+		local ok, started, why = pcall(hw.start)
+		if ok and started == true then
+			msg = "inform: hang watchdog started (limit " .. tostring(hw.LIMIT_S) .. " s)"
+		elseif ok then
+			msg = "inform: hang watchdog not started: " .. tostring(why or "refused")
+		else
+			msg = "inform: hang watchdog not started: " .. tostring(started)
+		end
+	else
+		msg = "inform: hang watchdog not started: module missing"
+	end
+	pcall(function() io.stderr:write(msg .. "\n") end)
+end
+
 -- ─── Script entry point ───────────────────────────────────────────────────────
 
 if not OPENUF_TEST_MODE then
@@ -8540,6 +8564,7 @@ if not OPENUF_TEST_MODE then
 		-- dev.conf is passed down, so hwassign is otherwise unreachable from
 		-- build_json.
 		dev.conf.uap = dev.openuf and dev.openuf.uap
+		M._start_hangwatch()
 		M.run(dev.conf, ufhw)
 	end)
 	if not ok then

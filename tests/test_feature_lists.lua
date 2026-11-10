@@ -94,6 +94,7 @@ local FORGET_EXEMPT = {
 	netconfig  = "the management address is kept on purpose (comment above _forget_controller)",
 	wlansched  = "the reset empties the down-lists and ucihelper.forget removes the VAPs",
 	assoctrack = "its nft table follows the RRM collector (_rrm_tick tears it down)",
+	hangwatch  = "watches the daemon's own children; holds no controller setting",
 	rrmscan    = "collector for the live VAPs; holds no controller setting",
 	roamassist = "works off the live VAPs; holds no controller setting",
 	rrbguard   = "repairs hostapd's socket; holds no controller setting",

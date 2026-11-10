@@ -39,6 +39,7 @@ openuf/
   wlansched.lua     WiFi Blackout Schedule: the firmware's schedule lines, netdev down/up
   stun.lua          the STUN client whose mapped address the controller wakes
   rrbguard.lua      repairs hostapd's stale 802.11r key-exchange socket (wpad restart)
+  hangwatch.lua     background sh loop that kills a command the inform loop hangs on (60 s)
   ftinterop.lua     802.11r with genuine UniFi APs (conf `unifi_ft_interop`, on by default
                     for new installations; with the translator switched off it only changes
                     the mobility-domain formula and FT-PSK's key path): UniFi's
