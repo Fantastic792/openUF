@@ -3267,8 +3267,11 @@ function M._parse_wifi_system_cfg(sys_raw)
 	--   macacl.<m>.acl.<k>.type=user
 	-- Like bcfilt, <k> is 1-based and carries no meaning beyond grouping, so
 	-- the list is sorted for a stable, comparable result. Entries are taken
-	-- only when both the block and the entry are enabled; type is "user" for
-	-- hand-entered MACs (the only kind this UI produces).
+	-- only when both the block and the entry are enabled, whatever their type:
+	-- "user" for hand-entered MACs, "lock2ap" for a client locked to ANOTHER
+	-- AP ("Lock to Access Point", 10.6.106 macAclService, decompiled by
+	-- fonix232/openUF; the controller merges both into one policy itself and
+	-- sends the locked AP nothing). hostapd's deny list enforces the lock.
 	local mac_filter_by_dev = {}
 	for _, e in pairs(macacl) do
 		if e.devname and e.status == "enabled" and e["acl.status"] == "enabled" then

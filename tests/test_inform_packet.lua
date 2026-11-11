@@ -2556,6 +2556,45 @@ return {
 		end
 	},
 	{
+		name = "inform packet: _parse_wifi_system_cfg enforces Lock to AP (macacl type=lock2ap)",
+		fn = function()
+			-- Lock to Access Point reaches every AP EXCEPT the locked one as
+			-- macacl entries of type lock2ap (10.6.106 macAclService, decompiled
+			-- by fonix232/openUF; not yet seen on the wire). The controller merges
+			-- them with a user filter itself, so the parser takes every enabled
+			-- entry whatever its type, and hostapd's deny list does the rest.
+			local base = {
+				"aaa.1.ssid=openuf-test", "aaa.1.wpa=2",
+				"wireless.1.ssid=openuf-test", "wireless.1.parent=radio0",
+				"wireless.1.devname=ath0",
+			}
+			local lock = {
+				"macacl.status=enabled",
+				"macacl.1.status=enabled", "macacl.1.devname=ath0",
+				"macacl.1.acl.status=enabled", "macacl.1.acl.policy=deny",
+				"macacl.1.acl.1.status=enabled", "macacl.1.acl.1.mac=00:00:5e:00:53:01",
+				"macacl.1.acl.1.type=lock2ap",
+				"macacl.1.acl.2.status=enabled", "macacl.1.acl.2.mac=00:00:5e:00:53:02",
+				"macacl.1.acl.2.type=user",
+				"macacl.1.acl.3.status=disabled", "macacl.1.acl.3.mac=00:00:5e:00:53:03",
+				"macacl.1.acl.3.type=lock2ap",
+			}
+			local all = {}
+			for _, l in ipairs(base) do all[#all + 1] = l end
+			for _, l in ipairs(lock) do all[#all + 1] = l end
+			local _, vt = inform._parse_wifi_system_cfg(table.concat(all, "\n") .. "\n")
+			assert_eq(vt[1].mac_filter_policy, "deny", "lock2ap arrives under policy deny")
+			assert_eq(#vt[1].mac_filter_list, 2, "the lock and the user entry, not the disabled one")
+			assert_eq(vt[1].mac_filter_list[1], "00:00:5e:00:53:01", "locked client denied")
+			assert_eq(vt[1].mac_filter_list[2], "00:00:5e:00:53:02", "user entry kept")
+			-- Unlock: the controller drops the block (macacl.status=disabled).
+			local _, un = inform._parse_wifi_system_cfg(table.concat(base, "\n")
+				.. "\nmacacl.status=disabled\n")
+			assert_nil(un[1].mac_filter_policy, "unlock: no filter")
+			assert_nil(un[1].mac_filter_list, "unlock: no list")
+		end
+	},
+	{
 		name = "inform packet: _parse_wifi_system_cfg joins macacl on devname, not index",
 		fn = function()
 			-- The real wire numbers macacl blocks independently of wireless.<n>
