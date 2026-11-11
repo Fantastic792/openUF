@@ -14,6 +14,38 @@ local function with_capture(fn)
 	netconfig._exec = orig
 end
 
+local RELOAD = "/etc/init.d/network reload 2>/dev/null"
+
+-- A fake libuci for one `network` config: get() returns the section type
+-- when no option is asked, and (nil, "Entry not found") on a miss, as libuci.
+local function fake_uci(sections)
+	local u = {db = {network = sections}, commits = 0}
+	local c = {}
+	function c:get(cfg, sec, opt)
+		local s = u.db[cfg] and u.db[cfg][sec]
+		if not s then return nil, "Entry not found" end
+		if opt == nil then return s[".type"] end
+		if s[opt] == nil then return nil, "Entry not found" end
+		return s[opt]
+	end
+	function c:set(cfg, sec, opt, val) u.db[cfg][sec][opt] = val return true end
+	function c:delete(cfg, sec, opt) u.db[cfg][sec][opt] = nil return true end
+	function c:commit() u.commits = u.commits + 1 return true end
+	u.mock = {cursor = function() return c end}
+	return u
+end
+
+-- Runs fn(u, cmds) with the fake UCI and a command capture; stderr muted.
+local function with_uci(sections, fn)
+	local u = fake_uci(sections)
+	local o_uci, o_err = netconfig._uci, io.stderr
+	netconfig._uci = u.mock
+	io.stderr = {write = function() end}
+	local ok, err = pcall(with_capture, function(cmds) fn(u, cmds) end)
+	netconfig._uci, io.stderr = o_uci, o_err
+	if not ok then error(err, 0) end
+end
+
 return {
 	{
 		name = "netconfig: netmask_to_prefix converts common netmasks",
@@ -236,6 +268,148 @@ return {
 				assert_eq(netconfig.apply_dhcp("-br0"), false, "dhcp")
 				assert_eq(netconfig.restore("a b", {addrs = {}}), false, "restore")
 				assert_eq(#cmds, 0, "nothing was run")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci apply_static writes the lan interface and reloads once",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "dhcp"}}, function(u, cmds)
+				assert_true(netconfig.apply_static("br-lan", "192.0.2.10", "255.255.255.0",
+					"192.0.2.1", {"192.0.2.53", "bad"}, "lan"), "applied")
+				local lan = u.db.network.lan
+				assert_eq(lan.proto, "static", "proto")
+				assert_eq(lan.ipaddr, "192.0.2.10", "ipaddr")
+				assert_eq(lan.netmask, "255.255.255.0", "netmask")
+				assert_eq(lan.gateway, "192.0.2.1", "gateway")
+				assert_eq(table.concat(lan.dns, " "), "192.0.2.53", "valid dns only")
+				assert_eq(u.commits, 1, "one commit")
+				assert_eq(#cmds, 1, "one command")
+				assert_eq(cmds[1], RELOAD, "the reload, no ip addr, no resolv.conf")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci same values again: no commit, no reload",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "dhcp"}}, function(u, cmds)
+				for _ = 1, 2 do
+					assert_true(netconfig.apply_static("br-lan", "192.0.2.10", "255.255.255.0",
+						"192.0.2.1", {"192.0.2.53"}, "lan"), "applied")
+				end
+				assert_eq(u.commits, 1, "second call commits nothing")
+				assert_eq(#cmds, 1, "and reloads nothing")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci static defaults the netmask and deletes an empty gateway and dns",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "static", ipaddr = "192.0.2.9",
+					gateway = "192.0.2.1", dns = {"192.0.2.53"}}}, function(u)
+				assert_true(netconfig.apply_static("br-lan", "192.0.2.10", nil, "0.0.0.0",
+					{"bad"}, "lan"), "applied")
+				local lan = u.db.network.lan
+				assert_eq(lan.netmask, "255.255.255.0", "default netmask")
+				assert_nil(lan.gateway, "gateway 0.0.0.0 deleted")
+				assert_nil(lan.dns, "no valid dns: deleted, not an empty list")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci apply_dhcp sets proto dhcp and drops the address options",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "static", ipaddr = "192.0.2.10",
+					netmask = "255.255.255.0", gateway = "192.0.2.1", dns = {"192.0.2.53"}}},
+					function(u, cmds)
+				assert_true(netconfig.apply_dhcp("br-lan", "lan"), "applied")
+				local lan = u.db.network.lan
+				assert_eq(lan.proto, "dhcp", "proto")
+				assert_nil(lan.ipaddr, "ipaddr")
+				assert_nil(lan.netmask, "netmask")
+				assert_nil(lan.gateway, "gateway")
+				assert_nil(lan.dns, "dns")
+				assert_eq(u.commits, 1, "one commit")
+				assert_eq(#cmds, 1, "no udhcpc, no ip addr")
+				assert_eq(cmds[1], RELOAD, "the reload")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci falls back to ip addr when the section is not an interface",
+		fn = function()
+			for _, name in ipairs({"wan6", "lan;x", "brdev"}) do
+				with_uci({brdev = {[".type"] = "device", name = "br-lan"}}, function(u, cmds)
+					assert_true(netconfig.apply_static("br-lan", "192.0.2.10", "255.255.255.0",
+						nil, nil, name), name .. ": applied")
+					assert_eq(cmds[1], "ip addr flush dev br-lan 2>/dev/null", name .. ": flush")
+					assert_eq(cmds[2], "ip addr add 192.0.2.10/24 dev br-lan 2>/dev/null", name .. ": add")
+					assert_eq(u.commits, 0, name .. ": no uci write")
+				end)
+			end
+		end
+	},
+	{
+		name = "netconfig: uci snapshot captures the section, list ipaddr too",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "static",
+					ipaddr = {"192.0.2.10/24"}, dns = {"192.0.2.53"}}}, function()
+				local o_read = netconfig._read
+				netconfig._read = function() return "" end
+				local s = netconfig.snapshot("br-lan", "lan")
+				local s2 = netconfig.snapshot("br-lan")
+				netconfig._read = o_read
+				assert_eq(s.uci.proto, "static", "proto")
+				assert_eq(s.uci.ipaddr[1], "192.0.2.10/24", "list ipaddr kept")
+				assert_eq(s.uci.dns[1], "192.0.2.53", "dns")
+				assert_nil(s.uci.netmask, "absent stays absent")
+				assert_nil(s2.uci, "no ifname: no uci part")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci restore writes the snapshot back exactly",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "static", ipaddr = "192.0.2.10",
+					netmask = "255.255.255.0"}}, function(u, cmds)
+				assert_true(netconfig.restore("br-lan", {addrs = {}, uci = {proto = "dhcp"}}, "lan"),
+					"restored")
+				local lan = u.db.network.lan
+				assert_eq(lan.proto, "dhcp", "proto back")
+				assert_nil(lan.ipaddr, "ipaddr gone")
+				assert_nil(lan.netmask, "netmask gone")
+				assert_eq(#cmds, 1, "no ip addr")
+				assert_eq(cmds[1], RELOAD, "the reload")
+				assert_true(netconfig.restore("br-lan", {addrs = {},
+					uci = {proto = "static", ipaddr = {"192.0.2.10/24"}}}, "lan"), "list form")
+				assert_eq(type(lan.ipaddr), "table", "written as a list")
+				assert_eq(lan.ipaddr[1], "192.0.2.10/24", "same entry")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci restore refuses a bad record",
+		fn = function()
+			for i, bad in ipairs({{proto = "static; reboot"}, {proto = "static", ipaddr = "x; y"},
+					{proto = "static", dns = {"192.0.2.53", "x"}}, {proto = "static", gateway = 7},
+					{ipaddr = "192.0.2.10"}}) do
+				with_uci({lan = {[".type"] = "interface", proto = "dhcp"}}, function(u, cmds)
+					assert_false(netconfig.restore("br-lan", {addrs = {}, uci = bad}, "lan"),
+						"record " .. i .. " refused")
+					assert_eq(u.db.network.lan.proto, "dhcp", "record " .. i .. ": untouched")
+					assert_eq(u.commits, 0, "record " .. i .. ": no commit")
+					assert_eq(#cmds, 0, "record " .. i .. ": no command")
+				end)
+			end
+		end
+	},
+	{
+		name = "netconfig: uci restore without snap.uci uses the kernel path",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "dhcp"}}, function(u, cmds)
+				assert_true(netconfig.restore("br0", {addrs = {"192.0.2.10/24"}}, "lan"), "restored")
+				assert_eq(cmds[1], "ip -4 addr flush dev br0 2>/dev/null", "kernel flush")
+				assert_eq(u.commits, 0, "no uci write")
 			end)
 		end
 	},
