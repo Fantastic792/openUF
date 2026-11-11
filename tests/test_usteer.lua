@@ -232,4 +232,20 @@ return {
 			end)
 		end
 	},
+	{
+		name = "test_usteer_lists_survive_push",
+		fn = function()
+			with_usteer(function(db)
+				-- User-set list options in usteer.local (owner's own tuning).
+				db.usteer = {["local"] = {[".name"] = "local", [".type"] = "usteer",
+					ssid_list = {"home", "guest"}, event_log_types = {"probe_req_accept"}}}
+				usteer.set_enabled(true, nil)
+				usteer.set_enabled(false, nil)
+				usteer.set_enabled(true, nil, true)
+				local s = db.usteer["local"]
+				assert_eq(table.concat(s.ssid_list, ","), "home,guest", "ssid_list kept")
+				assert_eq(table.concat(s.event_log_types, ","), "probe_req_accept", "event_log_types kept")
+			end)
+		end
+	},
 }
