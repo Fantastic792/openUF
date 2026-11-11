@@ -117,7 +117,6 @@ kmod-nft-bridge|kmod:nft_meta_bridge|no|the blocker and L2 hardening rules
 tc-tiny|cmd:tc|no|WiFi speed limit
 kmod-ifb|kmod:ifb|no|the upload half of the WiFi speed limit, queued
 kmod-sched-act-police|kmod:act_police|no|the upload half of the WiFi speed limit, policed when there is no IFB
-snmpd-ssl|file:/etc/init.d/snmpd|no|SNMP Monitoring from the controller (v3 needs this ssl build)
 
 # rpcd and cgi-io run with a short PATH; look where OpenWrt puts things.
 have_cmd() {

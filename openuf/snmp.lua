@@ -32,6 +32,11 @@
 	back and restarts snmpd on it, or stops and disables it if it was off.
 	SNMP on with nothing usable stops and disables snmpd rather than leave
 	the stock config, which answers `public`.
+
+	openUF does not depend on or install snmpd: its package starts on that
+	stock `public` config, so an AP would answer SNMP before (and, restored,
+	after) the controller ever asked. Installing it is the operator's choice;
+	without /etc/init.d/snmpd a push is logged once and nothing happens.
 ]]--
 
 local M = {}
@@ -42,6 +47,7 @@ M.CONFIG    = "/etc/config/snmpd"
 M.BACKUP    = "/etc/openuf/snmpd.orig"
 M.INIT      = "/etc/init.d/snmpd"
 M.APK_DB    = "/lib/apk/db/installed"
+M.OPKG_INFO = "/usr/lib/opkg/info/"
 -- v3_capable is asked on every inform (fw_caps); kept this long rather than
 -- reading the whole apk database each time.
 M.CACHE_TTL = 600
@@ -152,12 +158,15 @@ function M.installed()
 	return cached("installed", function() return M._read_file(M.INIT) ~= nil end)
 end
 
--- The ssl build (libnetsnmp linked with OpenSSL), from apk's database.
+-- The ssl build (libnetsnmp linked with OpenSSL), from apk's database (25.12)
+-- or opkg's control files (24.10).
 function M.v3_capable()
 	if not M.installed() then return false end
 	return cached("v3", function()
 		local db = "\n" .. (M._read_file(M.APK_DB) or "")
-		return db:find("\nP:snmpd%-ssl\n") ~= nil or db:find("\nP:libnetsnmp%-ssl\n") ~= nil
+		if db:find("\nP:snmpd%-ssl\n") or db:find("\nP:libnetsnmp%-ssl\n") then return true end
+		return M._read_file(M.OPKG_INFO .. "snmpd-ssl.control") ~= nil
+			or M._read_file(M.OPKG_INFO .. "libnetsnmp-ssl.control") ~= nil
 	end)
 end
 

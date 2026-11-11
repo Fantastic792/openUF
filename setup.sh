@@ -1101,7 +1101,7 @@ REQUIRED="lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw"
 # policing, which needs kmod-sched-act-police, and a stock filogic image
 # ships sch_htb but no act_police, so only the download cap applied. All
 # found by upstream.
-OPTIONAL="lldpd hostapd-utils usteer ip-bridge nftables kmod-nft-bridge tc-tiny kmod-ifb kmod-sched-act-police snmpd-ssl"
+OPTIONAL="lldpd hostapd-utils usteer ip-bridge nftables kmod-nft-bridge tc-tiny kmod-ifb kmod-sched-act-police"
 # A board whose device tree declares gpio LEDs the running kernel cannot drive
 # registers only its radio LEDs (which may be wired to nothing); the gpio
 # driver is 9 KB and pointless where the LEDs already registered.

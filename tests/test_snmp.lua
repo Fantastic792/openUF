@@ -56,7 +56,11 @@ local function fresh(opts)
 	local commits, cmds = {}, {}
 	local files = {[snmp.CONFIG] = STOCK}
 	if opts.installed ~= false then files[snmp.INIT] = "#!/bin/sh /etc/rc.common\n" end
-	files[snmp.APK_DB] = (opts.ssl == false) and "P:snmpd-nossl\nV:5.9\n" or SSL_DB
+	if opts.opkg then
+		files[snmp.OPKG_INFO .. opts.opkg .. ".control"] = "Package: " .. opts.opkg .. "\n"
+	else
+		files[snmp.APK_DB] = (opts.ssl == false) and "P:snmpd-nossl\nV:5.9\n" or SSL_DB
+	end
 	local writes = {}
 	snmp._uci = mock_uci(db, commits)
 	snmp._cache = {}
@@ -224,6 +228,12 @@ return {
 			assert_true(snmp.v3_capable(), "ssl build")
 			fresh({installed = false})
 			assert_false(snmp.v3_capable(), "not installed")
+			fresh({opkg = "snmpd-ssl"})
+			assert_true(snmp.v3_capable(), "opkg (24.10): snmpd-ssl")
+			fresh({opkg = "libnetsnmp-ssl"})
+			assert_true(snmp.v3_capable(), "opkg (24.10): libnetsnmp-ssl")
+			fresh({opkg = "snmpd-nossl"})
+			assert_false(snmp.v3_capable(), "opkg (24.10): nossl")
 		end
 	},
 	{

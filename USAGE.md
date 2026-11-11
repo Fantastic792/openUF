@@ -47,7 +47,7 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 | `kmod-nft-bridge` | The Multicast/Broadcast Blocker, the L2 hardening (`bridge openuf_l2guard`, § 6a) and the guest portal (`bridge openuf_guest`, § 6b-3). `nftables` does not pull it in, and without `nft_meta_bridge` the bridge family has no `meta` expression — so the blocker's drop rule is rejected while its table, chain and allow-list set all build normally, and the control reports success while filtering nothing. openUF now logs the rejection and names this package. Client block/unblock matches on `ether saddr` alone and does not need it |
 | `kmod-ifb` | The **upload** half of WiFi Speed Limit, queued: each SSID's ingress is redirected to an IFB device and shaped there per client, the way the download side is. Without it openUF falls back to policing (excess dropped, not queued) and says so |
 | `kmod-sched-act-police` | The policing fallback for the upload half when there is no `kmod-ifb`. `tc-tiny` brings `sch_htb` but the ingress `police` action is a separate module a stock filogic image lacks; openUF logs the rejection and names this package |
-| `snmpd-ssl` | SNMP Monitoring (Settings → System → SNMP): net-snmp's agent, configured by `openuf/snmp.lua` from the controller's community, location, contact and v3 user (§ 6a). The ssl build because SNMPv3 needs AES privacy; openUF claims `fw_caps` `0x4000` (SNMPv3) only when it is installed. With `snmpd-nossl` instead, v1/v2c works and v3 is dropped; with neither, an SNMP push is logged once and ignored. |
+| `snmpd-ssl` | Not installed by openUF, by any installer or the package: install it yourself (`apk add snmpd-ssl`) only if you want SNMP Monitoring (Settings → System → SNMP). Its stock config answers community `public` from the moment it is installed, so turn SNMP on in the controller first or right after: `openuf/snmp.lua` then rewrites `/etc/config/snmpd` from the controller's community, location, contact and v3 user (§ 6a). The ssl build because SNMPv3 needs AES privacy; openUF claims `fw_caps` `0x4000` (SNMPv3) only with it. `snmpd-nossl` gives v1/v2c only; with neither, an SNMP push is logged once and ignored. |
 | `kmod-leds-gpio` | Only on a board whose device tree declares GPIO LEDs the image has no driver for (an AX3000T registers nothing but its radio LEDs, which are wired to nothing). `install.sh` adds it when it sees that situation |
 | `hostapd-utils` | `hostapd_cli` — immediate deauth of a just-blocked wireless client, client kick (Roaming Assistance) and Minimum RSSI enforcement |
 | `tc-tiny` | `tc` — WiFi Speed Limit (`openuf/shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
@@ -301,7 +301,7 @@ and `--revert` restores from. Every unknown is a refusal, for the same reason `s
 refuses: a wrong guess is a device that does not come back from the reboot.
 
 The package depends on everything openUF works through (`nftables`,
-`kmod-nft-bridge`, `tc-tiny`, `kmod-ifb`, `kmod-sched-act-police`, `snmpd-ssl`, `usteer`, `hostapd-utils`,
+`kmod-nft-bridge`, `tc-tiny`, `kmod-ifb`, `kmod-sched-act-police`, `usteer`, `hostapd-utils`,
 `ip-bridge`, `lldpd`, the Lua bindings), so one install brings them all. The one
 thing it cannot bring is a **full wpad build**, which OpenWrt cannot express as a
 dependency: on a stock image the service refuses to start until `openuf deps
