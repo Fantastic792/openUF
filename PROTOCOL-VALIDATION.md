@@ -1048,6 +1048,23 @@ radio on its next heartbeat. The timezone goes to UCI `system.@system[0].timezon
 servers to `system.ntp.server`, each stamping the value it replaced; `ntpclient.status=disabled`
 restores the list. Device-side effect verified on AP2 the same day (see the feature matrix).
 
+### `snmp.*` — SNMP Monitoring (decompiled, not yet seen on the wire)
+
+From 10.6.106 (read by fonix232/openUF, ported 2026-11-12); sent only while Settings →
+System → SNMP is on, so off is the block missing from a full push:
+
+```
+snmp.status=enabled
+snmp.version=1_2c | 3 | all            # v1/v2c, v3, both
+snmp.community=<string>                # v1/v2c only
+snmp.location=<text>    snmp.contact=<text>
+snmp.user.1.name=<user> snmp.user.1.password=<passphrase>   # v3, only to fw_caps 0x4000
+```
+
+openUF's `snmp.lua` writes these into `/etc/config/snmpd` (keeping the device's own file once)
+and claims `fw_caps` `0x4000` only with `snmpd-ssl`. Lab row pending (Task 12): a capture of
+the block and an `snmpwalk` against the AP.
+
 ### `ebtables.*` — L2 hardening rules
 
 Same push, ten literal ebtables fragments the stock firmware replays:

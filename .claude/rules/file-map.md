@@ -48,6 +48,9 @@ openuf/
   unhandled.lua     /etc/openuf/unhandled.json: every _type, cmd, mgmt_cfg key and
                     system_cfg key shape the controller sent that nothing here acted on,
                     with counts and a redacted body -- always on, bounded
+  snmp.lua          the controller's SNMP Monitoring (system_cfg snmp.*) onto net-snmp:
+                    owns /etc/config/snmpd while on (device file kept 0600), restore on a
+                    full-push off or Forget; fw_caps 0x4000 with snmpd-ssl
   sysconf.lua       controller-managed system settings: system.timezone and ntpclient.*
                     into UCI (stamped, reversible), cron.* into a marked block of
                     /etc/crontabs/root (allow-listed commands only: `syswrapper.sh 11k-scan`)

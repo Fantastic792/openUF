@@ -47,6 +47,7 @@ apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftable
 | `kmod-nft-bridge` | The Multicast/Broadcast Blocker, the L2 hardening (`bridge openuf_l2guard`, § 6a) and the guest portal (`bridge openuf_guest`, § 6b-3). `nftables` does not pull it in, and without `nft_meta_bridge` the bridge family has no `meta` expression — so the blocker's drop rule is rejected while its table, chain and allow-list set all build normally, and the control reports success while filtering nothing. openUF now logs the rejection and names this package. Client block/unblock matches on `ether saddr` alone and does not need it |
 | `kmod-ifb` | The **upload** half of WiFi Speed Limit, queued: each SSID's ingress is redirected to an IFB device and shaped there per client, the way the download side is. Without it openUF falls back to policing (excess dropped, not queued) and says so |
 | `kmod-sched-act-police` | The policing fallback for the upload half when there is no `kmod-ifb`. `tc-tiny` brings `sch_htb` but the ingress `police` action is a separate module a stock filogic image lacks; openUF logs the rejection and names this package |
+| `snmpd-ssl` | SNMP Monitoring (Settings → System → SNMP): net-snmp's agent, configured by `openuf/snmp.lua` from the controller's community, location, contact and v3 user (§ 6a). The ssl build because SNMPv3 needs AES privacy; openUF claims `fw_caps` `0x4000` (SNMPv3) only when it is installed. With `snmpd-nossl` instead, v1/v2c works and v3 is dropped; with neither, an SNMP push is logged once and ignored. |
 | `kmod-leds-gpio` | Only on a board whose device tree declares GPIO LEDs the image has no driver for (an AX3000T registers nothing but its radio LEDs, which are wired to nothing). `install.sh` adds it when it sees that situation |
 | `hostapd-utils` | `hostapd_cli` — immediate deauth of a just-blocked wireless client, client kick (Roaming Assistance) and Minimum RSSI enforcement |
 | `tc-tiny` | `tc` — WiFi Speed Limit (`openuf/shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
@@ -300,7 +301,7 @@ and `--revert` restores from. Every unknown is a refusal, for the same reason `s
 refuses: a wrong guess is a device that does not come back from the reboot.
 
 The package depends on everything openUF works through (`nftables`,
-`kmod-nft-bridge`, `tc-tiny`, `kmod-ifb`, `kmod-sched-act-police`, `usteer`, `hostapd-utils`,
+`kmod-nft-bridge`, `tc-tiny`, `kmod-ifb`, `kmod-sched-act-police`, `snmpd-ssl`, `usteer`, `hostapd-utils`,
 `ip-bridge`, `lldpd`, the Lua bindings), so one install brings them all. The one
 thing it cannot bring is a **full wpad build**, which OpenWrt cannot express as a
 dependency: on a stock image the service refuses to start until `openuf deps
@@ -1919,7 +1920,7 @@ reported as third-party by openUF and vice versa.
 
 ## 6a. Controller-managed system settings and hardening
 
-Three `system_cfg` blocks the controller sends on every full push are applied to the
+The `system_cfg` blocks below are applied to the
 device itself rather than to WiFi (confirmed live 2026-09-15, PROTOCOL-VALIDATION.md):
 
 | Wire | Device side | Reversal |
@@ -1928,6 +1929,7 @@ device itself rather than to WiFi (confirmed live 2026-09-15, PROTOCOL-VALIDATIO
 | `ntpclient.<n>.server=…` ×4 | UCI `system.ntp.server`, then `sysntpd` restart | `openuf_ntp_orig` holds the board's own list; `ntpclient.status=disabled` on the wire puts it back |
 | `cron.<n>.job.<m>.schedule` / `.cmd` | A marked block in `/etc/crontabs/root` between `# openuf-cron-begin` and `# openuf-cron-end`, then `cron` enabled and restarted. **Only commands this build provides are installed** — today that is `syswrapper.sh 11k-scan` — and anything else is logged, never written: a pushed cron line is a string crond runs as root. The pushed `cron.<n>.user` is ignored (jobs run as root) | The block is removed when the push stops carrying installable jobs; lines outside the markers are never touched |
 | `ebtables.<n>.cmd=…` ×10 | nft table `bridge openuf_l2guard`: frames to the Bridge Group Address (`01:80:c2:00:00:00`, STP BPDUs) dropped in and out of every AP VAP, and 802.1Q-tagged frames from clients dropped on every AP VAP. Needs `kmod-nft-bridge` (already installed for the Blocker); a rejected rule is warned about by name. **Wired sockets are deliberately not covered** — see CLAUDE.md's landmine | `ebtables.status=disabled` tears the table down; it is rebuilt at every start from `state.json`; the daemon also re-reads the VAP list once a minute and rebuilds the table when it changed, and a factory reset removes it |
+| `snmp.status=enabled`, `snmp.version`, `snmp.community`, `snmp.location`, `snmp.contact`, `snmp.user.1.*` (SNMP Monitoring; decompiled, not yet seen on the wire) | `/etc/config/snmpd` rewritten whole: agent on UDP/UDP6 161, one read-only community (v1/v2c), one v3 user (SHA + AES, the same passphrase; `snmpd-ssl` only), `sysLocation`/`sysContact`; then `snmpd` enabled and restarted, only when the file differs. A community or password snmpd.conf cannot hold (spaces, quotes, a v3 passphrase under 8 characters) drops that version; with nothing usable left snmpd is stopped and disabled rather than left on the stock config, which answers `public` | The device's file is kept once in `/etc/openuf/snmpd.orig` (0600) and put back when a full push no longer carries the block, or on a Forget; snmpd is then restarted on it, or stopped and disabled if it was off before (`snmp_was_enabled` in state.json). A partial push never turns SNMP off |
 
 `syswrapper.sh 11k-scan` — what the controller's nightly 04:00 job runs — does not scan
 itself: it leaves a dated request in `/tmp/openuf-scan-request` that the running daemon

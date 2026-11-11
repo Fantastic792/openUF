@@ -342,6 +342,7 @@ case "$ACTION" in
 		# download cap applies and the upload cap silently does not.
 		try_optional kmod-ifb "WiFi Speed Limit, upload half (queued)"
 		try_optional kmod-sched-act-police "WiFi Speed Limit, upload fallback (tc police)"
+		try_optional snmpd-ssl "SNMP Monitoring (the controller's SNMP setting)"
 		# No coreutils-stat any more: inform.lua used to fork `stat -c %Y` to
 		# notice an out-of-process state.json write and fell back to the file's
 		# contents when the applet was missing (a real WDR3500 has none). The

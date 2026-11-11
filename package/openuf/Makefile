@@ -44,7 +44,7 @@ define Package/openuf
   # postinst-pkg names either one when this device needs it.
   DEPENDS:=+lua +luabitop +lua-cjson +luasocket +lua-openssl +libuci-lua +iw \
 	+lldpd +ip-bridge +hostapd-utils +usteer +nftables +kmod-nft-bridge \
-	+tc-tiny +kmod-ifb +kmod-sched-act-police
+	+tc-tiny +kmod-ifb +kmod-sched-act-police +snmpd-ssl
   PKGARCH:=all
 endef
 
