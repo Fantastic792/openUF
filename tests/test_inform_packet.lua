@@ -1837,11 +1837,12 @@ return {
 		end
 	},
 	{
-		name = "inform packet: Dynamic Authorization is read in the das shape only",
+		name = "inform packet: Dynamic Authorization, the das shape",
 		fn = function()
 			-- The controller sends CoA/Disconnect twice over: the das.* shape names
-			-- the client directly, the dad.* shape expects the AP's own daemon to
-			-- relay it from 127.0.0.1. openUF has no relay, so only das.* is read.
+			-- the client directly, the dad.* shape (next test) goes through the
+			-- relay on the dispatcher port. Without the device-wide dispatcher
+			-- only das.* counts.
 			local base = "aaa.1.ssid=corp\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-EAP\n"
 				.. "aaa.1.radius.auth.1.ip=192.0.2.10\naaa.1.radius.auth.1.secret=a\n"
 			local tail = "wireless.1.ssid=corp\nwireless.1.parent=radio0\n"
@@ -1863,6 +1864,7 @@ return {
 			assert_eq(rad.das.secret, "b", "its shared secret")
 			assert_eq(rad.das.port, "3801", "the controller's own port (3800 + index)")
 			assert_nil(rad.dad, "the dad shape derives nothing")
+			assert_nil(rad.das.relay, "no device-wide dispatcher, no relay")
 			-- RFC 5176's default, and the firmware's fallback.
 			assert_eq(r("aaa.1.radius.das.status=enabled\n"
 				.. "aaa.1.radius.das.client=192.0.2.11\n"
@@ -1889,6 +1891,60 @@ return {
 			refused('aaa.1.radius.das.client=192.0.2.11\n'
 				.. "aaa.1.radius.das.secret=sek\trit\n",
 				"a control character in the shared secret")
+		end
+	},
+	{
+		name = "inform packet: Dynamic Authorization, the dad shape goes through the relay",
+		fn = function()
+			local base = "aaa.radius.dad.status=enabled\n"
+				.. "aaa.1.ssid=corp\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-EAP\n"
+				.. "aaa.1.radius.auth.1.ip=192.0.2.10\naaa.1.radius.auth.1.secret=a\n"
+				.. "aaa.1.nas_identifier=nas-corp\n"
+				.. "aaa.1.radius.das.status=enabled\naaa.1.radius.das.port=3801\n"
+				.. "aaa.1.radius.das.client=192.0.2.11\naaa.1.radius.das.secret=b\n"
+			local tail = "wireless.1.ssid=corp\nwireless.1.parent=radio0\n"
+			local function r(extra, head)
+				local vt, logged
+				local raw = (head or base) .. extra .. tail
+				logged = with_stderr(function()
+					local _
+					_, vt = inform._parse_wifi_system_cfg(raw)
+				end)
+				assert_eq(#vt, 1, "provisioned")
+				return vt[1].radius, logged, vt, raw
+			end
+			local two = "aaa.1.radius.dad.client.2.cidr=192.0.2.12\n"
+				.. "aaa.1.radius.dad.client.2.secret=b\n"
+				.. "aaa.1.radius.dad.client.1.cidr=192.0.2.11/32\n"
+				.. "aaa.1.radius.dad.client.1.secret=b\n"
+			local rad, _, vt, raw = r(two)
+			assert_eq(table.concat(rad.das.relay, ","), "192.0.2.11/32,192.0.2.12/32",
+				"every accounting server, in index order, a bare address as /32")
+			assert_eq(rad.das.client, "192.0.2.11", "the direct client is still read")
+			-- No device-wide dispatcher: the direct path, as before.
+			assert_nil(r(two, base:gsub("^aaa%.radius%.dad%.status=enabled\n", "")).das.relay,
+				"no dispatcher, no relay")
+			-- Bad CIDRs are skipped and said; none left means no relay.
+			local rad2, logged = r("aaa.1.radius.dad.client.1.cidr=bogus\n"
+				.. "aaa.1.radius.dad.client.2.cidr=192.0.2.0/33\n")
+			assert_nil(rad2.das.relay, "no usable client CIDR, no relay")
+			assert_contains(logged, "CIDR", "the skip is said")
+			local rad3 = r("aaa.1.radius.dad.client.1.cidr=bogus\n"
+				.. "aaa.1.radius.dad.client.2.cidr=192.0.2.0/24\n")
+			assert_eq(table.concat(rad3.das.relay, ","), "192.0.2.0/24", "the good one stays")
+			-- The plan the listener serves.
+			local plan = inform._das_plan(vt, raw)
+			assert_eq(plan.port, 3799, "the dispatcher's default port")
+			assert_eq(#plan.wlans, 1, "one relayed WLAN")
+			local w = plan.wlans[1]
+			assert_eq(w.port, 3801, "its hostapd port, as a number")
+			assert_eq(w.ssid, "corp", "its SSID")
+			assert_eq(w.nas_id, "nas-corp", "its NAS ID")
+			assert_eq(table.concat(w.clients, ","), "192.0.2.11/32,192.0.2.12/32", "its clients")
+			assert_eq(inform._das_plan(vt, "aaa.radius.dad.port=3900\n" .. raw).port, 3900,
+				"the controller's dispatcher port")
+			local _, _, vt_none, raw_none = r("")
+			assert_nil(inform._das_plan(vt_none, raw_none), "no relayed WLAN, no plan")
 		end
 	},
 	{

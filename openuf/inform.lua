@@ -2226,11 +2226,11 @@ function M.build_json(st, cfg, ufhw)
 		-- whose RADIUS profile has accounting on, and which has either
 		-- "RADIUS DAS" or Hotspot 2.0 enabled, gets
 		-- aaa.<n>.radius.das.{status,port,client,secret}. Claimed since
-		-- 2026-10-27: openUF needs no CoA listener of its own, because
-		-- hostapd IS one -- radius_das_port/radius_das_client are real
-		-- wifi-iface options on 25.12, and a Disconnect-Request from the
-		-- RADIUS server then deauthenticates the station. See _wire_radius
-		-- for the keys, and for why radius.dad.* is declined.
+		-- 2026-10-27: hostapd is the CoA listener -- radius_das_port/
+		-- radius_das_client are real wifi-iface options on 25.12, and a
+		-- Disconnect-Request from the RADIUS server then deauthenticates the
+		-- station. With the radius.dad.* dispatcher on, das.lua relays from
+		-- the dispatcher port (3799) to it. See _wire_radius for the keys.
 		-- Bit 0x800000 (8388608): supportHotspot2(). Without it the
 		-- controller refuses to provision a WLAN with a Hotspot 2.0
 		-- profile attached AT ALL -- ubntconf/LsyaJoEysWb returns null
@@ -2716,16 +2716,17 @@ end
 -- Since 2026-10-27 this also carries RADIUS MAC authentication and Dynamic
 -- Authorization; see the macacl and das blocks below.
 --
+-- The SECOND shape of Dynamic Authorization, radius.dad.*, is read outside
+-- this function: a top-level aaa.radius.dad.{status,port,loglevel} plus
+-- per-client aaa.<n>.radius.dad.client.<k>.{cidr,secret}. UAP firmware 6.8.2
+-- turns those into `radius_das_client=127.0.0.1 <secret>` -- its own mcad
+-- takes the request on the dispatcher port, checks the CIDR and relays it.
+-- openUF does the same with das.lua: _wire_dad_clients reads the CIDRs into
+-- das.relay, and ucihelper then points hostapd at 127.0.0.1.
+--
 -- Deliberately NOT read (and tested for, so nothing downstream keys on them):
---   * radius.dad.*  -- the SECOND shape of Dynamic Authorization: a top-level
---     aaa.radius.dad.{status,port,loglevel} plus per-client
---     aaa.<n>.radius.dad.client.<k>.{cidr,secret}. UAP firmware 6.8.2 turns
---     those into `radius_das_client=127.0.0.1 <secret>` -- the AP accepts the
---     request from its OWN mcad, which relays what it received from the
---     network and does the CIDR check itself. openUF has no such relay, so
---     pointing hostapd at 127.0.0.1 would make it answer nobody. The das.*
---     shape names the client directly and is the one openUF implements; the
---     controller sends both whenever either applies.
+--   * radius.dad.client.<k>.secret and aaa.radius.dad.loglevel -- the relay
+--     passes the bytes unchanged, so hostapd checks das.secret end to end.
 --   * radius.macacl.{format,emptypassword} -- how the AP renders the MAC as
 --     the RADIUS User-Name/User-Password. Both are options of UniFi's own
 --     patched hostapd (6.8.2 writes `macaddr_format=%s` from a printf format
@@ -3067,6 +3068,31 @@ end
 --   true      -> explicitly disabled
 -- The absent case matters: a blob that never carries the key must not
 -- re-enable a radio or SSID the user disabled by hand in /etc/config/wireless.
+-- The dad.* shape's senders, aaa.<n>.radius.dad.client.<k>.cidr (every
+-- accounting server), as IPv4 "a.b.c.d/n" in index order -- the clients
+-- das.lua's dispatcher relays for. A bare address is a /32. nil when none
+-- is usable. Their .secret is not read: hostapd checks das.secret.
+local function _wire_dad_clients(a)
+	local idxs = {}
+	for k in pairs(a) do
+		local i = k:match("^radius%.dad%.client%.(%d+)%.cidr$")
+		if i then idxs[#idxs + 1] = tonumber(i) end
+	end
+	table.sort(idxs)
+	local out = {}
+	for _, i in ipairs(idxs) do
+		local c = a["radius.dad.client." .. i .. ".cidr"]
+		local ip, bits = c:match("^([^/]+)/(%d+)$")
+		ip, bits = ip or c, tonumber(bits or "32")
+		if netconfig.is_ipv4(ip) and bits <= 32 then
+			out[#out + 1] = ip .. "/" .. bits
+		else
+			io.stderr:write(("inform: RADIUS DAS: skipping client CIDR %q\n"):format(c))
+		end
+	end
+	return #out > 0 and out or nil
+end
+
 local function _wire_status_disabled(v)
 	if v == nil then return nil end
 	return v == "disabled"
@@ -3074,6 +3100,7 @@ end
 
 function M._parse_wifi_system_cfg(sys_raw)
 	local aaa, wireless, radio, stamgr, macacl = {}, {}, {}, {}, {}
+	local dad_on = false
 	local global_countrycode = nil
 	local qos_vap = {}
 	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
@@ -3090,6 +3117,9 @@ function M._parse_wifi_system_cfg(sys_raw)
 			qos_vap[qidx] = qos_vap[qidx] or {}
 			qos_vap[qidx][qkey] = qv
 		end
+		-- The device-wide DAS dispatcher (das.lua): on, the dad.* clients go
+		-- through openUF's relay instead of straight to hostapd.
+		if line == "aaa.radius.dad.status=enabled" then dad_on = true end
 		local section, idx, key, v = line:match("^(aaa)%.(%d+)%.([^=]+)=(.*)$")
 		if not section then section, idx, key, v = line:match("^(wireless)%.(%d+)%.([^=]+)=(.*)$") end
 		if not section then section, idx, key, v = line:match("^(radio)%.(%d+)%.([^=]+)=(.*)$") end
@@ -3442,6 +3472,7 @@ function M._parse_wifi_system_cfg(sys_raw)
 		local mac_auth = _wire_bool(a["radius.macacl.status"]) or false
 		local radius, radius_err
 		if is_enterprise or mac_auth then radius, radius_err = _wire_radius(a) end
+		if radius and radius.das and dad_on then radius.das.relay = _wire_dad_clients(a) end
 		if is_enterprise and not radius and w.ssid then
 			io.stderr:write(("inform: skipping WLAN %q -- WPA-Enterprise (%s): %s\n")
 				:format(w.ssid, (akm:gsub("^%s+", "")), radius_err))
@@ -4435,6 +4466,8 @@ end
 -- PROTOCOL-VALIDATION.md's `system_cfg` section.
 local RECOGNIZED_SYSTEM_CFG = {
 	"^aaa%.%d+%.",       -- per-SSID security
+	"^aaa%.radius%.dad%.status$", -- the DAS dispatcher (das.lua)
+	"^aaa%.radius%.dad%.port$",
 	"^wireless%.%d+%.",  -- per-SSID radio binding and behavior
 	"^radio%.%d+%.",     -- per-radio config
 	"^stamgr%.%d+%.",    -- Minimum RSSI
@@ -4888,6 +4921,8 @@ function M.handle_response(json_str, st, cfg)
 			-- replaces the record outright.
 			st.guest_wlans = M._guest_wlans(vap_table, sys_raw)
 			st.guest_wlans_all = M._guest_wlans(vap_table, sys_raw, true)
+			-- The DAS relay's plan; the das feature row opens or closes its port.
+			st.das = M._das_plan(vap_table, sys_raw)
 			-- Mesh backhaul: the plan ucihelper.apply_config writes, or nil when the
 			-- push carries no enabled mesh block (the wired, non-meshing case).
 			local mesh_cfg = M._parse_mesh_system_cfg(sys_raw)
@@ -5468,6 +5503,24 @@ function M._guest_wlans(vap_table, sys_raw, all)
 		if vap.is_guest and vap.wlanconf_id then out[vap.wlanconf_id] = true end
 	end
 	return out
+end
+
+-- The DAS dispatcher's plan (das.lua, served by hostwatch): the port from
+-- aaa.radius.dad.port (3799 when absent) and one entry per WLAN whose das
+-- goes through the relay. nil when no WLAN does.
+function M._das_plan(vap_table, sys_raw)
+	local wlans = {}
+	for _, vap in ipairs(vap_table or {}) do
+		local das = vap.radius and vap.radius.das
+		if das and das.relay then
+			wlans[#wlans + 1] = {port = tonumber(das.port), nas_id = vap.radius.nas_id,
+				ssid = vap.ssid, clients = das.relay}
+		end
+	end
+	if #wlans == 0 then return nil end
+	local port = type(sys_raw) == "string"
+		and _wire_posint(("\n" .. sys_raw):match("\naaa%.radius%.dad%.port=([^\n]*)"))
+	return {port = tonumber(port) or 3799, wlans = wlans}
 end
 
 -- Record or drop one guest authorization. A malformed MAC is ignored.

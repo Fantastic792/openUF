@@ -180,6 +180,8 @@ local TYPED = {
 	-- Every guest WLAN, portal or not: where the guest restrictions apply.
 	guest_wlans_all           = "table",
 	guest_authorized          = "table",
+	-- The RADIUS DAS relay's plan (inform._das_plan): {port, wlans}.
+	das                       = "table",
 	-- The portal's enforcement facts (guestportal.parse) while it is on;
 	-- the nft tables are rebuilt from it at startup.
 	guest_portal              = "table",

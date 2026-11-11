@@ -2835,6 +2835,20 @@ return {
 						sec .. ": never the option the generator may ignore")
 				end)
 			end
+			-- Through the relay: hostapd hears only 127.0.0.1, the same secret.
+			with_ucihelper(function(db)
+				silently(function()
+					ucihelper.apply_config({radio_table = {}, vap_table = {
+						{ssid = "corp", radio = "radio0", security = "wpa2-enterprise",
+						 radius = {auth = {{ip = "192.0.2.10", port = "1812", secret = "a"}},
+						  acct = {}, das = {client = "192.0.2.11", secret = "s3cret too",
+						  port = "3801", relay = {"192.0.2.11/32"}}}},
+					}}, nil)
+				end)
+				local s = db.wireless.openuf_radio0_corp
+				assert_eq(s.radius_das_client, "127.0.0.1 s3cret too", "only the relay reaches hostapd")
+				assert_eq(s.radius_das_port, "3801", "on the WLAN's own port")
+			end)
 			-- No das block, no listener: hostapd's own radius_das_port default is
 			-- 0, so leaving both out is the off state.
 			with_ucihelper(function(db)

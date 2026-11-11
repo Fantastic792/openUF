@@ -2710,9 +2710,12 @@ function M.apply_config(resp, cfg, opts)
 				-- UAP firmware 6.8.2 writes. radius_das_port is defaulted only
 				-- inside that same branch and hostapd's own default is 0 (= no
 				-- listener), so it is always written explicitly.
+				-- With das.relay, das.lua's dispatcher is the only sender, from
+				-- 127.0.0.1 -- as UAP firmware writes for the radius.dad.* shape.
 				if vap.radius.das then
 					extra.radius_das_client =
-						vap.radius.das.client .. " " .. vap.radius.das.secret
+						(vap.radius.das.relay and "127.0.0.1" or vap.radius.das.client)
+						.. " " .. vap.radius.das.secret
 					extra.radius_das_port = vap.radius.das.port
 				end
 			end
