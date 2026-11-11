@@ -1049,10 +1049,10 @@ M._FEATURES = {
 			end
 		end,
 		forget = function(prev, cfg)
-		if prev.led_enabled == false and M._led then
-			pcall(M._led.set_enabled, cfg and cfg.led, true)
-		end
-	end},
+			if prev.led_enabled == false and M._led then
+				pcall(M._led.set_enabled, cfg and cfg.led, true)
+			end
+		end},
 }
 -- Each phase's own order: the phases do not share one (a Forget moves the mesh
 -- VLAN ports before the l2guard, a tick the other way round).
@@ -1070,7 +1070,8 @@ M._FEATURE_ORDER = {
 -- Runs one phase's hooks in that phase's order.
 function M._run_features(phase, a, b, c)
 	local F = M._FEATURES
-	for _, n in ipairs(M._FEATURE_ORDER[phase]) do F[n][phase](a, b, c) end
+	local order = M._FEATURE_ORDER[phase] or error("unknown feature phase: " .. tostring(phase))
+	for _, n in ipairs(order) do F[n][phase](a, b, c) end
 end
 
 function M._tick(st, cfg, ufhw, ctx)

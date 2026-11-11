@@ -232,6 +232,22 @@ test("_run_features lets a hook's error through (it adds no pcall)", function()
 	assert(not pcall(M._run_features, "tick"), "a raising hook was swallowed")
 end)
 
+test("the hooks that were unprotected before the table still raise", function()
+	local M = fresh_inform()
+	local function boom() error("boom") end
+	M._maybe_scan_neighbours = boom
+	M._firewall = {reconcile = boom}
+	M._led = {set_enabled = boom}
+	assert(not pcall(M._FEATURES.neighbours.tick, {}, {}, {}), "neighbours tick swallowed an error")
+	assert(not pcall(M._FEATURES.block.boot, {blocked_stas = {}}, {}), "block boot swallowed an error")
+	assert(not pcall(M._FEATURES.led.boot, {led_enabled = true}, {}), "led boot swallowed an error")
+end)
+
+test("_run_features names an unknown phase in its error", function()
+	local ok, err = pcall(FM._run_features, "nope")
+	assert(not ok and tostring(err):find("nope", 1, true), "unclear error: " .. tostring(err))
+end)
+
 -- How a Forget undoes what a tick/tick_late row keeps alive: a forget hook, or
 -- forget_by, one of:
 --   via    = "<row>"   that row's forget hook undoes it too
