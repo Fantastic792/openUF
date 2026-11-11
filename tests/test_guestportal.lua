@@ -267,6 +267,9 @@ return {
 				.. "ebtables.63.cmd=-t nat -A ALLOW_DNS_SERVERS -p 0x800 --ip-dst 300.1.1.1 -j ACCEPT\n")
 			assert_eq(#odd.unknown, 4, "a bad address, a bad port, a new shape and a bad DNS server are reported, not spliced")
 			assert_eq(#odd.dns_servers, 0, "the bad DNS server was not taken")
+			local slash = gp.parse(CAPTURE .. "ebtables.63.cmd=-t nat -A ALLOW_DNS_SERVERS -p 0x800 --ip-dst 192.0.2.53/32 -j ACCEPT\n")
+			assert_eq(slash.dns_servers[1], "192.0.2.53", "a /32 DNS server is the same host, not dropped")
+			assert_eq(#slash.unknown, 0, "and is not reported unknown")
 			assert_eq(#odd.restrict, 4, "the bad subnet was not taken")
 		end
 	},

@@ -257,12 +257,13 @@ local function classify(v, spec)
 	end
 	local srv = v:match("^%-t nat %-A ALLOW_DNS_SERVERS %-p 0x800 %-%-ip%-dst (%S+) %-j ACCEPT$")
 	if srv then
+		srv = srv:gsub("/32$", "") -- the same host; dropping it would leave DNS open
 		if not is_ipv4(srv) then return false end
 		spec.dns_servers[#spec.dns_servers + 1] = srv
 		return true
 	end
 	-- The IP half of the walled garden: no port, and both directions.
-	local net =v:match("^%-t nat %-I GUESTIN %-p 0x800 %-%-ip%-dst (%S+) %-j ACCEPT$")
+	local net = v:match("^%-t nat %-I GUESTIN %-p 0x800 %-%-ip%-dst (%S+) %-j ACCEPT$")
 	if net then
 		if not is_cidr(net) then return false end
 		spec.accept[#spec.accept + 1] = {ip = net}
