@@ -26,7 +26,9 @@ Landmines moved from CLAUDE.md; they load when a matching file is touched.
   The ledger redacts by field NAME (`psk`, `passphrase`, `authkey`, `token`, `*key`...), so
   never hand it a payload whose secret sits under an innocent name, and never name a
   payload field of your own `*_key` (the first version did, and redacted its own sample).
-  The `noop`'s `interval` is honoured (clamped 5–300 s); `_tick` re-reads it every cycle.
+  The `noop`'s `interval` is honoured (clamped 1–300 s: a watched device that reports
+  `inform_min_interval: 1`, as `build_json` does, is asked for 1 s heartbeats);
+  `_tick` re-reads it every cycle.
 - **A capability bit is claimed only where a device-side probe passes**, and the probe is
   cached: `sae_supported` (`radio_caps2` 0x1/0x2), `owe_supported` (0x8), `airtime.supported`
   (`wifi_caps` 0x20), `ppsk_supported` (0x100000). These come from the hostapd build and are reported for
