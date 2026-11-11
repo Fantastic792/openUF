@@ -283,7 +283,7 @@ return view.extend({
 
 		if (m.uf) {
 			const age = m.uf.lastOk ? m.uf.now - m.uf.lastOk : null;
-			const host = m.uf.inform ? m.uf.inform.replace(/^https?:\/\/([^/:]+).*$/, '$1') : null;
+			const host = m.uf.inform ? m.uf.inform.replace(/^https?:\/\/([^\/:]+).*$/, '$1') : null;
 			let state, value, detail;
 			if (!m.uf.running) { state = 'bad'; value = _('openUF stopped'); detail = m.uf.error ? _('Configuration does not load') : _('The service is not running'); }
 			else if (!m.uf.adopted) { state = 'warn'; value = _('Not adopted'); detail = host ? _('Waiting for %s').format(host) : _('Waiting for a controller'); }
