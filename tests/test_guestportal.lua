@@ -96,6 +96,48 @@ local GARDEN = table.concat({
 	"dnsmasq.walled_garden.1.site.1.restricted=ads.example.org",
 }, "\n") .. "\n"
 
+-- A guest WLAN without the portal (GUESTIN -P ACCEPT), with restricted DNS on:
+-- the guest part of fonix232/openUF's tests/fixtures/system_cfg_guest_synth.txt
+-- (MIT), synthesized from the 10.6.106 generators, not captured. ath1/ath3 are
+-- the guest WLAN's two VAPs.
+local PLAIN = table.concat({
+	"redirector.status=disabled",
+	"ebtables.status=enabled",
+	"ebtables.9.cmd=-t nat -N GUESTIN -P ACCEPT",
+	"ebtables.10.cmd=-t nat -N GUESTOUT -P ACCEPT",
+	"ebtables.11.cmd=-t nat -A PREROUTING --in-interface ath1 -j GUESTIN",
+	"ebtables.12.cmd=-t nat -A POSTROUTING --out-interface ath1 -j GUESTOUT",
+	"ebtables.13.cmd=-t nat -A GUESTIN --in-interface ath1 --proto 0x888e -j ACCEPT",
+	"ebtables.14.cmd=-t nat -A PREROUTING --in-interface ath3 -j GUESTIN",
+	"ebtables.15.cmd=-t nat -A POSTROUTING --out-interface ath3 -j GUESTOUT",
+	"ebtables.16.cmd=-t nat -A GUESTIN --in-interface ath3 --proto 0x888e -j ACCEPT",
+	"ebtables.17.cmd=-t nat -A GUESTIN -p 0x800 --pkttype-type broadcast --ip-proto 17 --ip-sport 68 --ip-dport 67 -j ACCEPT",
+	"ebtables.18.cmd=-t nat -A GUESTIN -p arp --arp-opcode Request -j ACCEPT",
+	"ebtables.19.cmd=-t nat -N GUEST_DNS -P ACCEPT",
+	"ebtables.20.cmd=-t nat -A GUESTIN -p 0x800 --ip-proto 17 --ip-dport 53 -j GUEST_DNS",
+	"ebtables.21.cmd=-t nat -A GUESTIN -p 0x800 --ip-proto 6 --ip-dport 53 -j GUEST_DNS",
+	"ebtables.22.cmd=-t nat -A GUESTIN -p 0x86dd -j DROP",
+	"ebtables.23.cmd=-t nat -A GUESTIN --pkttype-type broadcast -j DROP",
+	"ebtables.24.cmd=-t nat -A GUESTOUT -p 0x800 --pkttype-type broadcast --ip-proto 17 --ip-sport 67 --ip-dport 68 -j ACCEPT",
+	"ebtables.25.cmd=-t nat -A GUESTOUT -p arp --arp-opcode Request -j ACCEPT",
+	"ebtables.26.cmd=-t nat -A GUESTOUT -p 0x86dd -j DROP",
+	"ebtables.27.cmd=-t nat -A GUESTOUT --pkttype-type broadcast -j DROP",
+	"ebtables.28.cmd=-t nat -N CAPTIVE_PORTAL -P RETURN",
+	"ebtables.29.cmd=-t nat -A GUESTIN -p 0x800 --ip-proto 6 --ip-dport 443 -j CAPTIVE_PORTAL",
+	"ebtables.30.cmd=-t nat -I GUESTIN -p 0x800 --ip-dst 198.51.100.7 -j ACCEPT",
+	"ebtables.31.cmd=-t nat -I GUESTOUT -p 0x800 --ip-src 198.51.100.7 -j ACCEPT",
+	"ebtables.32.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 224.0.0.0/4 -j DROP",
+	"ebtables.33.cmd=-t nat -A GUESTOUT -p 0x800 --ip-dst 224.0.0.0/4 -j DROP",
+	"ebtables.34.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 192.0.2.0/24 -j DROP",
+	"ebtables.35.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 198.51.100.0/24 -j DROP",
+	"ebtables.36.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 203.0.113.0/24 -j DROP",
+	"ebtables.37.cmd=-t nat -N ALLOW_DNS_SERVERS -P DROP",
+	"ebtables.38.cmd=-t nat -A ALLOW_DNS_SERVERS -p 0x800 --ip-dst 192.0.2.53 -j ACCEPT",
+	"ebtables.39.cmd=-t nat -I GUESTIN -p 0x800 --ip-proto 17 --ip-dport 53 -j ALLOW_DNS_SERVERS",
+	"ebtables.40.cmd=-t nat -I GUESTIN -p 0x800 --ip-proto 6 --ip-dport 53 -j ALLOW_DNS_SERVERS",
+	"ebtables.41.cmd=-t broute -A BROUTING -i ath1 -p 802_1Q -j DROP",
+}, "\n") .. "\n"
+
 -- OpenWrt 25.12's nslookup, as read on the Archer C5: repeated Name:/Address:
 -- pairs, A and AAAA together, and the resolver's own address BEFORE the first
 -- Name: line.
@@ -186,7 +228,8 @@ return {
 		name = "guestportal: the lab capture parses to the portal's facts, every shape known",
 		fn = function()
 			local s = gp.parse(CAPTURE)
-			assert_true(s.enabled, "portal on")
+			assert_true(s.enabled, "rules on")
+			assert_true(s.portal, "portal on")
 			assert_eq(s.url, "http://" .. CTL .. ":8880/guest/s/default/", "redirector.url")
 			assert_eq(#s.unknown, 0, "no guest rule left unrecognised")
 			assert_eq(table.concat(s.devs, ","), "ath0,ath1", "the GUESTIN hooks")
@@ -205,19 +248,89 @@ return {
 		name = "guestportal: off, partial or unusable pushes",
 		fn = function()
 			local off = gp.parse(CAPTURE:gsub("redirector%.status=enabled", "redirector.status=disabled"))
-			assert_false(off.enabled, "redirector.status=disabled is off")
+			assert_true(off.enabled, "redirector.status=disabled: the guest rules still hold")
+			assert_false(off.portal, "but no portal")
 			assert_eq(gp.parse("radio.1.channel=6\n"), nil, "no redirector.status: a partial push says nothing")
+			local eb = gp.parse("ebtables.status=enabled\n")
+			assert_not_nil(eb, "an ebtables block is a whole guest ruleset, redirector.status or not")
+			assert_false(eb.enabled, "with no GUESTIN hook nothing is enforced")
 			local hdr = gp.parse(CAPTURE:gsub("redirector%.url=[^\n]*",
 				'redirector.url=http://' .. CTL .. '/a"b'))
 			assert_eq(hdr.url, nil, "a URL that cannot go into a Location header is refused")
-			assert_false(hdr.enabled, "and without a URL the portal is not enforced")
+			assert_true(hdr.enabled, "without a URL the restrictions are still enforced")
+			assert_false(hdr.portal, "but the portal is not")
 			local nohook = gp.parse("redirector.status=enabled\nredirector.url=http://" .. CTL .. "/\n")
 			assert_false(nohook.enabled, "no GUESTIN hook: nothing to enforce on")
 			local odd = gp.parse(CAPTURE .. "ebtables.60.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 300.1.1.1/8 -j DROP\n"
 				.. "ebtables.61.cmd=-t nat -A GUESTIN -p 0x800 --ip-proto 6 --ip-dport 99999 --ip-dst " .. CTL .. " -j ACCEPT\n"
-				.. "ebtables.62.cmd=-t nat -A GUESTIN -j CAPTIVE_PORTAL --something new\n")
-			assert_eq(#odd.unknown, 3, "a bad address, a bad port and a new shape are reported, not spliced")
+				.. "ebtables.62.cmd=-t nat -A GUESTIN -j CAPTIVE_PORTAL --something new\n"
+				.. "ebtables.63.cmd=-t nat -A ALLOW_DNS_SERVERS -p 0x800 --ip-dst 300.1.1.1 -j ACCEPT\n")
+			assert_eq(#odd.unknown, 4, "a bad address, a bad port, a new shape and a bad DNS server are reported, not spliced")
+			assert_eq(#odd.dns_servers, 0, "the bad DNS server was not taken")
 			assert_eq(#odd.restrict, 4, "the bad subnet was not taken")
+		end
+	},
+	{
+		name = "guestportal: a guest WLAN without the portal parses, every shape known",
+		fn = function()
+			local s = gp.parse(PLAIN)
+			assert_true(s.enabled, "the guest rules are enforced")
+			assert_false(s.portal, "no portal")
+			assert_eq(#s.unknown, 0, "every shape known: " .. table.concat(s.unknown, " | "))
+			assert_eq(table.concat(s.devs, ","), "ath1,ath3", "the GUESTIN hooks")
+			assert_eq(table.concat(s.dns_servers, ","), "192.0.2.53", "restricted DNS: the one server")
+			assert_eq(table.concat(s.restrict, ","), "224.0.0.0/4,192.0.2.0/24,198.51.100.0/24,203.0.113.0/24",
+				"inbound drops in push order")
+			assert_eq(table.concat(s.accept_out, ","), "198.51.100.7", "pre-authorization egress twin")
+		end
+	},
+	{
+		name = "guestportal: without the portal the restrictions stand and the rest passes",
+		fn = function()
+			local cmds = with_capture(function() gp.reconcile(gp.parse(PLAIN), VAPS, {}, true) end)
+			local dns = find(cmds, "guestin ether type ip udp dport 53 jump allow_dns")
+			local pre = find(cmds, "guestin ip daddr 198.51.100.7 accept")
+			assert_true(dns ~= nil and pre ~= nil and dns < pre, "restricted DNS on top, as the last -I")
+			assert_not_nil(find(cmds, "guestin ether type ip tcp dport 53 jump allow_dns"), "tcp too")
+			local srv = find(cmds, "allow_dns ip daddr 192.0.2.53 accept")
+			local srvdrop = find(cmds, "add rule bridge openuf_guest allow_dns drop")
+			assert_true(srv ~= nil and srvdrop ~= nil and srv < srvdrop, "only the listed server")
+			assert_not_nil(find(cmds, "guestin ip daddr 192.0.2.0/24 drop"), "restricted subnets dropped")
+			assert_not_nil(find(cmds, "guestin ether type ip6 drop"), "IPv6 dropped")
+			assert_not_nil(find(cmds, "guestout ip daddr 224.0.0.0/4 drop"), "multicast to guests dropped")
+			assert_nil(find(cmds, "guestin drop"), "no default-deny: the rest passes")
+			assert_nil(find(cmds, "jump selfrun"), "no selfrun without a portal")
+			assert_nil(find(cmds, "jump redirect_http"), "no portal answer")
+			assert_nil(find(cmds, "@authorized"), "no authorized accept")
+			assert_nil(find(cmds, "redirect to :"), "no NAT redirect")
+			assert_not_nil(find(cmds, "nft delete table ip openuf_guest"), "a NAT table left by a portal is removed")
+		end
+	},
+	{
+		name = "guestportal: a portal without a usable URL is enforced as restrictions only",
+		fn = function()
+			local spec = gp.parse(CAPTURE:gsub("redirector%.url=[^\n]*", "redirector.url=ftp://x/"))
+			local cmds = with_capture(function() gp.reconcile(spec, VAPS, {}, false) end)
+			assert_not_nil(find(cmds, "guestin ip daddr 10.0.0.0/8 drop"), "restricted subnets dropped")
+			assert_nil(find(cmds, "guestin drop"), "guests are not locked out behind a portal nobody can show")
+			assert_nil(find(cmds, "jump redirect_http"), "no intercept, no :80 answer")
+		end
+	},
+	{
+		name = "guestportal: restricted DNS also sits on top of the portal's rules",
+		fn = function()
+			local dns = table.concat({
+				"ebtables.70.cmd=-t nat -N ALLOW_DNS_SERVERS -P DROP",
+				"ebtables.71.cmd=-t nat -A ALLOW_DNS_SERVERS -p 0x800 --ip-dst 192.0.2.53 -j ACCEPT",
+				"ebtables.72.cmd=-t nat -I GUESTIN -p 0x800 --ip-proto 17 --ip-dport 53 -j ALLOW_DNS_SERVERS",
+			}, "\n") .. "\n"
+			local spec = gp.parse(CAPTURE .. dns)
+			assert_eq(#spec.unknown, 0, "known shapes")
+			local cmds = with_capture(function() gp.reconcile(spec, VAPS, {}, false) end)
+			local jump = find(cmds, "guestin ether type ip udp dport 53 jump allow_dns")
+			local intercept = find(cmds, "jump redirect_http")
+			assert_true(jump ~= nil and jump < intercept, "above the portal's own -I rules")
+			assert_not_nil(find(cmds, "guestin drop"), "the portal's default-deny stays")
 		end
 	},
 	{

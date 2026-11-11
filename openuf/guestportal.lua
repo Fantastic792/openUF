@@ -24,6 +24,13 @@
 	       tcp 80 -> local answer; everything else -> drop
 	  out: DHCP reply, ARP -> accept; IPv6, other broadcast, multicast -> drop
 
+	A guest WLAN without the portal gets the same rules with GUESTIN -P
+	ACCEPT (and a portal whose URL is refused is treated alike, as
+	fonix232/openUF's guestguard does): spec.portal is false, and reconcile
+	leaves out the authorized/selfrun/:80/drop tail, the intercepts and the
+	NAT redirect, so guests keep the internet but not the restricted subnets.
+	Restricted DNS (ALLOW_DNS_SERVERS) sits on top of guestin in both modes.
+
 	After the authorized accept, a `selfrun` chain that lets every guest
 	through while the controller is unreachable (set_selfrun); with
 	selfrun_guest_mode=off the guest VAPs go down instead (inform._guest_selfrun).
@@ -155,6 +162,17 @@ local SKELETON = {
 	"^%-t nat %-A GUESTIN %-p 0x800 %-%-pkttype%-type broadcast %-%-ip%-proto 17 %-%-ip%-sport 68 %-%-ip%-dport 67 %-j ACCEPT$",
 	"^%-t nat %-A GUESTIN %-p arp %-j ACCEPT$",
 	"^%-t nat %-N GUEST_DNS %-P DROP$",
+	-- Without the portal (fonix232's 10.6.106 decompile, synthesized): GUESTIN
+	-- and GUEST_DNS accept by policy and only ARP requests are named; reconcile
+	-- re-creates the same by leaving out the portal's tail.
+	"^%-t nat %-N GUESTIN %-P ACCEPT$",
+	"^%-t nat %-N GUEST_DNS %-P ACCEPT$",
+	"^%-t nat %-A GUEST[IO][NU]T? %-p arp %-%-arp%-opcode Request %-j ACCEPT$",
+	-- Restricted DNS: the chain and the jumps into it; the servers are read
+	-- by classify.
+	"^%-t nat %-N ALLOW_DNS_SERVERS %-P DROP$",
+	"^%-t nat %-I GUESTIN %-p 0x800 %-%-ip%-proto 17 %-%-ip%-dport 53 %-j ALLOW_DNS_SERVERS$",
+	"^%-t nat %-I GUESTIN %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport 53 %-j ALLOW_DNS_SERVERS$",
 	"^%-t nat %-A GUESTIN %-p 0x800 %-%-ip%-proto 17 %-%-ip%-dport 53 %-j GUEST_DNS$",
 	"^%-t nat %-A GUESTIN %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport 53 %-j GUEST_DNS$",
 	"^%-t nat %-A GUESTIN %-p 0x86dd %-j DROP$",
@@ -199,7 +217,7 @@ local SKELETON = {
 -- portal's, whether or not parse() knows its shape.
 local GUEST_CHAINS = {"GUESTIN", "GUESTOUT", "GUEST_DNS", "CAPTIVE_PORTAL",
 	"REDIRECT_HTTP", "REDIRECT_HTTPS", "REDIRECT_DNS", "AUTHORIZED_GUESTS",
-	"ALLOWED_DOMAIN_IN", "ALLOWED_DOMAIN_OUT", "RESTRICTED_DOMAIN_IN"}
+	"ALLOWED_DOMAIN_IN", "ALLOWED_DOMAIN_OUT", "RESTRICTED_DOMAIN_IN", "ALLOW_DNS_SERVERS"}
 
 -- Whether an ebtables fragment belongs to the guest ruleset (l2guard leaves
 -- these to this module rather than reporting them as unrecognised).
@@ -237,8 +255,14 @@ local function classify(v, spec)
 		spec.intercept[#spec.intercept + 1] = {ip = ip, port = tonumber(port)}
 		return true
 	end
+	local srv = v:match("^%-t nat %-A ALLOW_DNS_SERVERS %-p 0x800 %-%-ip%-dst (%S+) %-j ACCEPT$")
+	if srv then
+		if not is_ipv4(srv) then return false end
+		spec.dns_servers[#spec.dns_servers + 1] = srv
+		return true
+	end
 	-- The IP half of the walled garden: no port, and both directions.
-	local net = v:match("^%-t nat %-I GUESTIN %-p 0x800 %-%-ip%-dst (%S+) %-j ACCEPT$")
+	local net =v:match("^%-t nat %-I GUESTIN %-p 0x800 %-%-ip%-dst (%S+) %-j ACCEPT$")
 	if net then
 		if not is_cidr(net) then return false end
 		spec.accept[#spec.accept + 1] = {ip = net}
@@ -267,14 +291,16 @@ end
 function M.parse(sys_raw)
 	if type(sys_raw) ~= "string" then return nil end
 	local spec = {enabled = false, devs = {}, accept = {}, accept_out = {},
-		intercept = {}, restrict = {}, restrict_out = {},
+		intercept = {}, restrict = {}, restrict_out = {}, dns_servers = {},
 		wg_allowed = {}, wg_restricted = {}, unknown = {}}
-	local status, wg_status
+	local status, wg_status, eb_status
 	local wg_rows = {allowed = {}, restricted = {}}
 	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
 		local k, v = line:match("^([^=]+)=(.*)$")
 		if k == "redirector.status" then
 			status = v
+		elseif k == "ebtables.status" then
+			eb_status = v
 		elseif k == "redirector.url" then
 			-- Spliced into a Location header: one token, http(s) only.
 			if v:match("^https?://[%w%.%-:%[%]]+[%S]*$") and not v:find("[%c\"<>\\]") then
@@ -322,8 +348,12 @@ function M.parse(sys_raw)
 			spec[which == "allowed" and "wg_allowed" or "wg_restricted"] = out
 		end
 	end
-	if status == nil then return nil end
-	spec.enabled = (status == "enabled" and spec.url ~= nil and #spec.devs > 0)
+	if status == nil and eb_status == nil then return nil end
+	-- The guest rules hold on every hooked guest VAP; the portal on top of
+	-- them only with a URL to send guests to. Portal on without one: the
+	-- restrictions without the default-deny, as fonix232's guestguard does.
+	spec.enabled = #spec.devs > 0
+	spec.portal = status == "enabled" and spec.url ~= nil
 	return spec
 end
 
@@ -531,8 +561,18 @@ function M.reconcile(spec, vaps, macs, selfrun, garden)
 	}
 	local function add(chain, rule) rules[#rules + 1] = {chain, rule} end
 	garden = type(garden) == "table" and garden or {}
+	-- nil: a spec saved before the portal-less mode existed, all portals.
+	local portal = spec.portal ~= false
+	local dns = type(spec.dns_servers) == "table" and spec.dns_servers or {}
+	-- Restricted DNS: the controller's last -I, so above everything.
+	if #dns > 0 then
+		add("guestin", "ether type ip udp dport 53 jump allow_dns")
+		add("guestin", "ether type ip tcp dport 53 jump allow_dns")
+		for _, ip in ipairs(dns) do add("allow_dns", "ip daddr " .. ip .. " accept") end
+		add("allow_dns", "drop")
+	end
 	-- The controller inserts these at the top (-I): ahead of every drop.
-	for _, a in ipairs(spec.intercept) do
+	for _, a in ipairs(portal and spec.intercept or {}) do
 		add("guestin", "ip daddr " .. a.ip .. " tcp dport " .. a.port .. " jump redirect_http")
 	end
 	-- ALLOWED_DOMAIN_IN, inserted above the garden's IP accepts.
@@ -558,17 +598,21 @@ function M.reconcile(spec, vaps, macs, selfrun, garden)
 	for _, net in ipairs(spec.restrict) do
 		add("guestin", "ip daddr " .. net .. " drop")
 	end
-	-- AUTHORIZED_GUESTS: --pkttype-type otherhost, i.e. not to the AP itself.
-	add("guestin", "ether saddr @authorized meta pkttype other accept")
-	add("guestin", "jump selfrun")
-	add("guestin", "tcp dport 80 jump redirect_http")
-	add("guestin", "drop")
-	add("redirect_http", "meta mark set meta mark or " .. M.MARK_HTTP)
-	for _, v in ipairs(redirect) do
-		add("redirect_http", 'iifname "' .. v.ifname .. '" ether daddr set ' .. v.bridge_mac:lower()
-			.. " meta pkttype set host accept")
+	-- Without the portal GUESTIN's policy is ACCEPT: what is left falls through
+	-- to the hook's accept, and none of the portal's machinery is built.
+	if portal then
+		-- AUTHORIZED_GUESTS: --pkttype-type otherhost, i.e. not to the AP itself.
+		add("guestin", "ether saddr @authorized meta pkttype other accept")
+		add("guestin", "jump selfrun")
+		add("guestin", "tcp dport 80 jump redirect_http")
+		add("guestin", "drop")
+		add("redirect_http", "meta mark set meta mark or " .. M.MARK_HTTP)
+		for _, v in ipairs(redirect) do
+			add("redirect_http", 'iifname "' .. v.ifname .. '" ether daddr set ' .. v.bridge_mac:lower()
+				.. " meta pkttype set host accept")
+		end
+		add("redirect_http", "drop")
 	end
-	add("redirect_http", "drop")
 	-- ALLOWED_DOMAIN_OUT and the garden's IP accepts, both by source address
 	-- and both inserted at the top of GUESTOUT by the controller.
 	for _, ip in ipairs(garden.allowed or {}) do
@@ -593,6 +637,7 @@ function M.reconcile(spec, vaps, macs, selfrun, garden)
 		"add chain " .. T .. " guestout",
 		"add chain " .. T .. " redirect_http",
 		"add chain " .. T .. " selfrun",
+		"add chain " .. T .. " allow_dns",
 	}
 	local first = #stmts + 1
 	for _, r in ipairs(rules) do
@@ -600,11 +645,13 @@ function M.reconcile(spec, vaps, macs, selfrun, garden)
 	end
 	local last = #stmts
 	stmts[#stmts + 1] = authorized_stmt(macs)
-	if selfrun then stmts[#stmts + 1] = SELFRUN_RULE:format(T) end
-	-- The marked frames reach the bridge's own stack; send them to M.PORT.
-	stmts[#stmts + 1] = "add chain " .. M.NAT_TABLE .. " pre { type nat hook prerouting priority -101; }"
-	stmts[#stmts + 1] = "add rule " .. M.NAT_TABLE .. " pre meta mark and 0xc0000000 == " .. M.MARK_HTTP
-		.. " meta l4proto tcp redirect to :" .. M.PORT
+	if portal then
+		if selfrun then stmts[#stmts + 1] = SELFRUN_RULE:format(T) end
+		-- The marked frames reach the bridge's own stack; send them to M.PORT.
+		stmts[#stmts + 1] = "add chain " .. M.NAT_TABLE .. " pre { type nat hook prerouting priority -101; }"
+		stmts[#stmts + 1] = "add rule " .. M.NAT_TABLE .. " pre meta mark and 0xc0000000 == " .. M.MARK_HTTP
+			.. " meta l4proto tcp redirect to :" .. M.PORT
+	end
 	local _, bad = util.nft_apply(tables, stmts, M._exec)
 
 	local n, failed = 0, 0
@@ -620,6 +667,7 @@ function M.reconcile(spec, vaps, macs, selfrun, garden)
 		io.stderr:write("openuf: guestportal: " .. failed .. " rule(s) not installed; iifname/oifname in "
 			.. "the bridge family need kmod-nft-bridge. The guest portal is NOT fully enforced.\n")
 	end
+	if not portal then return n end
 	if bad[#stmts] then
 		io.stderr:write("openuf: guestportal: nft rejected the NAT redirect (kmod-nft-nat?). "
 			.. "Guests stay blocked but are not shown the portal.\n")

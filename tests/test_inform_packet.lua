@@ -9215,11 +9215,13 @@ return {
 			end}
 			local save = inform._state.save
 			inform._state.save = function() end
-			local function push(st, portal)
+			-- guest false: the WLAN is no longer a guest one, and its hook is gone.
+			local function push(st, portal, guest)
+				guest = guest ~= false
 				local sys = "aaa.1.id=w1\nwireless.1.ssid=g\nwireless.1.parent=wifi0\n"
-					.. "wireless.1.is_guest=true\nredirector.status=" .. portal .. "\n"
+					.. "wireless.1.is_guest=" .. tostring(guest) .. "\nredirector.status=" .. portal .. "\n"
 					.. "redirector.url=http://192.0.2.2:8880/guest/s/default/\n"
-					.. "ebtables.7.cmd=-t nat -A PREROUTING --in-interface ath0 -j GUESTIN\n"
+					.. (guest and "ebtables.7.cmd=-t nat -A PREROUTING --in-interface ath0 -j GUESTIN\n" or "")
 				inform.handle_response(cjson.encode({_type = "setparam", system_cfg = sys}),
 					st, {net = {lan_cpueth = "eth0"}})
 			end
@@ -9247,7 +9249,7 @@ return {
 				push(st, "enabled")
 				assert_eq(calls.listen, 1, "a second push does not listen again")
 				assert_eq(st.guest_token, token, "nor change the token")
-				push(st, "disabled")
+				push(st, "disabled", false)
 				assert_eq(st.guest_portal, nil, "off")
 				assert_eq(calls.reconcile[3].spec, nil, "tables torn down")
 				assert_eq(calls.closed, 1, "listener closed")
