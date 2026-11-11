@@ -440,4 +440,26 @@ return {
 			end)
 		end
 	},
+	{
+		name = "netconfig: uci a failed commit is a failure and reloads nothing",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "dhcp"}}, function(u, cmds)
+				u.mock.cursor().commit = function() return nil, "I/O error" end
+				assert_false(netconfig.apply_static("br-lan", "192.0.2.10", "255.255.255.0",
+					nil, nil, "lan"), "not applied")
+				assert_eq(#cmds, 0, "no reload")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci a cursor that throws falls back to ip addr",
+		fn = function()
+			with_uci({}, function(_, cmds)
+				netconfig._uci = {cursor = function() error("libuci broke") end}
+				assert_true(netconfig.apply_static("br-lan", "192.0.2.10", "255.255.255.0",
+					nil, nil, "lan"), "applied the old way")
+				assert_eq(cmds[1], "ip addr flush dev br-lan 2>/dev/null", "kernel path")
+			end)
+		end
+	},
 }

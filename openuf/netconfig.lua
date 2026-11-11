@@ -88,7 +88,11 @@ local function uci_iface(ifname)
 		if not ok then return nil end
 		uci = mod
 	end
-	local c = uci.cursor()
+	local ok, c = pcall(uci.cursor)
+	if not ok or not c then
+		io.stderr:write("netconfig: libuci cursor failed; IP Settings go on with `ip addr`\n")
+		return nil
+	end
 	if ifname:match("^[%w_]+$") and c:get("network", ifname) == "interface" then return c end
 	io.stderr:write(("netconfig: no interface %q in /etc/config/network (dev.conf.net.lan_name);"
 		.. " IP Settings go onto the port with `ip addr` and die at reboot\n"):format(ifname))
@@ -127,7 +131,9 @@ local function write_opts(c, ifname, want)
 		end
 	end
 	if changed then
-		c:commit("network")
+		-- A failed commit (overlay full) changed nothing on disk: say so, so
+		-- the caller does not record a static address that is not there.
+		if not c:commit("network") then return false end
 		M._exec(RELOAD)
 	end
 	return true
@@ -180,7 +186,9 @@ function M.apply_static(iface, ip, netmask, gateway, dns, ifname)
 	end
 	local c = uci_iface(ifname)
 	if c then
-		-- netifd writes resolv.conf from `dns`; no direct write here.
+		-- netifd writes resolv.conf from `dns`; no direct write here. The
+		-- interface mirrors the push: no valid DNS pushed = the board's own
+		-- `dns` is deleted (netifd then uses the gateway / lease DNS).
 		return write_opts(c, ifname, {proto = "static", ipaddr = ip,
 			netmask = is_ipv4(netmask) and netmask or "255.255.255.0",
 			gateway = (gateway and gateway ~= "" and gateway ~= "0.0.0.0") and gateway or nil,
@@ -285,8 +293,8 @@ end
 -- Release any static config and let a DHCP client re-acquire an address.
 -- Best-effort: real hardware's netifd handles this natively; here we shell
 -- out to udhcpc directly (present on both Alpine and OpenWrt).
--- On the UCI path: proto dhcp, the address options dropped, and netifd's own
--- client takes over (no one-shot udhcpc beside it).
+-- On the UCI path: proto dhcp, the address options dropped (`dns` too: the
+-- lease brings DNS), and netifd's own client takes over (no one-shot udhcpc).
 function M.apply_dhcp(iface, ifname)
 	if not valid_iface(iface) then return false end
 	local c = uci_iface(ifname)
