@@ -845,6 +845,7 @@ M._logged_pending = false
 --   tick(st, cfg, ctx)       each heartbeat, before build_json
 --   tick_late(st, cfg, ctx)  each heartbeat, after build_json (its stations)
 --   forget(prev, cfg)        _forget_controller's teardown (prev never nil)
+--   boot(st, cfg)            M.run, once, the kernel state a reboot lost
 -- A ticking row with no forget hook says in forget_by how a Forget undoes what
 -- it keeps alive (tests/test_feature_lists.lua checks each story).
 -- Hooks keep their own pcall and log line, or lack of one: the driver adds
@@ -872,8 +873,44 @@ M._FEATURES = {
 	vap_watch = {tick = function() pcall(M._vap_watch, M._time()) end,
 		forget_by = {none = "only opens the resync gates"}},
 	l2guard = {tick = function(st) pcall(M._l2guard_resync, st) end,
+		-- The controller's ebtables hardening (BPDU and VLAN-tag drop on the
+		-- VAPs) is nft state too. Rebuilt from state.json's record with the live
+		-- VAP list, falling back to the names recorded at the last push when
+		-- wireless is not answering yet at this point of the boot;
+		-- _l2guard_resync corrects the list once it is.
+		boot = function(st)
+			if M._l2guard and type(st.l2guard) == "table" then
+				pcall(function()
+					local names = M._l2guard_live_ifnames()
+					if #names == 0 and type(st.l2guard.ifnames) == "table" then names = st.l2guard.ifnames end
+					M._l2guard.reconcile(st.l2guard, names)
+				end)
+			end
+		end,
 		forget = function() if M._l2guard then pcall(M._l2guard.reconcile, nil, {}) end end},
 	bcfilt = {tick = function() pcall(M._bcfilt_resync) end,
+		-- Same category, one level out: the "Multicast and Broadcast Blocker" is an
+		-- nftables ruleset, so it dies with the reboot, and has no UCI option
+		-- OpenWrt itself applies. It is only ever built inside apply_config, which
+		-- runs on a setparam -- and after a reboot there is no setparam: cfgversion
+		-- matches on the first inform and the controller replies noop, carrying no
+		-- system_cfg at all. It therefore stayed off indefinitely while the UI
+		-- showed it on. Rebuilt here from the openuf_bcfilt options wlan_add stamps
+		-- onto each managed section. (The WiFi Speed Limit is rebuilt by every
+		-- heartbeat's _shaper_resync from openuf_ratelimit_*.)
+		--
+		-- pcall'd because it reaches ubus for each VAP's live netdev name: no
+		-- radios, no wifi up yet, no ubus at all are ordinary outcomes on a board
+		-- openUF has never provisioned, and none of them may stop the daemon.
+		boot = function()
+			if M._ucihelper and M._ucihelper.reapply_runtime_rules then
+				local ok_rt, err_rt = pcall(M._ucihelper.reapply_runtime_rules)
+				if not ok_rt then
+					io.stderr:write("inform: could not reapply the blocker rules: "
+						.. tostring(err_rt) .. "\n")
+				end
+			end
+		end,
 		forget_by = {vaps = true}},
 	-- Not verified on a mesh child: what a Forget does to its own uplink.
 	backhaul = {tick = function(st, cfg) pcall(M._backhaul_tick, st, cfg) end,
@@ -881,6 +918,10 @@ M._FEATURES = {
 	uplinkmon = {tick = function(st, cfg) pcall(M._uplinkmon_resync, st, cfg) end,
 		forget_by = {state = {"uplinkmon_enabled", "uplinkmon_host", "uplinkmon_down"}}},
 	meshvlan = {tick = function(st, cfg) pcall(M._meshvlan_resync, st, cfg) end,
+		-- So are the mesh VLAN ports and their guard (meshvlan.lua): guard first,
+		-- ports after, from state.json's record. A VLAN bridge netifd has not
+		-- built yet gets its port on a later heartbeat.
+		boot = function(st, cfg) pcall(M._meshvlan_resync, st, cfg) end,
 		-- Before anything else moves: the mesh VLAN ports, then their guard.
 		forget = function(prev)
 			if M._meshvlan and type(prev.meshvlan) == "table" then
@@ -888,6 +929,12 @@ M._FEATURES = {
 			end
 		end},
 	guest = {tick = function(st) pcall(M._guest_resync, st) end,
+		-- The guest portal's tables, likewise (lab-validated only).
+		boot = function(st)
+			if M._guestportal and type(st.guest_portal) == "table" then
+				pcall(M._guest_enforce, st)
+			end
+		end,
 		forget = function() if M._guestportal then pcall(M._guest_enforce, {}) end end},
 	guest_wg = {tick = function(st) pcall(M._guest_wg_resync, st) end,
 		forget_by = {via = "guest"}},
@@ -896,6 +943,11 @@ M._FEATURES = {
 	usteer = {tick = function() pcall(M._usteer_filter_resync) end,
 		forget = function(prev, cfg) if M._usteer then pcall(M._usteer.set_enabled, false, cfg, false) end end},
 	block = {tick = function(st) pcall(M._block_resync, st) end,
+		-- Blocked-client nft rules are live kernel state, not persisted UCI --
+		-- reapply from state.json on every fresh start (mirrors the bootstrap
+		-- account reconciliation run() does just before). Unprotected, as it
+		-- always was.
+		boot = function(st) M._firewall.reconcile(st.blocked_stas) end,
 		-- The controller's client blocks go with it: an empty blocklist, not
 		-- a reboot's worth of dropped clients nobody can see in a UI any more.
 		forget = function()
@@ -924,8 +976,49 @@ M._FEATURES = {
 				if not ok then io.stderr:write("inform: forget: rate limits: " .. tostring(err) .. "\n") end
 			end
 		end},
-	-- Forget-only rows.
-	switchvlan = {forget = function(prev, cfg) if M._switchvlan then pcall(M._switchvlan.restore, prev, cfg) end end},
+	-- Rows with no tick step.
+	switchvlan = {
+		boot = function(st, cfg)
+			-- Per-port byte counters are a switch-driver setting that some boards ship
+			-- switched off; without it every socket reports 0 B in the Ports view.
+			if M._switchvlan then pcall(M._switchvlan.enable_mib_polling, cfg) end
+			-- nftables state does not survive a reboot, so the per-socket MAC tap is
+			-- reinstalled here from the UCI sections that record which sockets have
+			-- learning off -- the same discipline _firewall.reconcile uses for the
+			-- blocklist. A tap that is not reinstalled fails silently, as an empty
+			-- mac_table, which is the bug it exists to fix.
+			if M._switchvlan and M._switchvlan.reconcile_mac_taps then
+				pcall(M._switchvlan.reconcile_mac_taps)
+			end
+		end,
+		forget = function(prev, cfg) if M._switchvlan then pcall(M._switchvlan.restore, prev, cfg) end end},
+	-- A Locate does NOT survive a restart, and must not: it is a transient
+	-- "which box is it" blink, nobody is still standing in front of the AP,
+	-- and unset-locate only ever arrives while someone is watching the
+	-- controller. Left alone the device comes back still blinking with no
+	-- snapshot of what the LED was on, and the next unset-locate -- if one
+	-- ever comes -- restores nothing. Worse, a second set-locate would
+	-- snapshot the blink itself as the thing to restore. Upstream observed
+	-- exactly that on an AX3000T, whose radio LED stayed on the identify
+	-- blink across three Locate cycles.
+	locate = {boot = function(st, cfg)
+		if st.locating then
+			-- Only when the LED is really still blinking: a device that REBOOTED
+			-- mid-Locate comes back with the kernel's own default trigger already
+			-- restored, and "stopping" that would write none over it.
+			if M._led.locate_active(cfg and cfg.led) then
+				M._led.locate_stop(cfg and cfg.led, st.locate_prev_trigger)
+			end
+			st.locating = false
+			st.locate_prev_trigger = nil
+			-- Startup: a full overlay or a missing directory must not stop the
+			-- daemon here, before its first inform. The next save retries.
+			local ok_sv, err_sv = pcall(M._state.save, st)
+			if not ok_sv then
+				io.stderr:write("inform: state not saved at startup: " .. tostring(err_sv) .. "\n")
+			end
+		end
+	end},
 	ucihelper = {forget = function()
 		if M._ucihelper and M._ucihelper.forget then
 			pcall(M._ucihelper.forget)
@@ -936,8 +1029,24 @@ M._FEATURES = {
 		if M._sysconf then pcall(M._sysconf.apply_cron, {enabled = false, jobs = {}}) end
 	end},
 	-- A controller that switched Airtime Fairness off no longer does.
-	airtime = {forget = function() if M._airtime then pcall(M._airtime.set_enabled, true) end end},
-	led = {forget = function(prev, cfg)
+	airtime = {boot = function(st) M._reapply_airtime(st) end,
+		forget = function() if M._airtime then pcall(M._airtime.set_enabled, true) end end},
+	led = {
+		-- LED brightness is live kernel state too, not UCI -- the same reason the
+		-- blocked-client rules are reapplied. The controller pushes led_enabled
+		-- once, in mgmt_cfg, and never again, so without this the Manage > LED
+		-- toggle silently forgets itself on every reboot while the controller
+		-- goes on believing it took. Runs AFTER the locate teardown: if both have
+		-- something to say, the steady state the operator chose wins over
+		-- whatever trigger the blink displaced. nil means it was never pushed,
+		-- which must leave the board's own default alone. Unprotected, as it
+		-- always was.
+		boot = function(st, cfg)
+			if st.led_enabled ~= nil then
+				M._led.set_enabled(cfg and cfg.led, st.led_enabled)
+			end
+		end,
+		forget = function(prev, cfg)
 		if prev.led_enabled == false and M._led then
 			pcall(M._led.set_enabled, cfg and cfg.led, true)
 		end
@@ -952,6 +1061,8 @@ M._FEATURE_ORDER = {
 	tick_late = {"shaper"},
 	forget = {"meshvlan", "switchvlan", "usteer", "ucihelper", "l2guard", "guest", "cron",
 		"airtime", "led", "block", "shaper"},
+	boot = {"block", "bcfilt", "locate", "led", "airtime", "switchvlan", "l2guard",
+		"meshvlan", "guest"},
 }
 
 -- Runs one phase's hooks in that phase's order.
@@ -1181,98 +1292,10 @@ function M.run(cfg, ufhw)
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	M._reconcile_plugins(st, cfg)
 	M._migrate_legacy_rrb(st, cfg)
-	-- Blocked-client nft rules are live kernel state, not persisted UCI --
-	-- reapply from state.json on every fresh start (mirrors the bootstrap
-	-- account reconciliation just above).
-	M._firewall.reconcile(st.blocked_stas)
-	-- Same category, one level out: the "Multicast and Broadcast Blocker" is an
-	-- nftables ruleset, so it dies with the reboot, and has no UCI option
-	-- OpenWrt itself applies. It is only ever built inside apply_config, which
-	-- runs on a setparam -- and after a reboot there is no setparam: cfgversion
-	-- matches on the first inform and the controller replies noop, carrying no
-	-- system_cfg at all. It therefore stayed off indefinitely while the UI
-	-- showed it on. Rebuilt here from the openuf_bcfilt options wlan_add stamps
-	-- onto each managed section. (The WiFi Speed Limit is rebuilt by every
-	-- heartbeat's _shaper_resync from openuf_ratelimit_*.)
-	--
-	-- pcall'd because it reaches ubus for each VAP's live netdev name: no
-	-- radios, no wifi up yet, no ubus at all are ordinary outcomes on a board
-	-- openUF has never provisioned, and none of them may stop the daemon.
-	if M._ucihelper and M._ucihelper.reapply_runtime_rules then
-		local ok_rt, err_rt = pcall(M._ucihelper.reapply_runtime_rules)
-		if not ok_rt then
-			io.stderr:write("inform: could not reapply the blocker rules: "
-				.. tostring(err_rt) .. "\n")
-		end
-	end
-	-- A Locate does NOT survive a restart, and must not: it is a transient
-	-- "which box is it" blink, nobody is still standing in front of the AP,
-	-- and unset-locate only ever arrives while someone is watching the
-	-- controller. Left alone the device comes back still blinking with no
-	-- snapshot of what the LED was on, and the next unset-locate -- if one
-	-- ever comes -- restores nothing. Worse, a second set-locate would
-	-- snapshot the blink itself as the thing to restore. Upstream observed
-	-- exactly that on an AX3000T, whose radio LED stayed on the identify
-	-- blink across three Locate cycles.
-	if st.locating then
-		-- Only when the LED is really still blinking: a device that REBOOTED
-		-- mid-Locate comes back with the kernel's own default trigger already
-		-- restored, and "stopping" that would write none over it.
-		if M._led.locate_active(cfg and cfg.led) then
-			M._led.locate_stop(cfg and cfg.led, st.locate_prev_trigger)
-		end
-		st.locating = false
-		st.locate_prev_trigger = nil
-		-- Startup: a full overlay or a missing directory must not stop the
-		-- daemon here, before its first inform. The next save retries.
-		local ok_sv, err_sv = pcall(M._state.save, st)
-		if not ok_sv then
-			io.stderr:write("inform: state not saved at startup: " .. tostring(err_sv) .. "\n")
-		end
-	end
-	-- LED brightness is live kernel state too, not UCI -- the same reason the
-	-- blocked-client rules are reapplied above. The controller pushes
-	-- led_enabled once, in mgmt_cfg, and never again, so without this the
-	-- Manage > LED toggle silently forgets itself on every reboot while the
-	-- controller goes on believing it took. Applied AFTER the locate teardown:
-	-- if both have something to say, the steady state the operator chose wins
-	-- over whatever trigger the blink displaced. nil means it was never
-	-- pushed, which must leave the board's own default alone.
-	if st.led_enabled ~= nil then
-		M._led.set_enabled(cfg and cfg.led, st.led_enabled)
-	end
-	M._reapply_airtime(st)
-	-- Per-port byte counters are a switch-driver setting that some boards ship
-	-- switched off; without it every socket reports 0 B in the Ports view.
-	if M._switchvlan then pcall(M._switchvlan.enable_mib_polling, cfg) end
-	-- nftables state does not survive a reboot, so the per-socket MAC tap is
-	-- reinstalled here from the UCI sections that record which sockets have
-	-- learning off -- the same discipline _firewall.reconcile uses for the
-	-- blocklist. A tap that is not reinstalled fails silently, as an empty
-	-- mac_table, which is the bug it exists to fix.
-	if M._switchvlan and M._switchvlan.reconcile_mac_taps then
-		pcall(M._switchvlan.reconcile_mac_taps)
-	end
-	-- The controller's ebtables hardening (BPDU and VLAN-tag drop on the
-	-- VAPs) is nft state too. Rebuilt from state.json's record with the live
-	-- VAP list, falling back to the names recorded at the last push when
-	-- wireless is not answering yet at this point of the boot;
-	-- _l2guard_resync corrects the list once it is.
-	if M._l2guard and type(st.l2guard) == "table" then
-		pcall(function()
-			local names = M._l2guard_live_ifnames()
-			if #names == 0 and type(st.l2guard.ifnames) == "table" then names = st.l2guard.ifnames end
-			M._l2guard.reconcile(st.l2guard, names)
-		end)
-	end
-	-- So are the mesh VLAN ports and their guard (meshvlan.lua): guard first,
-	-- ports after, from state.json's record. A VLAN bridge netifd has not
-	-- built yet gets its port on a later heartbeat.
-	pcall(M._meshvlan_resync, st, cfg)
-	-- The guest portal's tables, likewise (lab-validated only).
-	if M._guestportal and type(st.guest_portal) == "table" then
-		pcall(M._guest_enforce, st)
-	end
+	-- Each feature's kernel state a reboot lost, in the boot order
+	-- (M._FEATURES): blocklist, blocker rules, locate teardown, LED, airtime,
+	-- switch counters and MAC taps, l2guard, mesh VLAN ports, guest portal.
+	M._run_features("boot", st, cfg)
 
 	local socket = require("socket")
 	local ctx = {

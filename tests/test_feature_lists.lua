@@ -31,11 +31,7 @@ end
 
 local INFORM = slurp("openuf/inform.lua")
 local FORGET = strip_comments(body(INFORM, "_forget_controller"))
--- The source of mainloop.lua's M._FEATURES table, where the forget hooks live.
 local MAINLOOP = slurp("openuf/mainloop.lua")
-local TABLE_SRC = strip_comments(MAINLOOP:match("\nM%._FEATURES = {.-\n}\n") or "")
--- What a Forget runs: its own body plus the hooks it drives.
-local TEARDOWN = FORGET .. TABLE_SRC
 
 local function modules()
 	local out = {}
@@ -68,6 +64,21 @@ end
 
 -- The feature table (mainloop.lua M._FEATURES / M._FEATURE_ORDER), as loaded.
 local FM = fresh_inform()
+
+-- What a Forget runs: its own body plus the source lines of each forget hook
+-- (debug.getinfo gives where each one sits in mainloop.lua).
+local TEARDOWN = FORGET
+do
+	local lines = {}
+	for l in (MAINLOOP .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = l end
+	for _, row in pairs(FM._FEATURES or {}) do
+		if row.forget then
+			local i = debug.getinfo(row.forget, "S")
+			TEARDOWN = TEARDOWN .. "\n" .. strip_comments(
+				table.concat(lines, "\n", i.linedefined, i.lastlinedefined))
+		end
+	end
+end
 
 local function quiet(fn)
 	local err = io.stderr
@@ -145,6 +156,30 @@ test("_forget_controller tears nothing down outside the feature table", function
 			"M._airtime.set_enabled", "M._led.set_enabled", "M._firewall.reconcile", "M._shaper.sync"}) do
 		if FORGET:find(call, 1, true) then
 			problems[#problems + 1] = "_forget_controller calls " .. call .. " itself: move it to a forget hook"
+		end
+	end
+	assert(#problems == 0, table.concat(problems, "; "))
+end)
+
+test("M.run reapplies nothing outside the feature table", function()
+	local run = strip_comments(body(MAINLOOP, "run"))
+	local problems = {}
+	if not run:find('M._run_features("boot"', 1, true) then
+		problems[#problems + 1] = "M.run does not run the boot phase"
+	end
+	for _, call in ipairs({"M._firewall.reconcile", "M._ucihelper.reapply_runtime_rules",
+			"M._led.locate_stop", "M._led.set_enabled", "M._reapply_airtime",
+			"M._switchvlan.enable_mib_polling", "M._switchvlan.reconcile_mac_taps",
+			"M._l2guard.reconcile", "M._meshvlan_resync", "M._guest_enforce"}) do
+		if run:find(call, 1, true) then
+			problems[#problems + 1] = "M.run calls " .. call .. " itself: move it to a boot hook"
+		end
+	end
+	-- Phase 1's boot steps stay in M.run, before the identity is read.
+	for _, call in ipairs({"pcall(M._ip_rollback_boot, st)", "pcall(M._swvlan_rollback_boot, st)",
+			"pcall(M._reapply_static_ip, st, cfg)"}) do
+		if not run:find(call, 1, true) then
+			problems[#problems + 1] = "M.run lost " .. call
 		end
 	end
 	assert(#problems == 0, table.concat(problems, "; "))

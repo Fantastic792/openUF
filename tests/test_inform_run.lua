@@ -166,4 +166,22 @@ return {
 			assert_eq(n, 2, "the address is read again after the reload")
 		end
 	},
+	{
+		-- Pins the order of the reapply run (audit #14 feature table).
+		name = "run() reapplies the features' kernel state in today's order",
+		fn = function()
+			local r = start({}, nil, {led_active = true, st = {locating = true,
+				led_enabled = true, l2guard = {}, guest_portal = {}}})
+			local want = {"firewall.reconcile", "reapply_runtime_rules", "led.locate_active",
+				"led.locate_stop", "led.set_enabled", "reapply_airtime", "enable_mib_polling",
+				"reconcile_mac_taps", "l2guard.reconcile", "meshvlan_resync", "guest_enforce"}
+			local keep = {}
+			for _, n in ipairs(want) do keep[n] = true end
+			local got = {}
+			for _, c in ipairs(r.calls) do
+				if keep[c.name] then got[#got + 1] = c.name end
+			end
+			assert_eq(table.concat(got, " "), table.concat(want, " "), "boot order")
+		end
+	},
 }
