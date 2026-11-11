@@ -10641,4 +10641,44 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		-- Plan v2.0 Task 9b: netconfig writes the UCI interface lan_name.
+		name = "inform packet: IP Settings pass lan_name to netconfig",
+		fn = function()
+			local nc = inform._netconfig
+			local o = {nc.snapshot, nc.apply_static, nc.apply_dhcp, nc.restore}
+			local ok, err = pcall(with_tick_env, function()
+				local got = {}
+				nc.snapshot = function(...) got.snapshot = {...} return {addrs = {}, dns = {}} end
+				nc.apply_static = function(...) got.static = {...} return true end
+				nc.apply_dhcp = function(...) got.dhcp = {...} return true end
+				nc.restore = function(...) got.restore = {...} return true end
+				inform._time = function() return 1000 end
+				inform._announce.get_mac = function() return {2, 0, 0, 0, 0, 1} end
+				local cfg = {net = {lan_cpueth = "eth0", lan_name = "lan"}}
+				local st = sample_state()
+				inform.handle_response('{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n'
+					.. 'netconf.1.netmask=255.255.255.0\\n"}', st, cfg)
+				assert_eq(got.snapshot[1], "eth0", "snapshot: port")
+				assert_eq(got.snapshot[2], "lan", "snapshot: uci interface")
+				assert_eq(got.static[6], "lan", "apply_static: uci interface")
+				inform.handle_response('{"_type":"setparam","system_cfg":"netconf.1.ip=198.51.100.50\\n'
+					.. 'dhcpc.1.status=enabled\\n"}', st, cfg)
+				assert_eq(got.dhcp[1], "eth0", "apply_dhcp: port")
+				assert_eq(got.dhcp[2], "lan", "apply_dhcp: uci interface")
+				got.static = nil
+				inform._reapply_static_ip(sample_state({ip_mode = "static",
+					static_ip = "198.51.100.50"}), cfg)
+				assert_eq(got.static[6], "lan", "reapply: uci interface")
+				st.ip_rollback = {at = 0, snap = {addrs = {}}}
+				for _ = 1, 3 do
+					with_stderr(function() inform._ip_rollback_check(st, cfg, false) end)
+				end
+				assert_eq(got.restore[1], "eth0", "restore: port")
+				assert_eq(got.restore[3], "lan", "restore: uci interface")
+			end)
+			nc.snapshot, nc.apply_static, nc.apply_dhcp, nc.restore = o[1], o[2], o[3], o[4]
+			if not ok then error(err, 0) end
+		end
+	},
 }

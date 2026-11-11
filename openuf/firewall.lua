@@ -11,7 +11,7 @@
 	Enforcement is nftables, in a dedicated `bridge openuf` table so it never
 	collides with (or gets wiped by) OpenWrt's own fw4-managed tables. Rules
 	are added directly to the live kernel ruleset, not via UCI -- like
-	netconfig.lua's `ip addr`/`ip route` calls, this is ephemeral runtime
+	netconfig.lua's fallback `ip addr`/`ip route` calls, this is ephemeral runtime
 	state that must be explicitly reconciled again after a restart (see
 	M.reconcile, called both on the block/unblock cmd and at inform.lua
 	startup with the persisted list from state.json).

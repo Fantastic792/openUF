@@ -50,9 +50,9 @@ dev.openwrt_boards = {"jiorouter,ax6000-jidu6101"}
 --      naming any one socket would make the device's identity depend on which
 --      hole the installer used. br-lan's MAC is set from board.d (label_mac+1)
 --      and does not move.
---   2. MANAGEMENT ADDRESS. netconfig.lua runs `ip addr`/`udhcpc` straight on
---      this netdev for a controller-pushed IP Settings change, and the address
---      lives on br-lan, not on a port.
+--   2. MANAGEMENT ADDRESS. netconfig.lua writes a controller-pushed IP
+--      Settings change to the UCI interface lan_name (netifd puts it on
+--      br-lan); only without one does it fall back to `ip addr` here.
 --   3. VLAN TRUNK. ensure_vlan_network() builds "<lan_cpueth>.<vid>" for a
 --      tagged SSID -- here "br-lan.20". OpenWrt's stock filogic bridge is not
 --      VLAN-filtering, so a tagged frame crosses it untouched and an 802.1q

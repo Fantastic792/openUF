@@ -414,20 +414,22 @@ end
 -- Commit-confirm for the management address (audit #10). A push that
 -- really changes it (mode, address, netmask or gateway; not the
 -- steady-state repeat of the same values) first saves the old ip_mode and
--- static_* fields plus a kernel snapshot of the port in st.ip_rollback, on
+-- static_* fields plus a snapshot (the UCI interface lan_name's options,
+-- and the port's kernel state) in st.ip_rollback, on
 -- disk before the change, so a reboot inside the window still rolls back.
 -- Any controller reply after that (an HTTP error too: the controller was
 -- reached) confirms it. With no reply IP_ROLLBACK_FAILS times in a row and
 -- IP_ROLLBACK_SECS since the change, the old address is put back. The
 -- cfgversion stays recorded, so the controller does not push the bad
 -- address again by itself; a later full push carries it again and costs
--- one more window. Known limits: snapshot and apply act on lan_cpueth, so
--- on a board whose address sits on the bridge master the old address can
--- confirm the new one (apply_static's own limit); a rollback to a leased
--- address leaves renewal to the DHCP client that was already running.
+-- one more window. With the UCI interface the rollback writes its options
+-- back and netifd reapplies them; without one (netconfig's fallback) it
+-- puts the kernel state back on lan_cpueth, where an address on the bridge
+-- master can confirm the new one. A rollback to a leased address leaves
+-- renewal to the DHCP client.
 M.IP_ROLLBACK_FAILS = 3
 M.IP_ROLLBACK_SECS = 90
-function M._arm_ip_rollback(st, iface, dhcp, ip, netmask, gateway)
+function M._arm_ip_rollback(st, iface, dhcp, ip, netmask, gateway, ifname)
 	local change
 	if dhcp then
 		change = st.ip_mode == "static"
@@ -437,7 +439,7 @@ function M._arm_ip_rollback(st, iface, dhcp, ip, netmask, gateway)
 			or (st.static_gateway or "") ~= (gateway or "")
 	end
 	if not change then return end
-	local snap = M._netconfig.snapshot and M._netconfig.snapshot(iface)
+	local snap = M._netconfig.snapshot and M._netconfig.snapshot(iface, ifname)
 	if type(snap) ~= "table" then return end
 	st.ip_rollback = {mode = st.ip_mode, ip = st.static_ip, mask = st.static_netmask,
 		gw = st.static_gateway, dns = st.static_dns, at = M._time(), snap = snap}
@@ -475,7 +477,7 @@ function M._ip_rollback_check(st, cfg, reached)
 	end
 	st.ip_rollback = nil
 	local iface = cfg and cfg.net and cfg.net.lan_cpueth
-	if not M._netconfig.restore(iface, rb.snap) then
+	if not M._netconfig.restore(iface, rb.snap, cfg and cfg.net and cfg.net.lan_name) then
 		-- Nothing was changed on the port, so the record of it stays too.
 		io.stderr:write("inform: ip rollback record unusable, dropped\n")
 		pcall(M._state.save, st)

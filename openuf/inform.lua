@@ -4817,8 +4817,9 @@ function M.handle_response(json_str, st, cfg)
 
 			if ip and not only then
 				local iface = cfg and cfg.net and cfg.net.lan_cpueth
+				local ifname = cfg and cfg.net and cfg.net.lan_name
 				-- pcall'd: a failed arm must not stop the push it guards.
-				local ok_arm, err_arm = pcall(M._arm_ip_rollback, st, iface, dhcp, ip, netmask, gateway)
+				local ok_arm, err_arm = pcall(M._arm_ip_rollback, st, iface, dhcp, ip, netmask, gateway, ifname)
 				if not ok_arm then
 					io.stderr:write("inform: ip rollback arm: " .. tostring(err_arm) .. "\n")
 				end
@@ -4834,7 +4835,7 @@ function M.handle_response(json_str, st, cfg)
 					-- container's Docker bridge has none -- udhcpc timed out
 					-- and left the interface with no address at all).
 					if st.ip_mode == "static" then
-						M._netconfig.apply_dhcp(iface)
+						M._netconfig.apply_dhcp(iface, ifname)
 						M._populate_net_info(st, cfg)  -- re-read the freshly-leased address
 					end
 					st.ip_mode = "dhcp"
@@ -4848,7 +4849,7 @@ function M.handle_response(json_str, st, cfg)
 					st.ip_mode = "static"
 					st.static_ip, st.static_netmask, st.static_gateway = ip, netmask, gateway
 					st.static_dns = (#dns > 0) and dns or nil
-					if M._netconfig.apply_static(iface, ip, netmask, gateway, dns) then
+					if M._netconfig.apply_static(iface, ip, netmask, gateway, dns, ifname) then
 						st.ip = ip  -- known directly, no need to re-read the interface
 					end
 				end
@@ -5975,6 +5976,11 @@ end
 -- state.json has carried the static_* fields since IP Settings landed, and
 -- until this nothing ever read them back.
 --
+-- Since plan v2.0 Task 9b netconfig writes the UCI interface lan_name when
+-- there is one, which persists by itself: there this finds the options
+-- already set and changes nothing (no reload). The `ip addr` fallback still
+-- needs it.
+--
 -- Only ip_mode == "static" with a recorded address acts. On "dhcp", and when
 -- IP Settings was never pushed, the boot config is already correct and
 -- flushing to re-lease would be the destructive no-op handle_response already
@@ -5984,7 +5990,7 @@ function M._reapply_static_ip(st, cfg)
 	if not st or st.ip_mode ~= "static" or not st.static_ip then return false end
 	local iface = cfg and cfg.net and cfg.net.lan_cpueth
 	return M._netconfig.apply_static(iface, st.static_ip, st.static_netmask,
-		st.static_gateway, st.static_dns) and true or false
+		st.static_gateway, st.static_dns, cfg and cfg.net and cfg.net.lan_name) and true or false
 end
 
 -- The IPv4 address for an inform URL's host: the host itself when it is one,
