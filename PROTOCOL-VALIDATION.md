@@ -1737,6 +1737,7 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 | `wifi_caps` | `0x4` / `0x8` | `supportBandsteering()` / `supportVapBasedBandsteering()` | The device-level `bandsteering.status`/`mode` block (the AP's own Band Steering setting) and its per-WLAN pairs are never emitted; without `0x8` one single-band WLAN switches the device's steering off. Claimed since 2026-09-28. |
 | `wifi_caps` | `0x20` (32) | `supportATFConfig()` | `atf.status`/`atf.mode` (Airtime Fairness) is never emitted. Claimed where mac80211's per-phy `airtime_flags` exists (`airtime.lua`). |
 | `wifi_caps` | `0x100000` | `supportWpaPpsk()` | A WLAN with Private Pre-Shared Keys, or UID IoT, is **skipped** ("PPSK is not supported … will be skipped"). Claimed where the ucode generator writes `vlanid=` and hostapd has VLAN support (`sysinfo.ppsk_supported`). |
+| `wifi_caps` | `0x1000000` | `supportLockAp()` | The site feature LOCK_AP (a client's "Lock to Access Point") is refused with `NOT_ALL_DEVICES_SUPPORT_FEATURE` unless every wireless device claims it (10.6.106, decompiled by fonix232/openUF; an older sweep found no caller). The lock itself goes to every OTHER AP as `macacl.<m>.acl.<k>.type=lock2ap` under policy `deny`, which the MAC Address Filter path enforces; the locked AP gets nothing, and an unlock drops the entries. Claimed unconditionally since 2026-11-12. Not yet seen on the wire. |
 | `radio_caps2` | `0x1` | radio DTO `CVir()` | Every WPA3 WLAN is downgraded to WPA2 -- see the WPA3 section below. Claimed where hostapd has SAE. |
 | `radio_caps2` | `0x2` | radio DTO, FT-with-WPA3 (`ytajcagDggPuTaL()`) | On an SAE WLAN `wpa3_fast_roaming` is forced off, so `aaa.<n>.wpa3.ft.status` is always `disabled`; on a WPA3-only WLAN `fast_roaming_enabled` too, and no 802.11r goes out at all. Claimed alongside `0x1`. |
 | `radio_caps2` | `0x8` | radio DTO, OWE (`NoFWvUa()`) | An Enhanced Open WLAN is **not provisioned** ("WPA3-OWE cannot provision"); with OWE transition on it goes out as plain open. Claimed where `hostapd -vowe` passes and the ucode generator knows `owe_transition`. |
@@ -1745,7 +1746,7 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 | `wifi_caps` | `0x80` (MESH) | — | **No observable effect** (2026-10-03): pushes with and without it were identical. |
 
 `wifi_caps2` is a **second, entirely separate** bitmask from `wifi_caps`. Since 2026-09-28
-openUF claims `wifi_caps` `0xC` (+`0x20`, +`0x100000` where the device-side probe passes),
+openUF claims `wifi_caps` `0xC` (+`0x1000000` since 2026-11-12, +`0x20`, +`0x100000` where the device-side probe passes),
 `wifi_caps2` `0x60` and `radio_caps2` `0x3` (+`0x8`); `debug_caps` in `conf.lua` still
 replaces any mask whole for an experiment. The rows below come from upstream's full sweep of
 the controller's gates.
@@ -1830,8 +1831,8 @@ hostapd generator and the 10.6.106 jar:
   class that breaks casting. Low priority.
 - **No callers in the controller**, so a bit does nothing: `supportMinRateCtrl` (`wifi_caps`
   `0x200`), `supportMultiAclList` (`0x400`), `supportRadiusMacAuth` (`0x1000`),
-  `supportHideChWidth` (`0x10000`), `supportZeroHandoff` (`0x2`), `supportLockAp`
-  (`0x1000000`), `supportsRoamTopologyStats` (`wifi_caps2` `0x2000`).
+  `supportHideChWidth` (`0x10000`), `supportZeroHandoff` (`0x2`),
+  `supportsRoamTopologyStats` (`wifi_caps2` `0x2000`).
 
 The mesh bits (`wifi_caps` `0x1`/`0x800`) stay the subject of REVERSE-ENGINEERING.md's
 mesh investigation and are only ever claimed through `debug_caps`.
@@ -2215,7 +2216,7 @@ them for measured values.
 | `spectrum_scanning` = `false` | Always false: scans are run synchronously inside the cmd handler, so the device is never "currently scanning" when a payload is built |
 | `lldp_table[].is_wired` = `true` | LLDP is inherently a wired-link protocol |
 | `model` / `platform` / `version` / `required_version` / `bootrom_version` | The emulated UniFi identity from `ufmodel/*.lua` — deliberately not the host hardware. This is the point of the project, not an accidental approximation |
-| `fw_caps` = `0x110`, `wifi_caps` = `0x1C`(+`0x20`/`0x100000`/`0x801` by probe), `wifi_caps2` = `0xE2` | Claimed capability bits, each derived from the controller's own bytecode and confirmed live — see [Capability bitmasks](#capability-bitmasks). openUF claims only bits whose features it actually implements |
+| `fw_caps` = `0x110`, `wifi_caps` = `0x100001C`(+`0x20`/`0x100000`/`0x801` by probe), `wifi_caps2` = `0xE2` | Claimed capability bits, each derived from the controller's own bytecode and confirmed live — see [Capability bitmasks](#capability-bitmasks). openUF claims only bits whose features it actually implements |
 | `ucihelper` `wps_device_name` / `ap_setup_locked` | Standards-based rather than Ubiquiti-derived — see the beacon row in the [feature matrix](#feature-matrix) |
 | ~~`usteer.lua`'s `USTEER_DEFAULTS`~~ | ✅ **Resolved upstream 2026-09-10.** Verified against the installed package (usteer 2025.10.04) on an Archer C5. `band_steering_threshold` is a real option — it is in the init script's own list of keys fed to `ubus call usteer set_config`. The named `local` section is read too: the loader does `config_foreach uci_usteer usteer`, which visits every section of type `usteer`, named or anonymous. `network` is read from `uci get usteer.@usteer[-1].network`, the last section of that type — openUF's — so both writes are load-bearing and correctly named. |
 

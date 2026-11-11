@@ -2223,7 +2223,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: wifi_caps claims band steering (0x4), per-VAP pairs (0x8), spectrum scan (0x10), ATF (0x20), PPSK (0x100000)",
+		name = "inform json: wifi_caps claims band steering (0x4), per-VAP pairs (0x8), spectrum scan (0x10), ATF (0x20), PPSK (0x100000), Lock to AP (0x1000000)",
 		fn = function()
 			-- Device.supportBandsteering() is hasWifiCapability(4): without it
 			-- the device-level bandsteering.* block is never emitted.
@@ -2245,12 +2245,13 @@ return {
 			inform._sysinfo._ppsk_supported_cache = o_ppsk
 			-- 0x1 (VWIRE) + 0x800 (MESHV3): the wireless uplink, claimed by
 			-- default on a DSA board (cfg.vlan absent, as here: cfg is nil).
-			assert_eq(d.wifi_caps, 0x1C + 0x801, "wifi_caps is 0x4|0x8|0x10 plus the mesh bits 0x1|0x800")
+			-- 0x1000000: supportLockAp(), the site's "Lock to Access Point" (spec 9c).
+			assert_eq(d.wifi_caps, 0x1C + 0x801 + 0x1000000, "wifi_caps is 0x4|0x8|0x10 plus the mesh bits 0x1|0x800")
 			-- supportATFConfig() is hasWifiCapability(32): the atf.* block.
-			assert_eq(d2.wifi_caps, 0x3C + 0x801, "plus 0x20 where airtime_flags can be switched")
+			assert_eq(d2.wifi_caps, 0x3C + 0x801 + 0x1000000, "plus 0x20 where airtime_flags can be switched")
 			-- supportWpaPpsk() is hasWifiCapability(0x100000): without it a
 			-- WLAN with Private Pre-Shared Keys is skipped entirely.
-			assert_eq(d3.wifi_caps, 0x10003C + 0x801, "plus 0x100000 where hostapd can do per-key VLANs")
+			assert_eq(d3.wifi_caps, 0x10003C + 0x801 + 0x1000000, "plus 0x100000 where hostapd can do per-key VLANs")
 			-- A swconfig board (cfg.vlan present) claims the mesh bits too since
 			-- 2026-10-18: backhaul.tick reads the socket's link from the switch,
 			-- and meshvlan.lua carries the tagged SSIDs over the hop.
@@ -2259,9 +2260,9 @@ return {
 				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
 				ip = "192.168.1.100", hostname = "testap"}
 			local sw = cjson.decode(inform.build_json(st_sw, {vlan = {device = "switch0", ports = {}}}, ufhw))
-			assert_eq(sw.wifi_caps, 0x1C + 0x801, "swconfig: the mesh bits as on DSA")
+			assert_eq(sw.wifi_caps, 0x1C + 0x801 + 0x1000000, "swconfig: the mesh bits as on DSA")
 			inform._sysinfo._ppsk_supported_cache = o_ppsk
-			assert_eq(d4.wifi_caps, 0x10001C + 0x801, "PPSK does not depend on airtime")
+			assert_eq(d4.wifi_caps, 0x10001C + 0x801 + 0x1000000, "PPSK does not depend on airtime")
 		end
 	},
 	{
@@ -2830,7 +2831,7 @@ return {
 			assert_eq(d.fw_caps, 0x101110 - 0x80000000,
 				"shipped fw_caps without an override (0x1000: multi-block WLAN schedule; sign bit: MAC-based VLANs)")
 			assert_eq(d.wifi_caps2, 0x4000F2, "shipped wifi_caps2 without an override")
-			assert_eq(d.wifi_caps, 0x1C + 0x801, "shipped wifi_caps without an override (mesh bits by default)")
+			assert_eq(d.wifi_caps, 0x1C + 0x801 + 0x1000000, "shipped wifi_caps without an override (mesh bits by default)")
 			d = cjson.decode(inform.build_json(st,
 				{config = {debug_caps = {wifi_caps = 0x2, wifi_caps2 = 0x41}}}, ufhw))
 			inform._airtime.supported = o

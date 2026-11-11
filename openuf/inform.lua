@@ -2276,8 +2276,14 @@ function M.build_json(st, cfg, ufhw)
 		-- button only with it, and the device's share is the `spectrum-scan`
 		-- cmd below -- a forced sweep and the survey counters, which this
 		-- hardware does (PROTOCOL-VALIDATION.md § RF scans).
+		-- Bit 0x1000000 is supportLockAp(): the site offers a client's "Lock
+		-- to Access Point" only while every wireless device claims it. The
+		-- lock reaches every OTHER AP as macacl entries of type lock2ap,
+		-- which the MAC filter path enforces (_parse_wifi_system_cfg); the
+		-- AP the client is locked to receives nothing. Claimed everywhere:
+		-- hostapd's MAC ACL is in every build openUF runs on.
 		wifi_caps        = (dbg_caps and tonumber(dbg_caps.wifi_caps))
-			or (0x1C + ((M._airtime and M._airtime.supported()) and 0x20 or 0)
+			or (0x1C + 0x1000000 + ((M._airtime and M._airtime.supported()) and 0x20 or 0)
 				+ ((M._sysinfo.ppsk_supported and M._sysinfo.ppsk_supported()) and 0x100000 or 0)
 				+ (M._backhaul and 0x801 or 0)),
 		-- Bit 0x40 (64): Device.supportAdvertisingDeviceNameInBeacon() in the
