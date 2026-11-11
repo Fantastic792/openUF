@@ -31,6 +31,11 @@ end
 
 local INFORM = slurp("openuf/inform.lua")
 local FORGET = strip_comments(body(INFORM, "_forget_controller"))
+-- The source of mainloop.lua's M._FEATURES table, where the forget hooks live.
+local MAINLOOP = slurp("openuf/mainloop.lua")
+local TABLE_SRC = strip_comments(MAINLOOP:match("\nM%._FEATURES = {.-\n}\n") or "")
+-- What a Forget runs: its own body plus the hooks it drives.
+local TEARDOWN = FORGET .. TABLE_SRC
 
 local function modules()
 	local out = {}
@@ -130,6 +135,21 @@ test("_tick runs no feature step outside the feature table", function()
 	assert(#problems == 0, table.concat(problems, "; "))
 end)
 
+test("_forget_controller tears nothing down outside the feature table", function()
+	local problems = {}
+	if not FORGET:find('M._run_features("forget"', 1, true) then
+		problems[#problems + 1] = "_forget_controller does not run the forget phase"
+	end
+	for _, call in ipairs({"M._meshvlan.reconcile", "M._switchvlan.restore", "M._usteer.set_enabled",
+			"M._ucihelper.forget", "M._l2guard.reconcile", "M._guest_enforce", "M._sysconf.apply_cron",
+			"M._airtime.set_enabled", "M._led.set_enabled", "M._firewall.reconcile", "M._shaper.sync"}) do
+		if FORGET:find(call, 1, true) then
+			problems[#problems + 1] = "_forget_controller calls " .. call .. " itself: move it to a forget hook"
+		end
+	end
+	assert(#problems == 0, table.concat(problems, "; "))
+end)
+
 test("every phase list names exactly the rows with that hook", function()
 	local F, O = FM._FEATURES, FM._FEATURE_ORDER
 	assert(type(F) == "table" and type(O) == "table", "no M._FEATURES / M._FEATURE_ORDER")
@@ -179,7 +199,7 @@ end)
 
 -- How a Forget undoes what a tick/tick_late row keeps alive: a forget hook, or
 -- forget_by, one of:
---   forget = "<text>"  that text is in _forget_controller (explicit teardown)
+--   via    = "<row>"   that row's forget hook undoes it too
 --   state  = {fields}  the step works off these state fields, which the
 --                      reset before _forget_controller empties
 --   vaps   = true      the step reconciles against the live VAPs and the
@@ -197,9 +217,10 @@ test("each ticking row's Forget story still holds", function()
 		end
 		if not how then
 			-- nothing to check
-		elseif how.forget then
-			if not FORGET:find(how.forget, 1, true) then
-				problems[#problems + 1] = name .. ": " .. how.forget .. " is gone from _forget_controller"
+		elseif how.via then
+			local r = FM._FEATURES[how.via]
+			if not (r and r.forget) then
+				problems[#problems + 1] = name .. ": forget_by.via " .. tostring(how.via) .. " is not a row with a forget hook"
 			end
 		elseif how.state then
 			for _, field in ipairs(how.state) do
@@ -210,8 +231,8 @@ test("each ticking row's Forget story still holds", function()
 				end
 			end
 		elseif how.vaps then
-			if not FORGET:find("M._ucihelper.forget", 1, true) then
-				problems[#problems + 1] = name .. ": _forget_controller no longer calls ucihelper.forget"
+			if not (FM._FEATURES.ucihelper and FM._FEATURES.ucihelper.forget) then
+				problems[#problems + 1] = name .. ": no ucihelper row with a forget hook"
 			end
 		elseif type(how.none) ~= "string" then
 			problems[#problems + 1] = name .. ": row says nothing"
@@ -229,7 +250,7 @@ test("a module that runs commands is torn down by Forget or says why not", funct
 			local src = strip_comments(f:read("*a"))
 			f:close()
 			local runs = src:find("os%.execute") ~= nil
-			local named = FORGET:find("M%._" .. name .. "[^%w_]") ~= nil
+			local named = TEARDOWN:find("M%._" .. name .. "[^%w_]") ~= nil
 			if runs and not named and not FORGET_EXEMPT[name] then
 				problems[#problems + 1] = name .. ".lua runs commands, _forget_controller never names M._"
 					.. name .. ", and FORGET_EXEMPT gives no reason"
@@ -264,6 +285,32 @@ test("_tick runs its steps in today's order", function()
 	M.build_packet = function() error("stop here") end
 	quiet(function() M._tick({}, {}, nil, {}) end)
 	assert_eq(table.concat(seen, " "), table.concat(STEPS, " "), "tick order")
+end)
+
+test("_forget_controller tears down in today's order", function()
+	local M = fresh_inform()
+	local seen = {}
+	local function rec(name) return function() seen[#seen + 1] = name end end
+	M._push_replay_arm = rec("replay_arm")
+	M._meshvlan = {reconcile = rec("meshvlan")}
+	M._switchvlan = {restore = rec("switchvlan")}
+	M._usteer = {set_enabled = rec("usteer")}
+	M._ucihelper = {forget = rec("ucihelper")}
+	M._deny_reloaded = rec("deny_reloaded")
+	M._l2guard = {reconcile = rec("l2guard")}
+	M._guestportal = {}
+	M._guest_enforce = rec("guest")
+	M._sysconf = {apply_cron = rec("cron")}
+	M._airtime = {set_enabled = rec("airtime")}
+	M._led = {set_enabled = rec("led")}
+	M._firewall = {reconcile = rec("firewall")}
+	M._shaper = {sync = rec("shaper")}
+	M._uplinkmon = {}
+	quiet(function()
+		M._forget_controller({meshvlan = {bridge = "br-lan", vids = {20}}, led_enabled = false}, {})
+	end)
+	assert_eq(table.concat(seen, " "), "replay_arm meshvlan switchvlan usteer ucihelper deny_reloaded"
+		.. " l2guard guest cron airtime led firewall shaper", "forget order")
 end)
 
 return tests

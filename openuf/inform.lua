@@ -5771,35 +5771,8 @@ function M._forget_controller(prev, cfg)
 	-- A replay copy holds the old site's WLANs: never put it back.
 	if M._push_replay_arm then M._push_replay_arm(nil) end
 	M._controller_interval = nil
-	-- Before anything else moves: the mesh VLAN ports, then their guard.
-	if M._meshvlan and type(prev.meshvlan) == "table" then
-		pcall(M._meshvlan.reconcile, nil, prev.meshvlan)
-	end
-	if M._switchvlan then pcall(M._switchvlan.restore, prev, cfg) end
-	if M._usteer then pcall(M._usteer.set_enabled, false, cfg, false) end
-	if M._ucihelper and M._ucihelper.forget then
-		pcall(M._ucihelper.forget)
-		M._deny_reloaded()   -- forget ran `wifi reload`
-	end
-	if M._l2guard then pcall(M._l2guard.reconcile, nil, {}) end
-	if M._guestportal then pcall(M._guest_enforce, {}) end
-	if M._sysconf then pcall(M._sysconf.apply_cron, {enabled = false, jobs = {}}) end
-	-- A controller that switched Airtime Fairness off no longer does.
-	if M._airtime then pcall(M._airtime.set_enabled, true) end
-	if prev.led_enabled == false and M._led then
-		pcall(M._led.set_enabled, cfg and cfg.led, true)
-	end
-	-- The controller's client blocks and rate limits go with it: an empty
-	-- blocklist and no openUF tc on any netdev, not a reboot's worth of
-	-- dropped clients and caps nobody can see in a UI any more.
-	if M._firewall then
-		local ok, err = pcall(M._firewall.reconcile, {})
-		if not ok then io.stderr:write("inform: forget: blocklist: " .. tostring(err) .. "\n") end
-	end
-	if M._shaper then
-		local ok, err = pcall(M._shaper.sync, {})
-		if not ok then io.stderr:write("inform: forget: rate limits: " .. tostring(err) .. "\n") end
-	end
+	-- Each feature's teardown, in the forget order (mainloop.lua M._FEATURES).
+	M._run_features("forget", prev, cfg)
 	M._shape_obs = nil
 	-- What held SSIDs down for the controller's features starts over: the
 	-- reset cleared the persisted lists (sched_vaps_down, uplinkmon_down,

@@ -844,6 +844,7 @@ M._logged_pending = false
 -- added in one place (audit 2026-11-10, finding 14). Phases:
 --   tick(st, cfg, ctx)       each heartbeat, before build_json
 --   tick_late(st, cfg, ctx)  each heartbeat, after build_json (its stations)
+--   forget(prev, cfg)        _forget_controller's teardown (prev never nil)
 -- A ticking row with no forget hook says in forget_by how a Forget undoes what
 -- it keeps alive (tests/test_feature_lists.lua checks each story).
 -- Hooks keep their own pcall and log line, or lack of one: the driver adds
@@ -871,7 +872,7 @@ M._FEATURES = {
 	vap_watch = {tick = function() pcall(M._vap_watch, M._time()) end,
 		forget_by = {none = "only opens the resync gates"}},
 	l2guard = {tick = function(st) pcall(M._l2guard_resync, st) end,
-		forget_by = {forget = "M._l2guard.reconcile"}},
+		forget = function() if M._l2guard then pcall(M._l2guard.reconcile, nil, {}) end end},
 	bcfilt = {tick = function() pcall(M._bcfilt_resync) end,
 		forget_by = {vaps = true}},
 	-- Not verified on a mesh child: what a Forget does to its own uplink.
@@ -880,17 +881,29 @@ M._FEATURES = {
 	uplinkmon = {tick = function(st, cfg) pcall(M._uplinkmon_resync, st, cfg) end,
 		forget_by = {state = {"uplinkmon_enabled", "uplinkmon_host", "uplinkmon_down"}}},
 	meshvlan = {tick = function(st, cfg) pcall(M._meshvlan_resync, st, cfg) end,
-		forget_by = {forget = "M._meshvlan.reconcile"}},
+		-- Before anything else moves: the mesh VLAN ports, then their guard.
+		forget = function(prev)
+			if M._meshvlan and type(prev.meshvlan) == "table" then
+				pcall(M._meshvlan.reconcile, nil, prev.meshvlan)
+			end
+		end},
 	guest = {tick = function(st) pcall(M._guest_resync, st) end,
-		forget_by = {forget = "M._guest_enforce"}},
+		forget = function() if M._guestportal then pcall(M._guest_enforce, {}) end end},
 	guest_wg = {tick = function(st) pcall(M._guest_wg_resync, st) end,
-		forget_by = {forget = "M._guest_enforce"}},
+		forget_by = {via = "guest"}},
 	hairpin = {tick = function() pcall(M._hairpin_resync) end,
 		forget_by = {vaps = true}},
 	usteer = {tick = function() pcall(M._usteer_filter_resync) end,
-		forget_by = {forget = "M._usteer.set_enabled"}},
+		forget = function(prev, cfg) if M._usteer then pcall(M._usteer.set_enabled, false, cfg, false) end end},
 	block = {tick = function(st) pcall(M._block_resync, st) end,
-		forget_by = {forget = "M._firewall.reconcile"}},
+		-- The controller's client blocks go with it: an empty blocklist, not
+		-- a reboot's worth of dropped clients nobody can see in a UI any more.
+		forget = function()
+			if M._firewall then
+				local ok, err = pcall(M._firewall.reconcile, {})
+				if not ok then io.stderr:write("inform: forget: blocklist: " .. tostring(err) .. "\n") end
+			end
+		end},
 	sched = {tick = function(st) pcall(M._sched_resync, st) end,
 		forget_by = {state = {"sched_vaps_down"}}},
 	rrbguard = {tick = function() pcall(M._rrbguard_tick) end,
@@ -904,7 +917,31 @@ M._FEATURES = {
 			local ok_sh, err_sh = pcall(M._shaper_resync, st)
 			if not ok_sh then io.stderr:write("inform: shaper: " .. tostring(err_sh) .. "\n") end
 		end,
-		forget_by = {forget = "M._shaper.sync"}},
+		-- Its rate limits go too: no openUF tc on any netdev.
+		forget = function()
+			if M._shaper then
+				local ok, err = pcall(M._shaper.sync, {})
+				if not ok then io.stderr:write("inform: forget: rate limits: " .. tostring(err) .. "\n") end
+			end
+		end},
+	-- Forget-only rows.
+	switchvlan = {forget = function(prev, cfg) if M._switchvlan then pcall(M._switchvlan.restore, prev, cfg) end end},
+	ucihelper = {forget = function()
+		if M._ucihelper and M._ucihelper.forget then
+			pcall(M._ucihelper.forget)
+			M._deny_reloaded()   -- forget ran `wifi reload`
+		end
+	end},
+	cron = {forget = function()
+		if M._sysconf then pcall(M._sysconf.apply_cron, {enabled = false, jobs = {}}) end
+	end},
+	-- A controller that switched Airtime Fairness off no longer does.
+	airtime = {forget = function() if M._airtime then pcall(M._airtime.set_enabled, true) end end},
+	led = {forget = function(prev, cfg)
+		if prev.led_enabled == false and M._led then
+			pcall(M._led.set_enabled, cfg and cfg.led, true)
+		end
+	end},
 }
 -- Each phase's own order: the phases do not share one (a Forget moves the mesh
 -- VLAN ports before the l2guard, a tick the other way round).
@@ -913,6 +950,8 @@ M._FEATURE_ORDER = {
 		"bcfilt", "backhaul", "uplinkmon", "meshvlan", "guest", "guest_wg", "hairpin",
 		"usteer", "block", "sched", "rrbguard", "net_info"},
 	tick_late = {"shaper"},
+	forget = {"meshvlan", "switchvlan", "usteer", "ucihelper", "l2guard", "guest", "cron",
+		"airtime", "led", "block", "shaper"},
 }
 
 -- Runs one phase's hooks in that phase's order.
