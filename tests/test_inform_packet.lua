@@ -1932,6 +1932,14 @@ return {
 			local rad3 = r("aaa.1.radius.dad.client.1.cidr=bogus\n"
 				.. "aaa.1.radius.dad.client.2.cidr=192.0.2.0/24\n")
 			assert_eq(table.concat(rad3.das.relay, ","), "192.0.2.0/24", "the good one stays")
+			-- hostapd's own DAS port on the relay's: the two would fight for
+			-- the socket (and a BSS whose DAS socket fails stays down), so the
+			-- WLAN keeps the direct client.
+			local same, logged2 = r(two, (base:gsub("das%.port=3801", "das.port=3799")))
+			assert_nil(same.das.relay, "das.port on the default relay port: no relay")
+			assert_contains(logged2, "3799", "and said")
+			assert_nil(r(two, "aaa.radius.dad.port=3801\n" .. base).das.relay,
+				"das.port on a configured relay port: no relay")
 			-- The plan the listener serves.
 			local plan = inform._das_plan(vt, raw)
 			assert_eq(plan.port, 3799, "the dispatcher's default port")
@@ -9772,6 +9780,14 @@ return {
 				assert_eq(table.concat(log, ","), "bind *:3799,close,bind *:3799,close", "retried, closed each time")
 				local _, n = logged:gsub("cannot listen", "")
 				assert_eq(n, 1, "said once")
+				assert_contains(logged, "CoA", "the effect is named")
+				-- The plan goes and comes back: a still-taken port is said again.
+				logged = with_stderr(function()
+					inform._das_sync({})
+					inform._das_sync(plan(3799))
+				end)
+				_, n = logged:gsub("cannot listen", "")
+				assert_eq(n, 1, "said again after the plan came back")
 			end)
 			inform._socket = real_socket
 			if inform._das_sock then inform._das_sock = nil end

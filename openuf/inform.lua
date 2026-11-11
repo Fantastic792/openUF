@@ -3102,7 +3102,7 @@ end
 
 function M._parse_wifi_system_cfg(sys_raw)
 	local aaa, wireless, radio, stamgr, macacl = {}, {}, {}, {}, {}
-	local dad_on = false
+	local dad_on, dad_port = false, 3799
 	local global_countrycode = nil
 	local qos_vap = {}
 	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
@@ -3122,6 +3122,7 @@ function M._parse_wifi_system_cfg(sys_raw)
 		-- The device-wide DAS dispatcher (das.lua): on, the dad.* clients go
 		-- through openUF's relay instead of straight to hostapd.
 		if line == "aaa.radius.dad.status=enabled" then dad_on = true end
+		dad_port = tonumber(line:match("^aaa%.radius%.dad%.port=(%d+)$")) or dad_port
 		local section, idx, key, v = line:match("^(aaa)%.(%d+)%.([^=]+)=(.*)$")
 		if not section then section, idx, key, v = line:match("^(wireless)%.(%d+)%.([^=]+)=(.*)$") end
 		if not section then section, idx, key, v = line:match("^(radio)%.(%d+)%.([^=]+)=(.*)$") end
@@ -3474,7 +3475,17 @@ function M._parse_wifi_system_cfg(sys_raw)
 		local mac_auth = _wire_bool(a["radius.macacl.status"]) or false
 		local radius, radius_err
 		if is_enterprise or mac_auth then radius, radius_err = _wire_radius(a) end
-		if radius and radius.das and dad_on then radius.das.relay = _wire_dad_clients(a) end
+		if radius and radius.das and dad_on then
+			-- hostapd binds its DAS port on every address too: on the relay's
+			-- port one of the two fails, and a BSS whose DAS socket fails
+			-- stays down. Keep the direct client there.
+			if tonumber(radius.das.port) == dad_port then
+				io.stderr:write(("inform: RADIUS DAS: WLAN %q keeps its direct client -- its DAS port %d is the relay's\n")
+					:format(w.ssid or "?", dad_port))
+			else
+				radius.das.relay = _wire_dad_clients(a)
+			end
+		end
 		if is_enterprise and not radius and w.ssid then
 			io.stderr:write(("inform: skipping WLAN %q -- WPA-Enterprise (%s): %s\n")
 				:format(w.ssid, (akm:gsub("^%s+", "")), radius_err))

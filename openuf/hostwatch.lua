@@ -836,6 +836,7 @@ function M._das_sync(st)
 		M._das_sock:close()
 		M._das_sock, M._das_port = nil, nil
 	end
+	if not port then M._das_failed = nil end
 	if not port or M._das_sock then return end
 	local socket = M._socket()
 	local u = (socket.udp4 or socket.udp)()
@@ -843,8 +844,8 @@ function M._das_sync(st)
 	if not ok then
 		u:close()
 		if M._das_failed ~= port then
-			io.stderr:write(("inform: RADIUS DAS: cannot listen on udp/%d (%s)\n")
-				:format(port, tostring(err)))
+			io.stderr:write(("inform: RADIUS DAS: cannot listen on udp/%d (%s) -- CoA/Disconnect for %d WLAN(s) is off until it can\n")
+				:format(port, tostring(err), #plan.wlans))
 		end
 		M._das_failed = port
 		return

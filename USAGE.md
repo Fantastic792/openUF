@@ -1376,7 +1376,11 @@ neither limited to a WPA-Enterprise WLAN.
   No firewall rule is opened: on OpenWrt's default zones the request must reach
   the AP from a zone that accepts input (normally `lan`). A port it cannot bind
   is logged once (`RADIUS DAS: cannot listen on udp/3799`) and retried every
-  loop. Relay code adapted from fonix232/openUF (MIT).
+  loop. **Upgrading changes where CoA goes:** with the relay on, hostapd
+  accepts only `127.0.0.1`, so a RADIUS server still sending to the WLAN's
+  3800 + n port gets no answer — point it at udp/3799, as for a UniFi AP. A
+  WLAN whose own DAS port is the relay's port keeps the direct client (logged).
+  Relay code adapted from fonix232/openUF (MIT).
 - **A RADIUS-assigned VLAN is not honoured on a MAC-authenticated WLAN.** The
   profile's `dynamic_vlan` is written only on an Enterprise WLAN. On any other,
   `2` (required) would make hostapd reject every client of a WLAN that worked a
