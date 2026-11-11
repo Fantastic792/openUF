@@ -3427,6 +3427,12 @@ return {
 				"aaa.1.hs20.nai_realm.1.eap_method=21",
 				"aaa.1.hs20.nai_realm.2.name=a.example.com;b.example.net",
 				"aaa.1.hs20.nai_realm.2.eap_method=13",
+				"aaa.1.hs20.nai_realm.3.name=r1;r2;r3;r4;r5;r6;r7;r8;r9;r10;r11",
+				"aaa.1.hs20.nai_realm.3.eap_method=21",
+				"aaa.1.hs20.nai_realm.4.name=a.example;;b.example",
+				"aaa.1.hs20.nai_realm.4.eap_method=21",
+				"aaa.1.hs20.nai_realm.5.name=a.example;",
+				"aaa.1.hs20.nai_realm.5.eap_method=21",
 				"aaa.1.hs20.friendly_name.1.text=openUF Operator",
 				"aaa.1.hs20.friendly_name.2.language=12",
 				"aaa.1.hs20.friendly_name.2.text=Bad Lang",
@@ -3442,7 +3448,9 @@ return {
 			assert_eq(hs.venue_name[1].lang, "eng", "missing language -> eng")
 			assert_eq(hs.venue_name[1].name, "Caf\195\169 openUF", "UTF-8 name kept")
 			assert_eq(hs.venue_name[2].lang, "fra", "a good language kept")
-			assert_eq(#hs.nai_realm, 1, "the realm with a comma dropped")
+			assert_eq(#hs.nai_realm, 1, "the realms with a comma, more than "
+				.. "hostapd's 10 or an empty part dropped (each fails hostapd's "
+				.. "whole config)")
 			assert_eq(hs.nai_realm[1].name, "a.example.com;b.example.net",
 				"two realms in one entry, ;-separated, kept")
 			assert_eq(#hs.friendly_name, 1, "the bad-language operator name dropped")

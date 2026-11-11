@@ -2924,6 +2924,14 @@ local function _wire_indexed(idx, prefix, leaf, build)
 	return #out > 0 and out or nil
 end
 
+-- A venue or operator name's language: two or three letters, "eng" when the
+-- controller leaves it out (as fonix232/openUF does). Anything else would
+-- shift hostapd's <lang>:<text> split.
+local function _wire_hs20_lang(v)
+	if v == nil or v == "" then return "eng" end
+	return type(v) == "string" and v:match("^%a%a%a?$") and v or nil
+end
+
 -- aaa.<n>.hs20.* -- Hotspot 2.0 / Passpoint.
 --
 -- Reachable only because openUF claims fw_caps 0x800000 and fw2_caps 0x80000
@@ -2954,14 +2962,6 @@ end
 --     file from disk, and the controller transfers it by another channel.
 --
 -- Returns a table, or nil when Hotspot 2.0 is off for this WLAN.
--- A venue or operator name's language: two or three letters, "eng" when the
--- controller leaves it out (as fonix232/openUF does). Anything else would
--- shift hostapd's <lang>:<text> split.
-local function _wire_hs20_lang(v)
-	if v == nil or v == "" then return "eng" end
-	return type(v) == "string" and v:match("^%a%a%a?$") and v or nil
-end
-
 local function _wire_hs20(a)
 	if not _wire_bool(a["hs20.status"]) then return nil end
 
@@ -3008,8 +3008,14 @@ local function _wire_hs20(a)
 		if a[p .. "status"] and not _wire_bool(a[p .. "status"]) then return nil end
 		-- RFC 7542 realm characters, ";" between the realms of one entry: a
 		-- "," would end hostapd's realm field and turn the rest into EAP methods.
+		-- hostapd also fails its whole config (every BSS on the radio) on an
+		-- empty realm or more than MAX_NAI_REALMS (10) in one entry.
 		local name = _wire_text(a[p .. "name"])
-		if name and not name:match("^[%w%.%-;]+$") then name = nil end
+		if name and (not name:match("^[%w%.%-;]+$") or name:find("^;")
+				or name:find(";;", 1, true) or name:find(";$")
+				or select(2, name:gsub(";", "")) >= 10) then
+			name = nil
+		end
 		local eap  = _wire_range(a[p .. "eap_method"], 1, 255)
 		if not (name and eap) then return nil end
 		-- The auth parameters are a THIRD level down, under

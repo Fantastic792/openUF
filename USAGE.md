@@ -1414,7 +1414,7 @@ the WPA-Enterprise section above applies first.
   the rest be read as further options), as is a language code that is not two
   or three letters (a missing one becomes `eng`), an NAI realm name with
   anything but letters, digits, `.`, `-` and `;` (a `,` would end hostapd's
-  realm field), a roaming-consortium OI that is not 3–15 hex bytes, an MCC that
+  realm field; at most 10 `;`-separated realms, none empty), a roaming-consortium OI that is not 3–15 hex bytes, an MCC that
   is not three digits, a connection-capability status that is not
   open/closed/unknown, and an incomplete WAN-metrics block (it is all or
   nothing). A disabled NAI realm, and one with no EAP method, are left out.
