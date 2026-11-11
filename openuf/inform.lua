@@ -5000,6 +5000,10 @@ function M.handle_response(json_str, st, cfg)
 					-- that the next full push re-applies -- and it cannot
 					-- flap, since restore() spends the ledger. Reachable only
 					-- inside `type(sys_raw) == "string"`, never on a noop.
+					-- A pass that changed the switch arms its commit-confirm (mainloop).
+					local function apply_sw(...)
+						if M._switchvlan.apply(...) then M._arm_swvlan_rollback(st, M._time()) end
+					end
 					local had_applied = st.swvlan_backup ~= nil
 						or st.dsa_brlan_ports ~= nil
 					if (sw and not sw.enabled) or (sw == nil and had_applied) then
@@ -5031,13 +5035,13 @@ function M.handle_response(json_str, st, cfg)
 						-- br-lan holding the port ORDER openUF had left it in.
 						if (cfg and cfg.vlan and cfg.vlan.ports)
 							and #wireless_vlans > 0 then
-							M._switchvlan.apply(sw, cfg, st, wireless_vlans,
+							apply_sw(sw, cfg, st, wireless_vlans,
 								uplink_phys, uplink_ifname)
 						else
 							M._switchvlan.restore(st, cfg)
 						end
 					else
-						M._switchvlan.apply(sw, cfg, st, wireless_vlans,
+						apply_sw(sw, cfg, st, wireless_vlans,
 							uplink_phys, uplink_ifname)
 					end
 					-- Either branch may have moved a socket into or out of a

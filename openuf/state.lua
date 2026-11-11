@@ -135,6 +135,9 @@ local TYPED = {
 	-- back and the board keeps openUF's VLAN config forever.
 	swvlan_backup             = "table",
 	dsa_brlan_ports           = "table",
+	-- Commit-confirm for a switch VLAN push ({at, fails}), until a controller
+	-- reply confirms it (mainloop.lua _swvlan_rollback).
+	swvlan_rollback           = "table",
 	-- The controller's ebtables.* intent ({bpdu, tagdrop, ifnames}), so the
 	-- nft rules l2guard builds from it come back after a reboot like the
 	-- blocklist does.

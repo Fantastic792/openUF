@@ -265,6 +265,7 @@ local test_files = {
 	"tests/test_inform_packet.lua",
 	"tests/test_inform_run.lua",
 	"tests/test_push_replay.lua",
+	"tests/test_swvlan_rollback.lua",
 	"tests/test_sysinfo.lua",
 	"tests/test_lldp.lua",
 	"tests/test_syswrapper.lua",

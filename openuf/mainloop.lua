@@ -493,6 +493,53 @@ function M._ip_rollback_check(st, cfg, reached)
 	pcall(M._write_status, st, {})
 end
 
+-- Commit-confirm for a switch VLAN push (audit #10 option B), the same
+-- window as the management address: a switch pass that changed something
+-- arms st.swvlan_rollback (on disk), any controller reply confirms it, and
+-- IP_ROLLBACK_FAILS misses plus IP_ROLLBACK_SECS put the stock port config
+-- back with switchvlan.restore (the reversibility ledger), once. The
+-- cfgversion stays, so the controller does not push the same VLANs again by
+-- itself. Not armed without a ledger to restore from: a swconfig board with
+-- no port map, where switchvlan refuses, changes nothing and has none.
+function M._arm_swvlan_rollback(st, now)
+	if st.swvlan_backup == nil and st.dsa_brlan_ports == nil then return end
+	st.swvlan_rollback = {at = now, fails = 0}
+	M._state.save(st)
+end
+
+function M._swvlan_rollback_boot(st)
+	local rb = st.swvlan_rollback
+	if type(rb) == "table" then rb.fails, rb.at = 0, M._time() end
+end
+
+function M._swvlan_rollback_check(st, cfg, reached, now)
+	local rb = st.swvlan_rollback
+	if rb == nil then return nil end
+	if type(rb) ~= "table" or reached then
+		st.swvlan_rollback = nil
+		pcall(M._state.save, st)
+		if reached then
+			io.stderr:write("inform: switch VLAN change confirmed by the controller\n")
+			return "confirmed"
+		end
+		return nil
+	end
+	rb.fails = (tonumber(rb.fails) or 0) + 1
+	local since = now - (tonumber(rb.at) or 0)
+	if rb.fails < M.IP_ROLLBACK_FAILS or (since >= 0 and since < M.IP_ROLLBACK_SECS) then
+		return nil
+	end
+	st.swvlan_rollback = nil
+	local ok, err = pcall(M._switchvlan.restore, st, cfg)
+	io.stderr:write("inform: controller not reached after a switch VLAN change; "
+		.. (ok and "stock port VLANs put back" or ("restore failed: " .. tostring(err)))
+		.. " -- check the port VLANs in the controller\n")
+	M._note_push(st, {"swvlan_rollback"}, false, true)
+	pcall(M._state.save, st)
+	pcall(M._write_status, st, {})
+	return "rolled_back"
+end
+
 -- Replay of a partly failed config push (audit #4 option B). A push with
 -- failed stages keeps its system_cfg here, in this module's memory only:
 -- it holds the PSKs, so never in st or on flash, and a restart drops it
@@ -876,10 +923,14 @@ function M._tick(st, cfg, ufhw, ctx)
 	end
 
 	local body, err = M.http_post(st.inform_url, pkt)
+	local reached = body ~= nil or (type(err) == "string" and err:match("^HTTP %d") ~= nil)
 	if st.ip_rollback ~= nil then
-		local reached = body ~= nil or (type(err) == "string" and err:match("^HTTP %d") ~= nil)
 		local ok_rb, err_rb = pcall(M._ip_rollback_check, st, cfg, reached)
 		if not ok_rb then io.stderr:write("inform: ip rollback: " .. tostring(err_rb) .. "\n") end
+	end
+	if st.swvlan_rollback ~= nil then
+		local ok_sv, err_sv = pcall(M._swvlan_rollback_check, st, cfg, reached, M._time())
+		if not ok_sv then io.stderr:write("inform: switch VLAN rollback: " .. tostring(err_sv) .. "\n") end
 	end
 	if not body then
 		if dump_tx then M._debug_append(cfg, "ERR", tostring(err)) end
@@ -1003,6 +1054,7 @@ function M.run(cfg, ufhw)
 	-- interface, so the very first inform reports where the device actually
 	-- is. pcall'd: a malformed record must not stop the daemon.
 	pcall(M._ip_rollback_boot, st)
+	pcall(M._swvlan_rollback_boot, st)
 	local ok_ip, err_ip = pcall(M._reapply_static_ip, st, cfg)
 	if not ok_ip then
 		io.stderr:write("inform: could not reapply static IP: " .. tostring(err_ip) .. "\n")
