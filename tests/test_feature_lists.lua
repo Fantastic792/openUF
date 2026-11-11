@@ -352,6 +352,7 @@ test("_forget_controller tears down in today's order", function()
 	M._guestportal = {}
 	M._guest_enforce = rec("guest")
 	M._sysconf = {apply_cron = rec("cron")}
+	M._snmp = {restore_if_owned = rec("snmp")}
 	M._airtime = {set_enabled = rec("airtime")}
 	M._led = {set_enabled = rec("led")}
 	M._firewall = {reconcile = rec("firewall")}
@@ -361,7 +362,7 @@ test("_forget_controller tears down in today's order", function()
 		M._forget_controller({meshvlan = {bridge = "br-lan", vids = {20}}, led_enabled = false}, {})
 	end)
 	assert_eq(table.concat(seen, " "), "replay_arm meshvlan switchvlan usteer ucihelper deny_reloaded"
-		.. " l2guard guest cron airtime led firewall shaper", "forget order")
+		.. " l2guard guest cron snmp airtime led firewall shaper", "forget order")
 end)
 
 return tests

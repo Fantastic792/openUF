@@ -63,6 +63,7 @@ local rrbguard  = _require_sibling("rrbguard")
 local uplinkmon = _require_sibling("uplinkmon")
 local guestportal = _require_sibling("guestportal")
 local das       = _require_sibling("das")
+local snmp      = _require_sibling("snmp")
 local hangwatch = _require_sibling("hangwatch")
 
 local M = {}
@@ -107,6 +108,7 @@ M._stun      = stun
 M._rrbguard  = rrbguard
 M._guestportal = guestportal
 M._das       = das
+M._snmp      = snmp
 M._hangwatch = hangwatch
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
@@ -2144,6 +2146,12 @@ function M.build_json(st, cfg, ufhw)
 	-- fw2_caps 0x80000 are the same probe, and sysinfo caches it for the
 	-- process, so this is only about not asking the same question twice).
 	local hs20_ok = M._sysinfo.hs20_supported and M._sysinfo.hs20_supported()
+	-- fw_caps 0x4000 (supportsSNMPv3): only the ssl snmpd can do v3 (snmp.lua).
+	local snmp_v3 = false
+	if M._snmp and M._snmp.v3_capable then
+		local ok, v = pcall(M._snmp.v3_capable)
+		snmp_v3 = ok and v == true
+	end
 
 	local payload = {
 		_type            = "state",
@@ -2243,11 +2251,15 @@ function M.build_json(st, cfg, ufhw)
 		-- interworking options AND the binary was built with
 		-- CONFIG_HS20), because the alternative to a dropped WLAN is a
 		-- WLAN that advertises Passpoint and answers nothing.
+		-- Bit 0x4000 (16384): supportsSNMPv3(). The controller sends the
+		-- snmp.version=3 user only to a device claiming it; claimed only with
+		-- the ssl snmpd build, the one with AES privacy (snmp.lua).
 		-- openUF claims the switch and schedule bits (0x1110), DAS (0x100000),
-		-- MAC-based VLANs, and Hotspot 2.0 (0x800000) where the probe says
-		-- hostapd can answer ANQP. A debug_caps override is taken as given.
+		-- MAC-based VLANs, Hotspot 2.0 (0x800000) where the probe says
+		-- hostapd can answer ANQP, and SNMPv3 (0x4000) with snmpd-ssl. A
+		-- debug_caps override is taken as given.
 		fw_caps          = (dbg_caps and tonumber(dbg_caps.fw_caps)) or (0x101110 - 0x80000000
-			+ (hs20_ok and 0x800000 or 0)),
+			+ (hs20_ok and 0x800000 or 0) + (snmp_v3 and 0x4000 or 0)),
 		-- wifi_caps, the first WiFi bitmask. Bit 0x4 is
 		-- Device.supportBandsteering(): without it the controller never emits
 		-- the device-level bandsteering.* block (the AP's own Band Steering
@@ -4518,6 +4530,14 @@ local RECOGNIZED_SYSTEM_CFG = {
 	"^cron%.status$",
 	"^cron%.%d+%.status$",
 	"^cron%.%d+%.job%.%d+%.",
+	-- SNMP Monitoring (snmp.lua).
+	"^snmp%.status$",
+	"^snmp%.version$",
+	"^snmp%.community$",
+	"^snmp%.location$",
+	"^snmp%.contact$",
+	"^snmp%.user%.1%.name$",
+	"^snmp%.user%.1%.password$",
 	-- The ebtables hardening block (l2guard.lua). ebtables.add_vlan.status
 	-- is not read and stays in the ledger.
 	"^ebtables%.status$",
@@ -5148,6 +5168,17 @@ function M.handle_response(json_str, st, cfg)
 					end
 				end)
 				if not ok_sc then stage_failed("sysconf", err_sc) end
+			end
+
+			-- SNMP Monitoring onto net-snmp (snmp.lua). Off is the block missing
+			-- from a full system_cfg -- one carrying ebtables.status -- so a
+			-- partial push never turns it off. The ledger goes to state.json.
+			if M._snmp and want("snmp") and type(sys_raw) == "string" then
+				local ok_sn, err_sn = pcall(function()
+					local full = sys_raw:find("ebtables.status=", 1, true) ~= nil
+					M._snmp.apply(M._snmp.parse(sys_raw), st, full)
+				end)
+				if not ok_sn then stage_failed("snmp", err_sn) end
 			end
 
 			-- Airtime Fairness (airtime.lua). Kept in state.json because the

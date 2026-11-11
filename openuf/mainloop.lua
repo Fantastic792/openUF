@@ -1033,6 +1033,8 @@ M._FEATURES = {
 	cron = {forget = function()
 		if M._sysconf then pcall(M._sysconf.apply_cron, {enabled = false, jobs = {}}) end
 	end},
+	-- The device's own snmpd back, when the controller's SNMP setting took it over.
+	snmp = {forget = function(prev) if M._snmp then pcall(M._snmp.restore_if_owned, prev) end end},
 	-- A controller that switched Airtime Fairness off no longer does.
 	airtime = {boot = function(st) M._reapply_airtime(st) end,
 		forget = function() if M._airtime then pcall(M._airtime.set_enabled, true) end end},
@@ -1065,7 +1067,7 @@ M._FEATURE_ORDER = {
 		"usteer", "block", "sched", "rrbguard", "net_info"},
 	tick_late = {"shaper"},
 	forget = {"meshvlan", "switchvlan", "usteer", "ucihelper", "l2guard", "guest", "cron",
-		"airtime", "led", "block", "shaper"},
+		"snmp", "airtime", "led", "block", "shaper"},
 	boot = {"block", "bcfilt", "locate", "led", "airtime", "switchvlan", "l2guard",
 		"meshvlan", "guest"},
 }

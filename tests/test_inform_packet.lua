@@ -27,6 +27,9 @@ inform._l2guard = {reconcile = function() return 0 end,
 	parse = function() return nil end, spec_from = function() return {} end}
 inform._sysconf = {parse = function() return nil end, apply = function() return {} end,
 	apply_cron = function() return false end}
+-- And snmpd (/etc/config/snmpd); the SNMP tests stub their own.
+inform._snmp = {parse = function() return nil end, apply = function() return false end,
+	v3_capable = function() return false end, restore_if_owned = function() return false end}
 -- And the mesh VLAN guard and ports (nft, ip link); the tests that exercise
 -- them install their own.
 inform._meshvlan = {record = function() return nil end, reconcile = function() return true end,
@@ -6881,6 +6884,33 @@ return {
 			end)
 			inform._sysconf = orig
 			assert_nil(got, "no blocks, no apply")
+		end
+	},
+	{
+		name = "inform: a system_cfg with snmp.* goes to snmp.apply, full only when it carries ebtables.status",
+		fn = function()
+			local orig, real = inform._snmp, dofile("openuf/snmp.lua")
+			local calls = {}
+			inform._snmp = {parse = real.parse, v3_capable = function() return false end,
+				apply = function(i, s, full) calls[#calls + 1] = {i = i, st = s, full = full}; return true end}
+			local st = sample_state()
+			local ok, err = pcall(function()
+				with_stderr(function()
+					inform.handle_response('{"_type":"setparam","system_cfg":"snmp.status=enabled\nsnmp.version=1_2c\n'
+						.. 'snmp.community=c0mmunity\nebtables.status=enabled\n"}', st, {net = {lan_cpueth = "eth0"}})
+					inform.handle_response('{"_type":"setparam","system_cfg":"radio.1.channel=6\n"}', st,
+						{net = {lan_cpueth = "eth0"}})
+				end)
+			end)
+			inform._snmp = orig
+			if not ok then error(err, 0) end
+			assert_eq(#calls, 2, "both pushes reach apply")
+			assert_true(calls[1].i.enabled and calls[1].i.v1v2c, "intent parsed")
+			assert_eq(calls[1].i.community, "c0mmunity", "community")
+			assert_true(calls[1].full, "full push")
+			assert_true(calls[1].st == st, "the state table carries the ledger")
+			assert_false(calls[2].i.enabled, "no block = off intent")
+			assert_false(calls[2].full, "but a partial push")
 		end
 	},
 	{

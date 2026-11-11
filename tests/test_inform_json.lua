@@ -1700,6 +1700,22 @@ return {
 		end
 	},
 	{
+		name = "inform json: fw_caps claims SNMPv3 (0x4000) only with the ssl snmpd",
+		fn = function()
+			local orig = inform._snmp
+			local ok, err = pcall(function()
+				inform._snmp = {v3_capable = function() return true end}
+				assert_eq(build().fw_caps, MAC_VLAN_FW_CAPS + 0x4000, "claimed")
+				inform._snmp = {v3_capable = function() return false end}
+				assert_eq(build().fw_caps, MAC_VLAN_FW_CAPS, "not claimed")
+				inform._snmp = {v3_capable = function() error("apk db unreadable") end}
+				assert_eq(build().fw_caps, MAC_VLAN_FW_CAPS, "a failing probe claims nothing")
+			end)
+			inform._snmp = orig
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform json: the Hotspot 2.0 probe is read once per payload",
 		fn = function()
 			-- fw_caps 0x800000 and fw2_caps 0x80000 are the same probe; it is
