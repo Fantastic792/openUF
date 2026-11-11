@@ -493,6 +493,61 @@ function M._ip_rollback_check(st, cfg, reached)
 	pcall(M._write_status, st, {})
 end
 
+-- Replay of a partly failed config push (audit #4 option B). A push with
+-- failed stages keeps its system_cfg here, in this module's memory only:
+-- it holds the PSKs, so never in st or on flash, and a restart drops it
+-- (the push record _note_push saved stays). After REPLAY_DELAYS seconds
+-- (each counted from the previous try) handle_response runs it again with
+-- M._replay_only naming the stages still failing, so the stages that went
+-- through are not redone: a replay without the WiFi stage runs no `wifi
+-- reload`. Any later push replaces the copy; a replay with nothing left
+-- failing drops it; after the last delay it gives up and the record stays.
+-- Runs only after an inform the controller answered.
+M.REPLAY_DELAYS = {30, 120, 600}
+local replay
+function M._push_replay_arm(sys_raw, failed, now, cfgversion)
+	replay = nil
+	if type(sys_raw) ~= "string" or type(failed) ~= "table" or #failed == 0 then return end
+	local only = {}
+	for _, n in ipairs(failed) do only[n] = true end
+	replay = {sys = sys_raw, only = only, cfgversion = cfgversion, n = 0,
+		due = now + M.REPLAY_DELAYS[1]}
+end
+
+function M._push_replay_tick(st, cfg, now)
+	local r = replay
+	if not r or now < r.due then return false end
+	r.n = r.n + 1
+	M._replay_only, M._replay_failed = r.only, nil
+	local ok, err = pcall(M.handle_response, cjson.encode({_type = "setparam",
+		system_cfg = r.sys, cfgversion = r.cfgversion}), st, cfg)
+	local still = M._replay_failed
+	M._replay_only, M._replay_failed = nil, nil
+	if not ok then
+		io.stderr:write("inform: push replay failed: " .. tostring(err) .. "\n")
+		if M._push_open then
+			pcall(M._note_push, st, {"aborted"}, false)
+			pcall(M._state.save, st)
+		end
+	elseif type(still) == "table" and #still == 0 then
+		replay = nil
+		io.stderr:write("inform: config push replayed, every stage applied\n")
+		return true
+	elseif type(still) == "table" then
+		r.only = {}
+		for _, n in ipairs(still) do r.only[n] = true end
+	end
+	local d = M.REPLAY_DELAYS[r.n + 1]
+	if d then
+		r.due = now + d
+	else
+		replay = nil
+		io.stderr:write("inform: config push replay gave up after " .. r.n .. " tries -- "
+			.. M.PUSH_HINT .. "\n")
+	end
+	return true
+end
+
 -- fields: {last_ok = epoch, last_type = "noop"} on success, or
 -- {last_fail = epoch, last_fail_msg = "..."} on a transport failure. The
 -- other side's last value is carried forward so the file always shows both
@@ -901,6 +956,9 @@ function M._tick(st, cfg, ufhw, ctx)
 	-- after a drop would double from the stale, longer value.
 	ctx.interval = M._controller_interval or ctx.base_interval
 	pcall(M._write_status, st, {last_ok = M._time(), last_type = rtype})
+	-- After the answer and outside the cycle's ucihelper pass, like a push.
+	local ok_rp, err_rp = pcall(M._push_replay_tick, st, cfg, M._time())
+	if not ok_rp then io.stderr:write("inform: push replay: " .. tostring(err_rp) .. "\n") end
 	-- A device event the last command left behind (a finished sweep) goes
 	-- out now, as its own notification inform, after the heartbeat that
 	-- carried the result it dates.

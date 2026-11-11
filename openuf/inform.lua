@@ -4681,6 +4681,10 @@ function M.handle_response(json_str, st, cfg)
 			failed[#failed + 1] = name
 			io.stderr:write(msg or ("inform: " .. name .. ": " .. tostring(err) .. "\n"))
 		end
+		-- A replay (mainloop's _push_replay_tick) runs only the stages that
+		-- failed; a normal push runs them all.
+		local only = M._replay_only
+		local function want(name) return not only or only[name] == true end
 		-- The pushed cfgversion is recorded only once the WiFi pass has gone
 		-- through: recorded first (and saved by the IP-settings save below),
 		-- a failed apply_config left the controller sure the AP was
@@ -4803,7 +4807,7 @@ function M.handle_response(json_str, st, cfg)
 				ip = nil
 			end
 
-			if ip then
+			if ip and not only then
 				local iface = cfg and cfg.net and cfg.net.lan_cpueth
 				-- pcall'd: a failed arm must not stop the push it guards.
 				local ok_arm, err_arm = pcall(M._arm_ip_rollback, st, iface, dhcp, ip, netmask, gateway)
@@ -4926,36 +4930,41 @@ function M.handle_response(json_str, st, cfg)
 						M._steering_flags(vap_table, sys_raw)
 					-- usteer is a side service: its failure must not stop the
 					-- WLANs from being written.
-					local ok_us, err_us = pcall(M._usteer.set_enabled,
-						steering_active, cfg, roam_assist_active)
-					if not ok_us then stage_failed("usteer", err_us) end
-					M._usteer_filter_next = 0   -- re-check the sync filter next tick
-					local ok_ac, err_ac = pcall(ufuci.apply_config,
-						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
-						cfg, {band_steering_active = steering_active,
-							roam_assist_active = roam_assist_active,
-							device_name = device_name, model_name = M._model,
-							keep_vlans = port_vlans,
-							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac),
-							backhaul = backhaul_plan})
-					if not ok_ac then
-						-- The wireless config is committed once, at the end of
-						-- apply_config, so a raise before it leaves the previous
-						-- WLANs on disk; the cfgversion stays unrecorded, so the
-						-- controller may push again (PROTOCOL-VALIDATION: a stale
-						-- cfgversion sometimes gets a full push, sometimes only
-						-- noops) -- the push record says so either way.
-						wifi_applied = false
-						stage_failed("wifi", err_ac)
+					if want("usteer") then
+						local ok_us, err_us = pcall(M._usteer.set_enabled,
+							steering_active, cfg, roam_assist_active)
+						if not ok_us then stage_failed("usteer", err_us) end
+						M._usteer_filter_next = 0   -- re-check the sync filter next tick
 					end
-					M._deny_reloaded()   -- apply_config ran `wifi reload`
+					-- The mesh plan and the port-VLAN set are inputs of this pass.
+					if want("wifi") or want("mesh") or want("port VLAN") then
+						local ok_ac, err_ac = pcall(ufuci.apply_config,
+							{radio_table = radio_table, vap_table = vap_table, network_table = {}},
+							cfg, {band_steering_active = steering_active,
+								roam_assist_active = roam_assist_active,
+								device_name = device_name, model_name = M._model,
+								keep_vlans = port_vlans,
+								peer_ie = M._sysinfo.peer_ie_hex(st and st.mac),
+								backhaul = backhaul_plan})
+						if not ok_ac then
+							-- The wireless config is committed once, at the end of
+							-- apply_config, so a raise before it leaves the previous
+							-- WLANs on disk; the cfgversion stays unrecorded, so the
+							-- controller may push again (PROTOCOL-VALIDATION: a stale
+							-- cfgversion sometimes gets a full push, sometimes only
+							-- noops) -- the push record says so either way.
+							wifi_applied = false
+							stage_failed("wifi", err_ac)
+						end
+						M._deny_reloaded()   -- apply_config ran `wifi reload`
+					end
 				end
 			end
 
 			-- Per-port VLAN, after the WiFi pass so that any VLAN interface
 			-- ensure_vlan_network() creates for a tagged SSID already exists
 			-- before a switch port is put on the same VLAN.
-			if M._switchvlan then
+			if M._switchvlan and want("switch") then
 				local ok_sw, err_sw = pcall(function()
 					-- Every VLAN a tagged SSID lands on. The switch drops
 					-- frames for a VID it has no entry for, so these need
@@ -5045,7 +5054,7 @@ function M.handle_response(json_str, st, cfg)
 			-- that says whether there is a mesh at all -- so a partial push
 			-- never tears it down. After the WiFi pass, whose network reload
 			-- builds the VLAN bridges the ports go into.
-			if M._meshvlan and (#radio_table > 0 or #vap_table > 0) then
+			if M._meshvlan and want("meshvlan") and (#radio_table > 0 or #vap_table > 0) then
 				local ok_mv, err_mv = pcall(M._meshvlan_push, st, cfg, backhaul_plan,
 					M._wireless_vlans(vap_table))
 				if not ok_mv then stage_failed("meshvlan", err_mv) end
@@ -5056,7 +5065,7 @@ function M.handle_response(json_str, st, cfg)
 			-- name as hostname (sysconf.lua). Each part is pcall'd inside
 			-- apply(); this pcall is for parse. A new hostname goes into the
 			-- inform payload too, from this heartbeat on.
-			if M._sysconf then
+			if M._sysconf and want("sysconf") then
 				local ok_sc, err_sc = pcall(function()
 					local sc = M._sysconf.parse(sys_raw)
 					local r = sc and M._sysconf.apply(sc)
@@ -5072,7 +5081,7 @@ function M.handle_response(json_str, st, cfg)
 			-- Airtime Fairness (airtime.lua). Kept in state.json because the
 			-- debugfs switch resets on reboot and the controller does not
 			-- push again; M.run reapplies it. No block, no change.
-			if M._airtime then
+			if M._airtime and want("airtime") then
 				local atf = M._airtime.parse(sys_raw)
 				if atf ~= nil then
 					st.atf_enabled = atf
@@ -5092,14 +5101,14 @@ function M.handle_response(json_str, st, cfg)
 			-- startup rebuild. After the WiFi pass on purpose, so a VAP
 			-- this push added has its netdev by now if netifd was quick;
 			-- _l2guard_resync picks it up if not.
-			if M._l2guard then
+			if M._l2guard and want("l2guard") then
 				local ok_l2, err_l2 = pcall(M._l2guard_apply_push, sys_raw, st)
 				if not ok_l2 then stage_failed("l2guard", err_l2) end
 			end
 			-- The guest portal's own ebtables rules (guestportal.lua), after
 			-- the WiFi pass for the same reason; _guest_resync covers a
 			-- guest VAP whose netdev is not up yet.
-			if M._guestportal then
+			if M._guestportal and want("guestportal") then
 				local ok_gp, err_gp = pcall(M._guest_apply_push, sys_raw, st)
 				if not ok_gp then stage_failed("guestportal", err_gp) end
 			end
@@ -5122,6 +5131,13 @@ function M.handle_response(json_str, st, cfg)
 			pending_cfgversion = resp.cfgversion
 		end
 		if pending_cfgversion and wifi_applied then st.cfgversion = pending_cfgversion end
+		if type(sys_raw) == "string" then
+			if only then
+				M._replay_failed = failed
+			else
+				M._push_replay_arm(sys_raw, failed, M._time(), pending_cfgversion)
+			end
+		end
 		M._state.save(st)
 		-- Adopted by this answer's authkey, not by a set-adopt the reload
 		-- would have seen: lock the bootstrap account now. It used to wait
