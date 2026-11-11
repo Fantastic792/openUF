@@ -4684,7 +4684,12 @@ function M.handle_response(json_str, st, cfg)
 		-- A replay (mainloop's _push_replay_tick) runs only the stages that
 		-- failed; a normal push runs them all.
 		local only = M._replay_only
-		local function want(name) return not only or only[name] == true end
+		-- switch and meshvlan need the bridges the WiFi pass builds, so a
+		-- replayed wifi stage re-runs them too (neither reloads the radios).
+		local function want(name)
+			return not only or only[name] == true
+				or (only.wifi == true and (name == "switch" or name == "meshvlan"))
+		end
 		-- The pushed cfgversion is recorded only once the WiFi pass has gone
 		-- through: recorded first (and saved by the IP-settings save below),
 		-- a failed apply_config left the controller sure the AP was
@@ -4783,6 +4788,9 @@ function M.handle_response(json_str, st, cfg)
 			-- Cleared by _note_push at the end of this block; still set
 			-- when something unprotected raised, which _tick records.
 			M._push_open = true
+			-- A new push owns the config now: an older replay copy must not
+			-- run over it, even if this push raises before it re-arms.
+			if not only and M._push_replay_arm then M._push_replay_arm(nil) end
 			M._report_dropped_keys("system_cfg", sys_raw, RECOGNIZED_SYSTEM_CFG)
 
 			local net = M._parse_net_system_cfg(sys_raw)
@@ -5760,6 +5768,8 @@ end
 -- reset to DHCP could take off the network.
 function M._forget_controller(prev, cfg)
 	prev = prev or {}
+	-- A replay copy holds the old site's WLANs: never put it back.
+	if M._push_replay_arm then M._push_replay_arm(nil) end
 	M._controller_interval = nil
 	-- Before anything else moves: the mesh VLAN ports, then their guard.
 	if M._meshvlan and type(prev.meshvlan) == "table" then

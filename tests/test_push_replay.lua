@@ -164,4 +164,54 @@ return {
 			end)
 		end
 	},
+	{
+		name = "test_forget_controller_drops_replay",
+		fn = function()
+			local h = fresh()
+			quiet(h, function()
+				local st = {cfgversion = "v1", adopted = true}
+				h.l2_boom = true
+				h.inform.handle_response(push("v2"), st, CFG)
+				pcall(h.inform._forget_controller, st, CFG)
+				local n = h.l2
+				assert_false(h.inform._push_replay_tick(st, CFG, 30), "no replay after a reset/unadopt")
+				assert_eq(h.l2, n, "the old site's push is not put back")
+			end)
+		end
+	},
+	{
+		name = "test_raising_push_drops_old_replay",
+		fn = function()
+			local h = fresh()
+			quiet(h, function()
+				local st = {cfgversion = "v1", adopted = true}
+				h.l2_boom = true
+				h.inform.handle_response(push("v2"), st, CFG)
+				local parse = h.inform._parse_net_system_cfg
+				h.inform._parse_net_system_cfg = function() error("boom") end
+				pcall(h.inform.handle_response, push("v3"), st, CFG)
+				h.inform._parse_net_system_cfg = parse
+				local n = h.l2
+				assert_false(h.inform._push_replay_tick(st, CFG, 30), "the older copy is not replayed over the newer push")
+				assert_eq(h.l2, n, "nothing replayed")
+			end)
+		end
+	},
+	{
+		name = "test_wifi_replay_reruns_meshvlan",
+		fn = function()
+			local h = fresh()
+			quiet(h, function()
+				local mv = 0
+				h.inform._meshvlan_push = function() mv = mv + 1 end
+				local st = {cfgversion = "v1", adopted = true}
+				h.wifi_boom = true
+				h.inform.handle_response(push("v2"), st, CFG)
+				local before = mv
+				h.wifi_boom = false
+				assert_true(h.inform._push_replay_tick(st, CFG, 30), "replayed")
+				assert_eq(mv, before + 1, "meshvlan re-runs after the replayed WiFi pass builds the bridges")
+			end)
+		end
+	},
 }
