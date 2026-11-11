@@ -9731,6 +9731,95 @@ return {
 		end
 	},
 	{
+		name = "inform packet: the DAS relay port follows st.das",
+		fn = function()
+			local log, bind_ok = {}, true
+			local real_socket = inform._socket
+			inform._socket = function()
+				return {udp = function()
+					local u = {}
+					function u.setsockname(_, ip, port)
+						log[#log + 1] = "bind " .. ip .. ":" .. port
+						if bind_ok then return 1 end
+						return nil, "address in use"
+					end
+					function u.settimeout() end
+					function u.close() log[#log + 1] = "close" end
+					return u
+				end}
+			end
+			local function plan(port) return {das = {port = port, wlans = {{port = 3801, ssid = "corp", clients = {"192.0.2.11/32"}}}}} end
+			local ok, err = pcall(function()
+				inform._das_sync(plan(3799))
+				assert_eq(table.concat(log, ","), "bind *:3799", "a plan opens the dispatcher port")
+				assert_not_nil(inform._das_sock, "and keeps the socket")
+				inform._das_sync(plan(3799))
+				assert_eq(#log, 1, "the same plan does nothing")
+				inform._das_sync(plan(3900))
+				assert_eq(table.concat(log, ","), "bind *:3799,close,bind *:3900", "a new port: closed, rebound")
+				inform._das_sync({})
+				assert_eq(log[#log], "close", "no plan: closed")
+				assert_nil(inform._das_sock, "and gone")
+				inform._das_sync({das = {port = 3799, wlans = {}}})
+				assert_eq(log[#log], "close", "an empty plan opens nothing")
+				-- Port taken: said once, tried again each tick, never fatal.
+				log, bind_ok = {}, false
+				local logged = with_stderr(function()
+					inform._das_sync(plan(3799))
+					inform._das_sync(plan(3799))
+				end)
+				assert_nil(inform._das_sock, "no socket")
+				assert_eq(table.concat(log, ","), "bind *:3799,close,bind *:3799,close", "retried, closed each time")
+				local _, n = logged:gsub("cannot listen", "")
+				assert_eq(n, 1, "said once")
+			end)
+			inform._socket = real_socket
+			if inform._das_sock then inform._das_sock = nil end
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: the idle wait answers a DAS request as it arrives",
+		fn = function()
+			local t, selects = 0, {}
+			local sent = {}
+			local das_sock = {
+				receivefrom = function() return "req", "192.0.2.11", 40000 end,
+				sendto = function(_, d, ip, port) sent[#sent + 1] = d .. ">" .. ip .. ":" .. port end,
+			}
+			local sock = {
+				gettime = function() return t end,
+				select = function(r, _, timeout)
+					selects[#selects + 1] = (r and "R" or "-") .. timeout
+					if r and #selects == 1 then t = t + 1; return {das_sock} end
+					t = t + timeout
+					return {}
+				end,
+			}
+			local real_das, real_socket = inform._das, inform._socket
+			local got
+			inform._das = {
+				handle = function(wlans, data, ip, relay)
+					got = {wlans = wlans, data = data, ip = ip, relay = relay}
+					return "ack"
+				end,
+				udp_relay = function() return function() end end,
+			}
+			inform._socket = function() return {} end
+			inform._das_sock, inform._das_wlans = das_sock, {{port = 3801}}
+			local ok, err = pcall(inform._idle, sock, 10)
+			inform._das, inform._socket = real_das, real_socket
+			inform._das_sock, inform._das_wlans = nil, nil
+			if not ok then error(err, 0) end
+			assert_eq(got.data, "req", "the datagram")
+			assert_eq(got.ip, "192.0.2.11", "its sender, for the CIDR check")
+			assert_eq(got.wlans[1].port, 3801, "the plan's WLANs")
+			assert_eq(type(got.relay), "function", "a relay to hostapd")
+			assert_eq(table.concat(sent, ","), "ack>192.0.2.11:40000", "the answer goes back to the sender")
+			assert_eq(table.concat(selects, ","), "R10,R9", "then the rest of the wait")
+		end
+	},
+	{
 		name = "inform packet: forgetting the controller tears the guest portal down",
 		fn = function()
 			local real = inform._guestportal

@@ -62,6 +62,7 @@ local shaper    = _require_sibling("shaper")
 local rrbguard  = _require_sibling("rrbguard")
 local uplinkmon = _require_sibling("uplinkmon")
 local guestportal = _require_sibling("guestportal")
+local das       = _require_sibling("das")
 local hangwatch = _require_sibling("hangwatch")
 
 local M = {}
@@ -105,6 +106,7 @@ M._satisfaction = satisfaction
 M._stun      = stun
 M._rrbguard  = rrbguard
 M._guestportal = guestportal
+M._das       = das
 M._hangwatch = hangwatch
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the

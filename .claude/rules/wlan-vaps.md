@@ -83,5 +83,8 @@ Landmines moved from CLAUDE.md; they load when a matching file is touched.
   through UCI on an `EAP_ENC` BSS, as raw `auth_server_*` lines on any other (ap.uc calls
   `iface_authentication_server()` only from its EAP branch). A basic wpad has no RADIUS
   client: Enterprise only warns (`sysinfo.eap_supported`), RADIUS MAC auth fails closed and
-  drops the WLAN. `radius.dad.*`, `radius.macacl.{format,emptypassword}` and RadSec servers
-  are deliberately not read (see the comment above `_wire_radius`).
+  drops the WLAN. `radius.macacl.{format,emptypassword}` and RadSec servers are deliberately
+  not read (see the comment above `_wire_radius`). `radius.dad.*` (plan v2.0 Task 9e, from
+  fonix232) feeds `das.lua`: `_wire_dad_clients` -> `radius.das.relay`, `M._das_plan` ->
+  `st.das`, hostwatch `_das_sync`/`_das_serve` listen on 3799 from `_idle`; hostapd then
+  gets `radius_das_client=127.0.0.1 <secret>`.

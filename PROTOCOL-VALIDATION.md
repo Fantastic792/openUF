@@ -3128,7 +3128,8 @@ descending promise, with why each is worth the toggle:
 - `aaa.<n>.radius.macacl.{status,format,emptypassword}` (RADIUS MAC authentication) and
   `aaa.<n>.radius.{das,dad}.*` (DAS/CoA) — the two deliberate deferrals of the
   WPA-Enterprise commit. **Settled 2026-10-27, both implemented**; `format`,
-  `emptypassword` and the whole `dad.*` shape are declined with reasons. The third key in
+  `emptypassword` and the whole `dad.*` shape are declined with reasons. **`dad.*`
+  implemented 2026-11-12** (plan v2.0 Task 9e): openUF's own relay, see below. The third key in
   this row, `aaa.<n>.accept_mac.{status,<k>.vlanid}`, turned out **not** to be part of
   RADIUS MAC auth at all — it is the site's MAC-based VLAN feature, with its own gate and
   its own open question. See
@@ -3709,7 +3710,13 @@ aaa.%d.radius.macacl.emptypassword -> mac_acl_empty_passwd=%d
 
 Two things fall out of that. The `dad.*` shape points hostapd at **localhost** — the request
 reaches the AP's own `mcad`, which checks the CIDR and relays it — so it is unusable without
-that relay. And `macaddr_format`/`mac_acl_empty_passwd` are options of UniFi's **patched**
+that relay. _(2026-11-12, plan v2.0 Task 9e: openUF now has that relay, `openuf/das.lua`,
+adapted from fonix232/openUF. With `aaa.radius.dad.status=enabled` it listens on
+`aaa.radius.dad.port` (3799) from the idle wait, accepts a Disconnect/CoA-Request only from
+an address inside one of `aaa.<n>.radius.dad.client.<k>.cidr`, routes by NAS-Identifier
+(attr 32) or the SSID after `BSSID:` in Called-Station-Id (attr 30), forwards the bytes
+unchanged to that WLAN's `radius_das_port` on 127.0.0.1, and returns hostapd's answer.
+hostapd still checks the Request Authenticator with the WLAN's DAS secret.)_ And `macaddr_format`/`mac_acl_empty_passwd` are options of UniFi's **patched**
 hostapd: neither string occurs in `/usr/sbin/hostapd` on either AP (`strings -a | grep -c`
 gives 0 on ath79 and on filogic), while `radius_das_client`, `radius_das_port` and
 `macaddr_acl` all do.

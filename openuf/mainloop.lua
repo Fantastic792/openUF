@@ -940,6 +940,9 @@ M._FEATURES = {
 		forget = function() if M._guestportal then pcall(M._guest_enforce, {}) end end},
 	guest_wg = {tick = function(st) pcall(M._guest_wg_resync, st) end,
 		forget_by = {via = "guest"}},
+	-- The RADIUS DAS relay's port (hostwatch._das_sync), from the last push's plan.
+	das = {tick = function(st) pcall(M._das_sync, st) end,
+		forget_by = {state = {"das"}}},
 	hairpin = {tick = function() pcall(M._hairpin_resync) end,
 		forget_by = {vaps = true}},
 	usteer = {tick = function() pcall(M._usteer_filter_resync) end,
@@ -1058,7 +1061,7 @@ M._FEATURES = {
 -- VLAN ports before the l2guard, a tick the other way round).
 M._FEATURE_ORDER = {
 	tick = {"stun", "neighbours", "scan_job", "rrm", "dfs_reset", "vap_watch", "l2guard",
-		"bcfilt", "backhaul", "uplinkmon", "meshvlan", "guest", "guest_wg", "hairpin",
+		"bcfilt", "backhaul", "uplinkmon", "meshvlan", "guest", "guest_wg", "das", "hairpin",
 		"usteer", "block", "sched", "rrbguard", "net_info"},
 	tick_late = {"shaper"},
 	forget = {"meshvlan", "switchvlan", "usteer", "ucihelper", "l2guard", "guest", "cron",

@@ -822,6 +822,47 @@ function M._stun_wake()
 	return ok and wake == true
 end
 
+-- The RADIUS DAS dispatcher (das.lua): a UDP socket on st.das.port while
+-- the last push left WLANs to relay for, served from M._idle. Rebound when
+-- the port changes, closed when the plan goes. A port it cannot bind is
+-- tried again every tick and said once.
+M._das_sock, M._das_port, M._das_wlans, M._das_failed = nil, nil, nil, nil
+function M._das_sync(st)
+	local plan = type(st) == "table" and st.das
+	local port = type(plan) == "table" and type(plan.wlans) == "table"
+		and #plan.wlans > 0 and tonumber(plan.port) or nil
+	M._das_wlans = port and plan.wlans or nil
+	if M._das_sock and M._das_port ~= port then
+		M._das_sock:close()
+		M._das_sock, M._das_port = nil, nil
+	end
+	if not port or M._das_sock then return end
+	local socket = M._socket()
+	local u = (socket.udp4 or socket.udp)()
+	local ok, err = u:setsockname("*", port)
+	if not ok then
+		u:close()
+		if M._das_failed ~= port then
+			io.stderr:write(("inform: RADIUS DAS: cannot listen on udp/%d (%s)\n")
+				:format(port, tostring(err)))
+		end
+		M._das_failed = port
+		return
+	end
+	u:settimeout(0)
+	M._das_sock, M._das_port, M._das_failed = u, port, nil
+end
+
+-- Answer one datagram on the DAS socket. False when nothing was there.
+function M._das_serve(sock)
+	local data, ip, port = sock:receivefrom()
+	if not data then return false end
+	local ok, answer = pcall(M._das.handle, M._das_wlans, data, ip,
+		M._das.udp_relay(M._socket()))
+	if ok and answer then sock:sendto(answer, ip, port) end
+	return true
+end
+
 -- Sleep for wait seconds, ending early when the STUN socket says to inform
 -- now: the controller's 0x8888 connection request, sent the moment it queues
 -- a command or a config change, so Locate, Reconnect and a WLAN edit land
@@ -834,6 +875,8 @@ end
 -- too and each guest is answered as it arrives; a readable socket with
 -- nothing to accept is left alone for the rest of this wait, so it cannot
 -- spin.
+-- While the DAS relay listens (M._das_sock), each request is relayed and
+-- answered as it arrives, within the RADIUS server's retry timeout.
 -- While a mesh child's wired socket is watched (backhaul.watching), it wakes
 -- every CARRIER_POLL_S and ends the wait when that link has changed.
 function M._idle(socket, wait, state_changed)
@@ -841,7 +884,7 @@ function M._idle(socket, wait, state_changed)
 	local fast = M._roam_fast
 	local bh = M._backhaul
 	local watch = bh and bh.watching and bh.watching() or false
-	local guests = true
+	local guests, das_on = true, true
 	while true do
 		local left = deadline - socket.gettime()
 		-- A backward clock step (NTP) makes `left` exceed the whole wait and
@@ -856,21 +899,29 @@ function M._idle(socket, wait, state_changed)
 		if state_changed then step = math.min(step, M.STATE_POLL_S) end
 		local stun_sock = M._stun_c and M._stun_c.sock
 		local server = guests and M._guest_server or nil
-		if not stun_sock and not server then
+		local das_sock = das_on and M._das_sock or nil
+		if not stun_sock and not server and not das_sock then
 			socket.select(nil, nil, step)
 			if not fast and not watch and not state_changed then return end
 		else
 			local want = {}
 			if stun_sock then want[#want + 1] = stun_sock end
 			if server then want[#want + 1] = server end
+			if das_sock then want[#want + 1] = das_sock end
 			local r = socket.select(want, nil, step)
-			local stun_ready, guest_ready = false, false
+			local stun_ready, guest_ready, das_ready = false, false, false
 			for _, ready in ipairs(r or {}) do
 				if ready == stun_sock then stun_ready = true end
 				if ready == server then guest_ready = true end
+				if ready == das_sock then das_ready = true end
 			end
 			if stun_ready and M._stun_wake() then return end
 			if guest_ready and not M._guest_serve(server) then guests = false end
+			-- Readable with nothing to read: leave it for the rest of this wait.
+			if das_ready then
+				local ok, served = pcall(M._das_serve, das_sock)
+				if not (ok and served) then das_on = false end
+			end
 		end
 		if fast then pcall(M._roam_poll) end
 		if watch then
