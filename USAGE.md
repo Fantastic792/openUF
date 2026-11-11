@@ -1411,8 +1411,10 @@ the WPA-Enterprise section above applies first.
   `hostapd_bss_options`, which the generator appends verbatim and last.
 - **Dropped individually, never silently mangled.** Any value carrying a
   control character is dropped (it would end the hostapd config line and let
-  the rest be read as further options), as is a language code longer than three
-  characters, a roaming-consortium OI that is not 3–15 hex bytes, an MCC that
+  the rest be read as further options), as is a language code that is not two
+  or three letters (a missing one becomes `eng`), an NAI realm name with
+  anything but letters, digits, `.`, `-` and `;` (a `,` would end hostapd's
+  realm field), a roaming-consortium OI that is not 3–15 hex bytes, an MCC that
   is not three digits, a connection-capability status that is not
   open/closed/unknown, and an incomplete WAN-metrics block (it is all or
   nothing). A disabled NAI realm, and one with no EAP method, are left out.
@@ -1423,8 +1425,8 @@ the WPA-Enterprise section above applies first.
   (online sign-up) and Passpoint icons are not implemented either, and could
   not be: OpenWrt's hostapd has no `osu_server_uri`, `osu_ssid` or `hs20_icon`
   option at all, and icons would need files on disk the controller transfers by
-  another channel. An `esr` key is read by nothing, because the generator never
-  emits it.
+  another channel. An `esr` key is read by nothing: the generator never
+  emits it, and the controller always sends it `disabled` (no WLAN field sets it).
 - **Only on an EAP WLAN.** hostapd refuses a configuration with `hs20=1` and
   anything but WPA2-Enterprise/CCMP, so an hs20 block arriving on a
   PSK WLAN is dropped with a log line rather than written out into a BSS that
