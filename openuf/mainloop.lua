@@ -839,6 +839,88 @@ end
 -- another go.
 M._logged_pending = false
 
+-- ─── The feature table ───────────────────────────────────────────────────────
+-- Each controller-driven feature's steps, one row per feature, so a feature is
+-- added in one place (audit 2026-11-10, finding 14). Phases:
+--   tick(st, cfg, ctx)       each heartbeat, before build_json
+--   tick_late(st, cfg, ctx)  each heartbeat, after build_json (its stations)
+-- A ticking row with no forget hook says in forget_by how a Forget undoes what
+-- it keeps alive (tests/test_feature_lists.lua checks each story).
+-- Hooks keep their own pcall and log line, or lack of one: the driver adds
+-- none. They read M._x at call time, so a stub set after load is the one run.
+M._FEATURES = {
+	-- The STUN client: a Binding Request every stun.INTERVAL, before the
+	-- inform so the reply's mapped address rides out on it.
+	stun = {tick = function(st) pcall(M._stun_tick, st) end,
+		forget_by = {state = {"stun_url"}}},
+	neighbours = {tick = function(st, cfg, ctx) M._maybe_scan_neighbours(cfg, ctx) end,
+		forget_by = {none = "queues a sweep on its own timer; keeps nothing"}},
+	-- One chunk of whatever sweep is queued (a command's, or the 11k-scan's),
+	-- before build_json so this inform carries what it found.
+	scan_job = {tick = function() pcall(M._scan_job_tick) end,
+		forget_by = {none = "runs one chunk of a queued sweep; keeps nothing"}},
+	-- Before build_json, so anything a client reported since the last cycle
+	-- rides out on THIS inform rather than waiting for the next.
+	rrm = {tick = function(st, cfg) pcall(M._rrm_tick, cfg, st) end,
+		forget_by = {none = "collector follows the live VAPs and tears its own nft table down"}},
+	-- The controller's nightly dfs-reset (syswrapper.sh dfs-reset): put a
+	-- radio a radar hit moved back on its configured DFS channel.
+	dfs_reset = {tick = function(st, cfg) pcall(M._maybe_service_dfs_reset, cfg) end,
+		forget_by = {none = "one-shot request file from syswrapper"}},
+	-- Before the resyncs: opens their gates when the VAP set changed.
+	vap_watch = {tick = function() pcall(M._vap_watch, M._time()) end,
+		forget_by = {none = "only opens the resync gates"}},
+	l2guard = {tick = function(st) pcall(M._l2guard_resync, st) end,
+		forget_by = {forget = "M._l2guard.reconcile"}},
+	bcfilt = {tick = function() pcall(M._bcfilt_resync) end,
+		forget_by = {vaps = true}},
+	-- Not verified on a mesh child: what a Forget does to its own uplink.
+	backhaul = {tick = function(st, cfg) pcall(M._backhaul_tick, st, cfg) end,
+		forget_by = {state = {"backhaul_ul", "backhaul_parent"}}},
+	uplinkmon = {tick = function(st, cfg) pcall(M._uplinkmon_resync, st, cfg) end,
+		forget_by = {state = {"uplinkmon_enabled", "uplinkmon_host", "uplinkmon_down"}}},
+	meshvlan = {tick = function(st, cfg) pcall(M._meshvlan_resync, st, cfg) end,
+		forget_by = {forget = "M._meshvlan.reconcile"}},
+	guest = {tick = function(st) pcall(M._guest_resync, st) end,
+		forget_by = {forget = "M._guest_enforce"}},
+	guest_wg = {tick = function(st) pcall(M._guest_wg_resync, st) end,
+		forget_by = {forget = "M._guest_enforce"}},
+	hairpin = {tick = function() pcall(M._hairpin_resync) end,
+		forget_by = {vaps = true}},
+	usteer = {tick = function() pcall(M._usteer_filter_resync) end,
+		forget_by = {forget = "M._usteer.set_enabled"}},
+	block = {tick = function(st) pcall(M._block_resync, st) end,
+		forget_by = {forget = "M._firewall.reconcile"}},
+	sched = {tick = function(st) pcall(M._sched_resync, st) end,
+		forget_by = {state = {"sched_vaps_down"}}},
+	rrbguard = {tick = function() pcall(M._rrbguard_tick) end,
+		forget_by = {none = "watches hostapd's own socket; no controller setting"}},
+	-- The address this inform reports, read now rather than at startup (see
+	-- _refresh_net_info: a DHCP lease that arrived after the daemon did).
+	net_info = {tick = function(st, cfg) pcall(M._refresh_net_info, st, cfg) end,
+		forget_by = {none = "reads the address; changes nothing"}},
+	-- On the stations build_json just listed.
+	shaper = {tick_late = function(st)
+			local ok_sh, err_sh = pcall(M._shaper_resync, st)
+			if not ok_sh then io.stderr:write("inform: shaper: " .. tostring(err_sh) .. "\n") end
+		end,
+		forget_by = {forget = "M._shaper.sync"}},
+}
+-- Each phase's own order: the phases do not share one (a Forget moves the mesh
+-- VLAN ports before the l2guard, a tick the other way round).
+M._FEATURE_ORDER = {
+	tick = {"stun", "neighbours", "scan_job", "rrm", "dfs_reset", "vap_watch", "l2guard",
+		"bcfilt", "backhaul", "uplinkmon", "meshvlan", "guest", "guest_wg", "hairpin",
+		"usteer", "block", "sched", "rrbguard", "net_info"},
+	tick_late = {"shaper"},
+}
+
+-- Runs one phase's hooks in that phase's order.
+function M._run_features(phase, a, b, c)
+	local F = M._FEATURES
+	for _, n in ipairs(M._FEATURE_ORDER[phase]) do F[n][phase](a, b, c) end
+end
+
 function M._tick(st, cfg, ufhw, ctx)
 	-- base_interval is the device's own cadence; interval is what the loop
 	-- actually waits, which the controller's noop may have moved.
@@ -861,36 +943,8 @@ function M._tick(st, cfg, ufhw, ctx)
 		ufuci.begin_pass()
 	end
 	ctx.last_mtime = M._reload_if_changed(st, cfg, ctx.last_mtime)
-	-- The STUN client: a Binding Request every stun.INTERVAL, before the
-	-- inform so the reply's mapped address rides out on it.
-	pcall(M._stun_tick, st)
-	M._maybe_scan_neighbours(cfg, ctx)
-	-- One chunk of whatever sweep is queued (a command's, or the 11k-scan's),
-	-- before build_json so this inform carries what it found.
-	pcall(M._scan_job_tick)
-	-- Before build_json, so anything a client reported since the last cycle
-	-- rides out on THIS inform rather than waiting for the next.
-	pcall(M._rrm_tick, cfg, st)
-	-- The controller's nightly dfs-reset (syswrapper.sh dfs-reset): put a
-	-- radio a radar hit moved back on its configured DFS channel.
-	pcall(M._maybe_service_dfs_reset, cfg)
-	-- Before the resyncs: opens their gates when the VAP set changed.
-	pcall(M._vap_watch, M._time())
-	pcall(M._l2guard_resync, st)
-	pcall(M._bcfilt_resync)
-	pcall(M._backhaul_tick, st, cfg)
-	pcall(M._uplinkmon_resync, st, cfg)
-	pcall(M._meshvlan_resync, st, cfg)
-	pcall(M._guest_resync, st)
-	pcall(M._guest_wg_resync, st)
-	pcall(M._hairpin_resync)
-	pcall(M._usteer_filter_resync)
-	pcall(M._block_resync, st)
-	pcall(M._sched_resync, st)
-	pcall(M._rrbguard_tick)
-	-- The address this inform reports, read now rather than at startup (see
-	-- _refresh_net_info: a DHCP lease that arrived after the daemon did).
-	pcall(M._refresh_net_info, st, cfg)
+	-- The features' per-heartbeat steps (M._FEATURES, tick phase).
+	M._run_features("tick", st, cfg, ctx)
 
 	local ok_b, json_str = pcall(M.build_json, st, cfg, ufhw)
 	-- The cycle's ucihelper pass, opened above, ends here whether or not
@@ -910,9 +964,8 @@ function M._tick(st, cfg, ufhw, ctx)
 		M._uptime_mark_cleared = false
 		pcall(M._state.save, st)
 	end
-	-- On the stations build_json just listed.
-	local ok_sh, err_sh = pcall(M._shaper_resync, st)
-	if not ok_sh then io.stderr:write("inform: shaper: " .. tostring(err_sh) .. "\n") end
+	-- On the stations build_json just listed (tick_late phase).
+	M._run_features("tick_late", st, cfg, ctx)
 	if dump_tx then M._debug_append(cfg, "TX", json_str) end
 
 	local ok_p, pkt = pcall(M.build_packet, json_str, st)  -- use_gcm read from st.use_gcm

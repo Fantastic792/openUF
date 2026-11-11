@@ -1,12 +1,11 @@
--- Tripwires for the hand-kept lists a controller-driven feature has to be in:
--- the per-tick resyncs in inform._tick, the teardown in
--- inform._forget_controller and state.lua's TYPED table. Nothing ties them
--- together in the code, so a feature added to one and not the others is a
--- reboot bug or survives a Forget (audit 2026-11-10, finding 14).
+-- Tripwires for the places a controller-driven feature has to be in: its row
+-- in mainloop.lua's M._FEATURES (tick, teardown, startup hooks), the phase
+-- order lists, and state.lua's TYPED table. A feature in one and not the
+-- others is a reboot bug or survives a Forget (audit 2026-11-10, finding 14).
 --
--- These read the SOURCE. A failure here does not say the code is wrong: it
--- says a list changed and the others need a look. Then update the table below
--- with how a Forget undoes the new thing.
+-- Most read the table or the SOURCE. A failure here does not say the code is
+-- wrong: it says a list changed and the others need a look. Then give the row
+-- a forget hook or a forget_by story.
 -- Run from project root: lua tests/run_tests.lua
 
 local state = dofile("openuf/state.lua")
@@ -52,38 +51,26 @@ local function empty_after_reset(field)
 	return v == nil or v == false or v == "" or (type(v) == "table" and next(v) == nil)
 end
 
--- Every pcall'd step of _tick before the POST, and how a Forget undoes what
--- it keeps alive. One of:
---   forget = "<text>"  that text is in _forget_controller (explicit teardown)
---   state  = {fields}  the step works off these state fields, which the
---                      reset before _forget_controller empties
---   vaps   = true      the step reconciles against the live VAPs and the
---                      wireless config, which ucihelper.forget removes
---   none   = "<why>"   nothing of the controller's outlives it
-local TICK = {
-	_stun_tick               = {state = {"stun_url"}},
-	_scan_job_tick           = {none = "runs one chunk of a queued sweep; keeps nothing"},
-	_rrm_tick                = {none = "collector follows the live VAPs and tears its own nft table down"},
-	_maybe_service_dfs_reset = {none = "one-shot request file from syswrapper"},
-	_vap_watch               = {none = "only opens the resync gates"},
-	_l2guard_resync          = {forget = "M._l2guard.reconcile"},
-	_bcfilt_resync           = {vaps = true},
-	-- Not verified on a mesh child: what a Forget does to its own uplink.
-	_backhaul_tick           = {state = {"backhaul_ul", "backhaul_parent"}},
-	_uplinkmon_resync        = {state = {"uplinkmon_enabled", "uplinkmon_host", "uplinkmon_down"}},
-	_meshvlan_resync         = {forget = "M._meshvlan.reconcile"},
-	_guest_resync            = {forget = "M._guest_enforce"},
-	_guest_wg_resync         = {forget = "M._guest_enforce"},
-	_hairpin_resync          = {vaps = true},
-	_usteer_filter_resync    = {forget = "M._usteer.set_enabled"},
-	_block_resync            = {forget = "M._firewall.reconcile"},
-	_sched_resync            = {state = {"sched_vaps_down"}},
-	_rrbguard_tick           = {none = "watches hostapd's own socket; no controller setting"},
-	_refresh_net_info        = {none = "reads the address; changes nothing"},
-	_shaper_resync           = {forget = "M._shaper.sync"},
-}
--- pcall'd in _tick, but plumbing rather than a feature.
+-- pcall'd in _tick before the POST, but plumbing rather than a feature.
 local TICK_PLUMBING = {_write_status = true}
+
+-- A fresh inform module; nothing it loads runs a command at load time.
+local function fresh_inform()
+	OPENUF_TEST_MODE = true
+	dofile("openuf/lib/lib.lua")
+	return dofile("openuf/inform.lua")
+end
+
+-- The feature table (mainloop.lua M._FEATURES / M._FEATURE_ORDER), as loaded.
+local FM = fresh_inform()
+
+local function quiet(fn)
+	local err = io.stderr
+	io.stderr = {write = function() end}
+	local ok, e = pcall(fn)
+	io.stderr = err
+	if not ok then error(e, 0) end
+end
 
 -- Modules inform.lua loads that can run a command, and are NOT named in
 -- _forget_controller: why a Forget may leave them alone.
@@ -121,30 +108,96 @@ test("every st field the code assigns is named in state.lua TYPED", function()
 	assert(#list == 0, "persisted without a type in state.lua TYPED: " .. table.concat(list, ", "))
 end)
 
-test("_tick's resyncs and the TICK table name the same steps", function()
+test("_tick runs no feature step outside the feature table", function()
 	local tick = strip_comments(body(slurp("openuf/mainloop.lua"), "_tick"))
 	local cut = assert(tick:find("M.http_post(", 1, true), "_tick no longer POSTs")
 	tick = tick:sub(1, cut)
-	local seen, problems = {}, {}
+	local problems = {}
 	for name in tick:gmatch("pcall%(M%.(_[%w_]+)[,%)]") do
-		seen[name] = true
-		if not TICK[name] and not TICK_PLUMBING[name] then
-			problems[#problems + 1] = "_tick runs " .. name .. " but TICK has no row: say how a Forget undoes it"
+		if not TICK_PLUMBING[name] then
+			problems[#problems + 1] = "_tick runs " .. name .. " itself: give it a row in M._FEATURES"
 		end
 	end
-	for name in pairs(TICK) do
-		if not seen[name] then
-			problems[#problems + 1] = "TICK names " .. name .. " but _tick no longer runs it"
+	if tick:find("M._maybe_scan_neighbours", 1, true) then
+		problems[#problems + 1] = "_tick runs _maybe_scan_neighbours itself"
+	end
+	for _, phase in ipairs({"tick", "tick_late"}) do
+		if not tick:find('M._run_features("' .. phase .. '"', 1, true) then
+			problems[#problems + 1] = "_tick does not run the " .. phase .. " phase"
 		end
 	end
 	table.sort(problems)
 	assert(#problems == 0, table.concat(problems, "; "))
 end)
 
-test("each TICK row's Forget story still holds in the source", function()
+test("every phase list names exactly the rows with that hook", function()
+	local F, O = FM._FEATURES, FM._FEATURE_ORDER
+	assert(type(F) == "table" and type(O) == "table", "no M._FEATURES / M._FEATURE_ORDER")
 	local problems = {}
-	for name, how in pairs(TICK) do
-		if how.forget then
+	for phase, list in pairs(O) do
+		local named = {}
+		for _, n in ipairs(list) do
+			if named[n] then problems[#problems + 1] = phase .. " names " .. n .. " twice" end
+			named[n] = true
+			if not (F[n] and type(F[n][phase]) == "function") then
+				problems[#problems + 1] = phase .. " names " .. n .. ", which has no " .. phase .. " hook"
+			end
+		end
+		for n, row in pairs(F) do
+			if row[phase] ~= nil and not named[n] then
+				problems[#problems + 1] = n .. " has a " .. phase .. " hook but the " .. phase .. " list skips it"
+			end
+		end
+	end
+	for n, row in pairs(F) do
+		for k in pairs(row) do
+			if k ~= "forget_by" and not O[k] then
+				problems[#problems + 1] = n .. " has a " .. k .. " hook but no phase runs " .. k
+			end
+		end
+	end
+	table.sort(problems)
+	assert(#problems == 0, table.concat(problems, "; "))
+end)
+
+test("_run_features calls the phase's hooks in list order with its arguments", function()
+	local M = fresh_inform()
+	local seen = {}
+	local function rec(n) return function(a, b, c) seen[#seen + 1] = n .. ":" .. a .. b .. c end end
+	M._FEATURES = {a = {tick = rec("a")}, b = {tick = rec("b"), forget = rec("x")}}
+	M._FEATURE_ORDER = {tick = {"b", "a"}, forget = {"b"}}
+	M._run_features("tick", 1, 2, 3)
+	assert_eq(table.concat(seen, " "), "b:123 a:123", "order and arguments")
+end)
+
+test("_run_features lets a hook's error through (it adds no pcall)", function()
+	local M = fresh_inform()
+	M._FEATURES = {a = {tick = function() error("boom") end}}
+	M._FEATURE_ORDER = {tick = {"a"}}
+	assert(not pcall(M._run_features, "tick"), "a raising hook was swallowed")
+end)
+
+-- How a Forget undoes what a tick/tick_late row keeps alive: a forget hook, or
+-- forget_by, one of:
+--   forget = "<text>"  that text is in _forget_controller (explicit teardown)
+--   state  = {fields}  the step works off these state fields, which the
+--                      reset before _forget_controller empties
+--   vaps   = true      the step reconciles against the live VAPs and the
+--                      wireless config, which ucihelper.forget removes
+--   none   = "<why>"   nothing of the controller's outlives it
+test("each ticking row's Forget story still holds", function()
+	local problems = {}
+	for name, row in pairs(assert(FM._FEATURES, "no M._FEATURES")) do
+		local how = row.forget_by
+		if not (row.tick or row.tick_late) or row.forget then
+			how = nil
+		elseif type(how) ~= "table" then
+			problems[#problems + 1] = name .. ": ticks, but has no forget hook and no forget_by"
+			how = nil
+		end
+		if not how then
+			-- nothing to check
+		elseif how.forget then
 			if not FORGET:find(how.forget, 1, true) then
 				problems[#problems + 1] = name .. ": " .. how.forget .. " is gone from _forget_controller"
 			end
@@ -187,6 +240,30 @@ test("a module that runs commands is torn down by Forget or says why not", funct
 	end
 	table.sort(problems)
 	assert(#problems == 0, table.concat(problems, "; "))
+end)
+
+-- ─── Behaviour pins: each caller runs its steps in today's order ───────────
+-- These drive the real code with every step stubbed after load (the way the
+-- other suites stub), so a refactor that reorders, drops or doubles a step
+-- fails here.
+
+test("_tick runs its steps in today's order", function()
+	local M = fresh_inform()
+	local seen = {}
+	local function rec(name) return function() seen[#seen + 1] = name end end
+	local STEPS = {"_stun_tick", "_maybe_scan_neighbours", "_scan_job_tick", "_rrm_tick",
+		"_maybe_service_dfs_reset", "_vap_watch", "_l2guard_resync", "_bcfilt_resync",
+		"_backhaul_tick", "_uplinkmon_resync", "_meshvlan_resync", "_guest_resync",
+		"_guest_wg_resync", "_hairpin_resync", "_usteer_filter_resync", "_block_resync",
+		"_sched_resync", "_rrbguard_tick", "_refresh_net_info", "build_json", "_shaper_resync"}
+	for _, n in ipairs(STEPS) do M[n] = rec(n) end
+	M._ucihelper, M._sysinfo = {}, {}
+	M._reload_if_changed = function() return nil end
+	M._write_status = function() end
+	M.build_json = function() seen[#seen + 1] = "build_json"; return "{}" end
+	M.build_packet = function() error("stop here") end
+	quiet(function() M._tick({}, {}, nil, {}) end)
+	assert_eq(table.concat(seen, " "), table.concat(STEPS, " "), "tick order")
 end)
 
 return tests
