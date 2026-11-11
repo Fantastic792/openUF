@@ -351,14 +351,13 @@ return {
 				-- rrm=115 (passive+active+table) and rrm=50 (passive+active).
 				assert_true(set["00:00:5e:00:53:10"], "full RRM client asked")
 				assert_true(set["00:00:5e:00:53:1b"], "passive+active client asked")
-				-- rrm=75 is beacon-TABLE only: acked every real request and
-				-- answered none, and hostapd refuses a passive request for it
-				-- outright. Asking it is pure airtime for no data.
-				assert_false(set["00:00:5e:00:53:22"],
-					"beacon-table-only client is NOT asked")
+				-- rrm=75 is beacon-TABLE only: asked in table mode (mode 2),
+				-- which hostapd accepts for it (plan v2.0 Task 7).
+				assert_true(set["00:00:5e:00:53:22"],
+					"beacon-table-only client is asked (table mode)")
 				-- rrm=0 -- most clients on a real network.
 				assert_false(set["00:00:5e:00:53:18"], "non-802.11k client is not asked")
-				assert_eq(#stas, 2, "exactly the two capable ones")
+				assert_eq(#stas, 3, "the two active ones plus the table-only one")
 			end)
 		end
 	},

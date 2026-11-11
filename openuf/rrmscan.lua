@@ -451,27 +451,31 @@ end
 -- get_clients exposes them in the first byte of "rrm".
 local RRM_BEACON_PASSIVE = 0x10  -- bit 4
 local RRM_BEACON_ACTIVE  = 0x20  -- bit 5
+local RRM_BEACON_TABLE   = 0x40  -- bit 6
 
--- Stations on this BSS that can actually go and look. Deliberately requires
--- passive or active measurement and NOT beacon-table: a table-only client
--- reports from a cache it may never have filled, and the one real example
--- observed acked every request and answered none. hostapd agrees about the
--- direction -- asking a table-only client for a passive measurement is
--- refused by hostapd itself with "does not support passive beacon report",
--- before anything reaches the air.
+-- Stations on this BSS that can answer a beacon request, and the mode to ask
+-- each in (second return, modes[mac]): 1 (active) for a passive or active
+-- client, 2 (beacon table) for a table-only one. hostapd refuses a passive
+-- or active request to a table-only client ("does not support passive beacon
+-- report"), so it gets mode 2: it reports from its own scan cache and does
+-- not leave the channel. The one table-only client observed acked and never
+-- answered; mainloop's _rrm_asked bench caps what that costs (owner OK
+-- 2026-11-11, plan v2.0 Task 7).
 function M.capable_stations(ifname)
 	if not util.valid_ifname(ifname) then return {} end
 	local out = M._popen("ubus call hostapd." .. ifname .. " get_clients 2>/dev/null") or ""
-	local stations = {}
+	local stations, modes = {}, {}
 	for mac, block in out:gmatch('"(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)":%s*(%b{})') do
 		local rrm = tonumber(block:match('"rrm":%s*%[%s*(%d+)')) or 0
 		if rrm % (RRM_BEACON_PASSIVE * 2) >= RRM_BEACON_PASSIVE
 		   or rrm % (RRM_BEACON_ACTIVE * 2) >= RRM_BEACON_ACTIVE then
-			stations[#stations + 1] = mac
+			stations[#stations + 1], modes[mac] = mac, 1
+		elseif rrm % (RRM_BEACON_TABLE * 2) >= RRM_BEACON_TABLE then
+			stations[#stations + 1], modes[mac] = mac, 2
 		end
 	end
 	table.sort(stations)  -- deterministic, so round-robin actually rotates
-	return stations
+	return stations, modes
 end
 
 -- Ask one station for a full sweep. mode 1 is ACTIVE measurement: the client

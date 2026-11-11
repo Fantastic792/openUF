@@ -309,7 +309,8 @@ function M._rrm_tick(cfg, st)
 	local ok_o, objs = pcall(rrm.hostapd_objects)
 	for _, obj in ipairs(ok_o and objs or {}) do
 		local ifname = obj:match("^hostapd%.(.+)$")
-		local ok_s, stas = pcall(rrm.capable_stations, ifname)
+		local ok_s, stas, modes = pcall(rrm.capable_stations, ifname)
+		modes = type(modes) == "table" and modes or {}
 		for _, sta in ipairs(ok_s and stas or {}) do
 			local key   = tostring(sta):lower()
 			local asked = M._rrm_asked[key]
@@ -321,7 +322,7 @@ function M._rrm_tick(cfg, st)
 				benched = false
 			end
 			if not benched then
-				cands[#cands + 1] = {ifname = ifname, sta = sta}
+				cands[#cands + 1] = {ifname = ifname, sta = sta, mode = modes[sta]}
 			end
 		end
 	end
@@ -352,7 +353,7 @@ function M._rrm_tick(cfg, st)
 	if ok_c and type(caps) == "table" and caps.channel and caps.channel <= 14 then
 		op_class = 81
 	end
-	pcall(rrm.request, c.ifname, c.sta, {op_class = op_class})
+	pcall(rrm.request, c.ifname, c.sta, {op_class = op_class, mode = c.mode})
 	return true
 end
 
