@@ -182,6 +182,10 @@ local TYPED = {
 	guest_authorized          = "table",
 	-- The RADIUS DAS relay's plan (inform._das_plan): {port, wlans}.
 	das                       = "table",
+	-- SNMP Monitoring (snmp.lua): openUF owns /etc/config/snmpd (the device's
+	-- file kept in /etc/openuf/snmpd.orig), and whether snmpd was enabled before.
+	snmp_owned                = "boolean",
+	snmp_was_enabled          = "boolean",
 	-- The portal's enforcement facts (guestportal.parse) while it is on;
 	-- the nft tables are rebuilt from it at startup.
 	guest_portal              = "table",
