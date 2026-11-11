@@ -95,7 +95,17 @@ local function uci_iface(ifname)
 	return nil
 end
 
+-- libuci returns a plain option as a string (netifd splits it on spaces) and
+-- a list as a table; compare and check both forms as a list of words.
+local function words(v)
+	if type(v) ~= "string" then return v end
+	local t = {}
+	for w in v:gmatch("%S+") do t[#t + 1] = w end
+	return t
+end
+
 local function same(a, b)
+	if type(a) == "table" or type(b) == "table" then a, b = words(a), words(b) end
 	if type(a) == "table" and type(b) == "table" then
 		if #a ~= #b then return false end
 		for i = 1, #a do if tostring(a[i]) ~= tostring(b[i]) then return false end end
@@ -242,7 +252,8 @@ function M.restore(iface, snap, ifname)
 		local function addr(v) return is_ipv4(v) or is_cidr(v) end
 		local function each(v, ok)
 			if v == nil then return true end
-			if type(v) ~= "table" then return ok(v) end
+			v = words(v)
+			if type(v) ~= "table" then return false end
 			for _, x in ipairs(v) do if not ok(x) then return false end end
 			return #v > 0
 		end

@@ -413,4 +413,31 @@ return {
 			end)
 		end
 	},
+	{
+		-- libuci hands a plain option back as a string, a list as a table.
+		name = "netconfig: uci a plain option equal to the pushed list is no change",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "static", ipaddr = "192.0.2.10",
+					netmask = "255.255.255.0", gateway = "192.0.2.1", dns = "192.0.2.53"}},
+					function(u, cmds)
+				assert_true(netconfig.apply_static("br-lan", "192.0.2.10", "255.255.255.0",
+					"192.0.2.1", {"192.0.2.53"}, "lan"), "applied")
+				assert_eq(u.commits, 0, "no commit")
+				assert_eq(#cmds, 0, "no reload")
+			end)
+		end
+	},
+	{
+		name = "netconfig: uci restore takes a space-separated dns option",
+		fn = function()
+			with_uci({lan = {[".type"] = "interface", proto = "dhcp"}}, function(u)
+				assert_true(netconfig.restore("br-lan", {addrs = {}, uci = {proto = "static",
+					ipaddr = "192.0.2.10", netmask = "255.255.255.0",
+					dns = "192.0.2.53 192.0.2.54"}}, "lan"), "restored")
+				assert_eq(u.db.network.lan.dns, "192.0.2.53 192.0.2.54", "written back as it was")
+				assert_false(netconfig.restore("br-lan", {addrs = {}, uci = {proto = "static",
+					dns = "192.0.2.53 x;y"}}, "lan"), "a bad word still refused")
+			end)
+		end
+	},
 }
