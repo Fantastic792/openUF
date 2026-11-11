@@ -3405,6 +3405,51 @@ return {
 		end
 	},
 	{
+		-- Shapes hostapd would misread (Task 9g, from fonix232/openUF): a ","
+		-- in a realm name ends hostapd's realm field and the rest is read as
+		-- EAP methods; a language code is letters only. A missing language
+		-- defaults to "eng", as fonix232 does. UTF-8 names stay allowed.
+		name = "inform packet: Hotspot 2.0 drops a realm or language hostapd would misread",
+		fn = function()
+			local sys_cfg = table.concat({
+				"aaa.1.ssid=openuf-eap", "aaa.1.status=enabled", "aaa.1.wpa=2",
+				"aaa.1.wpa.key.1.mgmt=WPA-EAP", "aaa.1.wpa.1.pairwise=CCMP",
+				"aaa.1.radius.auth.1.ip=192.0.2.10",
+				"aaa.1.radius.auth.1.port=1812",
+				"aaa.1.radius.auth.1.secret=openufradius",
+				"aaa.1.hs20.status=enabled",
+				"aaa.1.hs20.venue_name.1.name=Caf\195\169 openUF",
+				"aaa.1.hs20.venue_name.2.lang=e:n",
+				"aaa.1.hs20.venue_name.2.name=Bad Lang",
+				"aaa.1.hs20.venue_name.3.lang=fra",
+				"aaa.1.hs20.venue_name.3.name=Labo openUF",
+				"aaa.1.hs20.nai_realm.1.name=exa,mple.com",
+				"aaa.1.hs20.nai_realm.1.eap_method=21",
+				"aaa.1.hs20.nai_realm.2.name=a.example.com;b.example.net",
+				"aaa.1.hs20.nai_realm.2.eap_method=13",
+				"aaa.1.hs20.friendly_name.1.text=openUF Operator",
+				"aaa.1.hs20.friendly_name.2.language=12",
+				"aaa.1.hs20.friendly_name.2.text=Bad Lang",
+				"wireless.1.ssid=openuf-eap", "wireless.1.parent=radio0",
+				"wireless.1.usage=user",
+				"radio.1.phyname=radio0", "radio.1.devname=ath0",
+				"radio.1.channel=auto", "radio.1.status=enabled",
+			}, "\n") .. "\n"
+			local _, vt = inform._parse_wifi_system_cfg(sys_cfg)
+			local hs = vt[1].hs20
+			assert_true(hs ~= nil, "the hs20 block parsed")
+			assert_eq(#hs.venue_name, 2, "the bad-language venue dropped")
+			assert_eq(hs.venue_name[1].lang, "eng", "missing language -> eng")
+			assert_eq(hs.venue_name[1].name, "Caf\195\169 openUF", "UTF-8 name kept")
+			assert_eq(hs.venue_name[2].lang, "fra", "a good language kept")
+			assert_eq(#hs.nai_realm, 1, "the realm with a comma dropped")
+			assert_eq(hs.nai_realm[1].name, "a.example.com;b.example.net",
+				"two realms in one entry, ;-separated, kept")
+			assert_eq(#hs.friendly_name, 1, "the bad-language operator name dropped")
+			assert_eq(hs.friendly_name[1].lang, "eng", "missing language -> eng")
+		end
+	},
+	{
 		name = "inform packet: the Hotspot 2.0 key table is indexed once, not once per collector",
 		fn = function()
 			-- _wire_hs20 has seven indexed collectors plus one per NAI realm,

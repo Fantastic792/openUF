@@ -2939,7 +2939,11 @@ end
 -- qos.map.*/qos.exception.* at all. A full-profile push (lab capture, every
 -- field the subset allows filled) carried exactly the keys read below and
 -- none of the others. So the rest is deliberately NOT read: there is no
--- producer to test a consumer against.
+-- producer to test a consumer against. Re-checked for Task 9g (decompiled
+-- VAZShipWTNxlo.Wbsqrl): the emitter reads the embedded object only,
+-- hotspot2conf_id is never resolved into a push, and those keys are gated on
+-- fields (hessid_used, gas_advanced, ...) the WLAN schema lacks.
+-- fonix232/openUF reads them; nothing sends them.
 --
 -- Independently unimplementable even if they did arrive:
 --   * osu.* / icon.*  -- the installed hostapd (wpad-mbedtls 2025.08.26,
@@ -2950,6 +2954,14 @@ end
 --     file from disk, and the controller transfers it by another channel.
 --
 -- Returns a table, or nil when Hotspot 2.0 is off for this WLAN.
+-- A venue or operator name's language: two or three letters, "eng" when the
+-- controller leaves it out (as fonix232/openUF does). Anything else would
+-- shift hostapd's <lang>:<text> split.
+local function _wire_hs20_lang(v)
+	if v == nil or v == "" then return "eng" end
+	return type(v) == "string" and v:match("^%a%a%a?$") and v or nil
+end
+
 local function _wire_hs20(a)
 	if not _wire_bool(a["hs20.status"]) then return nil end
 
@@ -2986,7 +2998,7 @@ local function _wire_hs20(a)
 
 	hs.venue_name = _wire_indexed(idx, "venue_name", "name", function(i)
 		local p = "hs20.venue_name." .. i .. "."
-		local lang, name = _wire_text(a[p .. "lang"], 3), _wire_text(a[p .. "name"])
+		local lang, name = _wire_hs20_lang(a[p .. "lang"]), _wire_text(a[p .. "name"])
 		if not (lang and name) then return nil end
 		return {lang = lang, name = name, url = _wire_text(a[p .. "url"], 1024)}
 	end)
@@ -2994,7 +3006,10 @@ local function _wire_hs20(a)
 	hs.nai_realm = _wire_indexed(idx, "nai_realm", "name", function(i)
 		local p = "hs20.nai_realm." .. i .. "."
 		if a[p .. "status"] and not _wire_bool(a[p .. "status"]) then return nil end
+		-- RFC 7542 realm characters, ";" between the realms of one entry: a
+		-- "," would end hostapd's realm field and turn the rest into EAP methods.
 		local name = _wire_text(a[p .. "name"])
+		if name and not name:match("^[%w%.%-;]+$") then name = nil end
 		local eap  = _wire_range(a[p .. "eap_method"], 1, 255)
 		if not (name and eap) then return nil end
 		-- The auth parameters are a THIRD level down, under
@@ -3040,7 +3055,7 @@ local function _wire_hs20(a)
 	hs.friendly_name = _wire_indexed(idx, "friendly_name", "text",
 		function(i)
 			local p = "hs20.friendly_name." .. i .. "."
-			local lang = _wire_text(a[p .. "language"], 3)
+			local lang = _wire_hs20_lang(a[p .. "language"])
 			local text = _wire_text(a[p .. "text"])
 			if not (lang and text) then return nil end
 			return {lang = lang, text = text}
