@@ -177,6 +177,8 @@ local TYPED = {
 	-- ({mac = epoch s}, from authorize-guest). Only carried by pushes and
 	-- one-shot cmds, so both have to outlive a restart.
 	guest_wlans               = "table",
+	-- Every guest WLAN, portal or not: where the guest restrictions apply.
+	guest_wlans_all           = "table",
 	guest_authorized          = "table",
 	-- The portal's enforcement facts (guestportal.parse) while it is on;
 	-- the nft tables are rebuilt from it at startup.

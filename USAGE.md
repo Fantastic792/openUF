@@ -2066,6 +2066,14 @@ itself when the controller pushes a guest WLAN with the portal enabled
 (`redirector.status=enabled` plus the guest `ebtables.*` rules). It turns off, removing
 everything, when the portal or the guest WLAN goes away, or on a factory reset.
 
+**Guest restrictions without the portal** (ported from [fonix232/openUF](https://github.com/fonix232/openUF), MIT; lab-unvalidated). A guest WLAN whose
+portal is off (`redirector.status=disabled`), or on with no usable `http(s)` URL, still gets
+its guest rules enforced: the same `bridge openuf_guest` drops (restricted subnets, IPv6,
+multicast) with nothing redirected, no listener, no `guest_token`, and no offline (selfrun)
+mode. Such guests are reported as authorized, since there is no portal to pass. When the
+controller restricts guest DNS (`ALLOW_DNS_SERVERS`), guest DNS goes only to the listed
+servers, with or without the portal.
+
 **What runs.** `guestportal.lua` builds two nftables tables from the pushed rules.
 
 `bridge openuf_guest` hooks every live netdev of the guest WLANs. For an unauthorized guest:

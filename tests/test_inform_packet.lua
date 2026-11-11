@@ -9249,11 +9249,28 @@ return {
 				push(st, "enabled")
 				assert_eq(calls.listen, 1, "a second push does not listen again")
 				assert_eq(st.guest_token, token, "nor change the token")
-				push(st, "disabled", false)
-				assert_eq(st.guest_portal, nil, "off")
-				assert_eq(calls.reconcile[3].spec, nil, "tables torn down")
+				-- The portal off, the WLAN still a guest one: its restrictions stay.
+				asked_ids = nil
+				push(st, "disabled")
+				assert_true(st.guest_portal and st.guest_portal.enabled, "the guest rules kept")
+				assert_false(st.guest_portal.portal, "without the portal")
+				assert_true(asked_ids and asked_ids.w1, "the guest WLAN's netdevs, portal or not")
+				assert_eq(next(st.guest_wlans), nil, "authorized is reported only on a portal WLAN")
+				assert_eq(calls.reconcile[3].spec.portal, false, "rebuilt without the portal")
+				assert_eq(#calls.reconcile[3].vaps, 2, "on both guest netdevs")
 				assert_eq(calls.closed, 1, "listener closed")
 				assert_eq(inform._guest_server, nil, "and forgotten")
+				assert_eq(inform._guest_ctx, nil, "no portal answer")
+				inform._inform_fails = inform.GUEST_SELFRUN_FAILS
+				st.guest_selfrun = "off"
+				inform._guest_selfrun(st, false)
+				assert_false(inform._guest_selfrun_on, "no selfrun without a portal")
+				assert_eq(st.guest_vaps_down, nil, "and the guest WLANs stay up")
+				inform._inform_fails, st.guest_selfrun = 0, nil
+				push(st, "disabled", false)
+				assert_eq(st.guest_portal, nil, "off")
+				assert_eq(calls.reconcile[4].spec, nil, "tables torn down")
+				assert_eq(calls.closed, 1, "closed once")
 				assert_eq(inform._guest_built, nil, "nothing built")
 			end)
 			inform._guestportal, inform._ucihelper, inform._state.save = real, nil, save

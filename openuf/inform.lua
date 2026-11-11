@@ -2394,7 +2394,8 @@ function M.build_json(st, cfg, ufhw)
 		-- Guest portal: the controller refuses to authorize a guest on an AP
 		-- that reported no guest_token ("Missing Guest Token in AP[..]
 		-- during guest authorization"). Only while the portal is on.
-		guest_token      = (type(st.guest_portal) == "table" and st.guest_portal.enabled)
+		guest_token      = (type(st.guest_portal) == "table" and st.guest_portal.enabled
+				and st.guest_portal.portal ~= false)
 			and st.guest_token or nil,
 		-- Real devices report this under the hyphenated key "system-stats"
 		-- with {cpu, mem, uptime} as percentage/uptime strings -- confirmed
@@ -4886,6 +4887,7 @@ function M.handle_response(json_str, st, cfg)
 			-- system_cfg lists every WLAN and redirector.status, so this
 			-- replaces the record outright.
 			st.guest_wlans = M._guest_wlans(vap_table, sys_raw)
+			st.guest_wlans_all = M._guest_wlans(vap_table, sys_raw, true)
 			-- Mesh backhaul: the plan ucihelper.apply_config writes, or nil when the
 			-- push carries no enabled mesh block (the wired, non-meshing case).
 			local mesh_cfg = M._parse_mesh_system_cfg(sys_raw)
@@ -5454,11 +5456,12 @@ M.GUEST_LEDGER_MAX = 512
 -- Set of wlanconf ids (vap.wlanconf_id) on which stations must pass the
 -- portal: guest WLANs while redirector.status=enabled. Without the portal a
 -- guest WLAN is only isolated, and the controller does not check
--- `authorized` there.
-function M._guest_wlans(vap_table, sys_raw)
+-- `authorized` there. all: every guest WLAN, portal or not (the ones whose
+-- restrictions guestportal.lua enforces).
+function M._guest_wlans(vap_table, sys_raw, all)
 	local out = {}
-	if type(sys_raw) ~= "string"
-			or not ("\n" .. sys_raw .. "\n"):find("\nredirector%.status=enabled\n") then
+	if type(sys_raw) ~= "string" or not (all
+			or ("\n" .. sys_raw .. "\n"):find("\nredirector%.status=enabled\n")) then
 		return out
 	end
 	for _, vap in ipairs(vap_table or {}) do

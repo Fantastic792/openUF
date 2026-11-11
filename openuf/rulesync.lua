@@ -22,11 +22,11 @@ function M._guest_macs(st)
 	return out
 end
 
--- The portal WLANs' live netdevs, each with its SSID and bridge MAC.
+-- The guest WLANs' live netdevs (portal or not), each with its SSID and bridge MAC.
 function M._guest_vaps(st)
 	local ufuci = M._ucihelper
 	if not (ufuci and ufuci.wlanconf_ifnames) then return {} end
-	local ok, vaps = pcall(ufuci.wlanconf_ifnames, st.guest_wlans)
+	local ok, vaps = pcall(ufuci.wlanconf_ifnames, st.guest_wlans_all or st.guest_wlans)
 	if not ok or type(vaps) ~= "table" then return {} end
 	for _, v in ipairs(vaps) do v.bridge_mac = M._guestportal.bridge_mac(v.ifname) end
 	return vaps
@@ -165,6 +165,15 @@ function M._guest_enforce(st, vaps)
 		M._guest_server = nil
 		return 0
 	end
+	if spec.portal == false then
+		-- Restrictions only: no token, no listener, no selfrun.
+		vaps = vaps or M._guest_vaps(st)
+		local n = gp.reconcile(spec, vaps, M._guest_macs(st), false, M._guest_garden(st))
+		M._guest_built, M._guest_ctx = guest_vaps_key(vaps), nil
+		if M._guest_server then M._guest_server:close() end
+		M._guest_server = nil
+		return n
+	end
 	-- The portal's guest_token (build_json). Its value would key the
 	-- controller's encrypted-cookie redirect, which openUF does not claim;
 	-- the plain id=/ap= redirect only needs one to exist.
@@ -252,7 +261,7 @@ function M._guest_selfrun(st, contacted)
 	local selfrun = M._inform_fails >= M.GUEST_SELFRUN_FAILS
 		or (st.guest_vaps_down ~= nil and not contacted)
 	local mode
-	if type(spec) == "table" and spec.enabled == true and selfrun then
+	if type(spec) == "table" and spec.enabled == true and spec.portal ~= false and selfrun then
 		mode = (st.guest_selfrun == "off") and "off" or "pass"
 	end
 	local changed = false

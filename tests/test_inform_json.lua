@@ -894,6 +894,10 @@ return {
 			assert_eq(on.guest_token, tok, "portal on")
 			local off = build({st = {guest_token = tok}})
 			assert_eq(off.guest_token, nil, "portal off: not reported")
+			local plain = build({st = {guest_portal = {enabled = true, portal = false}, guest_token = tok}})
+			assert_eq(plain.guest_token, nil, "guest restrictions without the portal: not reported")
+			local new = build({st = {guest_portal = {enabled = true, portal = true}, guest_token = tok}})
+			assert_eq(new.guest_token, tok, "portal on, said so")
 		end
 	},
 	{
