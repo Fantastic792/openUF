@@ -4,10 +4,21 @@ import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
+
+from labtest.safety import flashguard, packguard  # noqa: E402
+
+
+def guards(args):
+    hits = flashguard.scan(REPO)
+    problems = packguard.check(REPO)
+    return [("flash_guard", not hits, ", ".join(f"{p}:{n}" for p, n, _ in hits[:3])),
+            ("pack_guard", not problems, "; ".join(problems))]
+
 
 # stage name -> function(args) returning [(check_name, passed, detail)]
-STAGES = {}
+STAGES = {"guards": guards}
 
 
 def main(argv=None):
