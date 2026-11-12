@@ -23,6 +23,15 @@ python3 labtest/run.py <stage> [--target vm1]            # a stage, default targ
 
 `proof` and `plug` refuse any target whose `kind` is not `vm`.
 
+## Stages (part 2: the feature table)
+
+| Stage | What it checks | Needs | Time |
+|---|---|---|---|
+| `catalog` | Reads the controller's field list (`fields_dir`) and prints files, fields, in-scope fields (WlanConf / Device / Setting, no SettingSuper) and bool / enum / other counts. Writes `catalog.json` | `fields_dir` | ~1 s |
+
+`fields_dir` is the controller's `api/fields` folder, unpacked once from its `ace.jar`
+(`unzip -o -q ace.jar 'api/fields/*' -d /root/vmlab/unifi-fields`).
+
 Results go to `results_dir` (default `/root/vmlab/results`): `timer-proof.json` and `plug.json`,
 each stamped with the git commit it ran on (`+dirty` when the tree had changes) and the date.
 
@@ -47,6 +56,7 @@ Everything about the lab lives outside the repo, in `/root/vmlab/labtest.json`
   "ssh_key": "/root/vmlab/id_lab",
   "lab_sh": "/root/vmlab/lab.sh",
   "results_dir": "/root/vmlab/results",
+  "fields_dir": "/root/vmlab/unifi-fields/api/fields",
   "targets": { "vm1": { "host": "<vm1's lab address>", "kind": "vm", "lab_n": 1 } }
 }
 ```

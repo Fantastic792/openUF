@@ -7,7 +7,7 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from labtest import target, unifi  # noqa: E402
+from labtest import catalog, results, target, unifi  # noqa: E402
 from labtest.safety import flashguard, packguard, plug, proof  # noqa: E402
 
 
@@ -39,18 +39,29 @@ def pull_plug(args):
     return [("plug", r["pass"], detail)]
 
 
+def catalog_stage(args):
+    conf = target.load_config()
+    d = conf.get("fields_dir")
+    if not d or not os.path.isdir(d):
+        return [("catalog", False, "no fields_dir")]
+    s = catalog.summary(catalog.load(d))
+    results.save(conf, "catalog", s)
+    return [("catalog", s["fields"] > 0, f"{s['files']} files, {s['fields']} fields, in scope {s['in_scope']}, "
+                                         f"kinds in scope {s['kinds']}", True)]
+
+
 def safety(args):
     out = []
     for stage in (guards, timer_proof, pull_plug):
         checks = stage(args)
         out += checks
-        if not all(passed for _, passed, _ in checks):
+        if not all(c[1] for c in checks):
             break
     return out
 
 
 # stage name -> function(args) returning [(check_name, passed, detail)]
-STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety}
+STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety, "catalog": catalog_stage}
 
 
 def main(argv=None):
@@ -62,8 +73,8 @@ def main(argv=None):
         print(f"unknown stage {args.stage}; stages: {', '.join(STAGES) or '(none yet)'}")
         return 2
     failed = False
-    for name, passed, detail in STAGES[args.stage](args):
-        print(f"PASS {name}" if passed else f"FAIL {name}: {detail}")
+    for name, passed, detail, *show in STAGES[args.stage](args):  # show: print the detail on PASS too
+        print((f"PASS {name}: {detail}" if show else f"PASS {name}") if passed else f"FAIL {name}: {detail}")
         failed |= not passed
     return 1 if failed else 0
 
