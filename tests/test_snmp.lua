@@ -20,7 +20,8 @@ local function mock_uci(db, commits)
 		if v == nil then
 			db[c][s] = {[".name"] = s, [".type"] = o}
 		else
-			db[c][s] = db[c][s] or {[".name"] = s, [".type"] = s}
+			-- real UCI: an option on a section that does not exist fails
+			if not db[c][s] then return false end
 			db[c][s][o] = tostring(v)
 		end
 		return true
@@ -71,6 +72,22 @@ local function fresh(opts)
 		writes[#writes + 1] = {path = p, private = private}
 		if opts.backup_fails and p == snmp.BACKUP then return false end
 		files[p] = data
+		if p == snmp.CONFIG then
+			-- a restored file is what UCI reads next: feed it back into the db
+			local sdb, cur = {}, nil
+			for line in data:gmatch("[^\n]+") do
+				local t, n = line:match("^config%s+(%S+)%s*(%S*)")
+				if t then
+					n = (n ~= "") and n or t
+					cur = {[".name"] = n, [".type"] = t}
+					sdb[n] = cur
+				else
+					local k, v = line:match("^%s*option%s+(%S+)%s+(.-)%s*$")
+					if k and cur then cur[k] = v end
+				end
+			end
+			db.snmpd = sdb
+		end
 		return true
 	end
 	snmp._remove = function(p) files[p] = nil end
@@ -148,7 +165,11 @@ return {
 				assert_true(snmp.apply(snmp.parse(ALL), st, true), "applied")
 			end)
 			assert_eq(f.files[snmp.BACKUP], STOCK, "original kept")
-			assert_true(f.writes[1].path == snmp.BACKUP and f.writes[1].private, "backup written private")
+			local bw
+			for _, w in ipairs(f.writes) do if w.path == snmp.BACKUP then bw = w end end
+			assert_true(bw and bw.private, "backup written private")
+			assert_eq(f.files[snmp.WAS], "0\n", "was-enabled kept beside the backup")
+			assert_true(cmd_has(f.cmds, "chmod 600 '" .. snmp.CONFIG .. "'"), "live config private")
 			assert_true(st.snmp_owned, "owned")
 			assert_false(st.snmp_was_enabled, "was off before")
 			local s = f.db.snmpd
@@ -296,6 +317,71 @@ return {
 			assert_true(cmd_has(f.cmds, "snmpd restart"), "restarted on it: it was on before")
 			assert_nil(st.snmp_owned, "ledger cleared")
 			assert_false(snmp.restore_if_owned({}), "never owned: nothing")
+		end
+	},
+	{
+		name = "snmp: a crash before the state save still restores the original enabled flag",
+		fn = function()
+			local f = fresh({enabled = false})
+			with_stderr(function() snmp.apply(snmp.parse(ALL), {}, true) end)
+			-- the daemon died here: st is gone, and snmpd is now enabled by openUF
+			local real = snmp._exec
+			snmp._exec = function(cmd)
+				if cmd:find(" enabled", 1, true) then f.cmds[#f.cmds + 1] = cmd; return 0 end
+				return real(cmd)
+			end
+			local st = {}
+			with_stderr(function() snmp.apply(snmp.parse(ALL .. "snmp.community=other\n"), st, true) end)
+			assert_false(st.snmp_was_enabled, "read from beside the backup, not re-asked")
+			local n = #f.cmds
+			with_stderr(function() snmp.apply(snmp.parse("radio.1.channel=6\n"), st, true) end)
+			local after = table.concat(f.cmds, "\n", n + 1)
+			assert_contains(after, "snmpd disable", "still disabled: it was off before")
+			assert_nil(f.files[snmp.WAS], "sidecar dropped")
+			-- no sidecar (an older build's backup): the state value decides
+			local g = fresh()
+			g.files[snmp.BACKUP] = STOCK
+			local st2 = {}
+			with_stderr(function() snmp.apply(snmp.parse(ALL), st2, true) end)
+			assert_true(st2.snmp_was_enabled, "fallback: asked the device")
+		end
+	},
+	{
+		name = "snmp: off, on, off, on gives the device's own config back each time and leaks nothing",
+		fn = function()
+			local f = fresh({enabled = false})
+			local function copy(t)
+				local r = {}
+				for k, v in pairs(t) do r[k] = type(v) == "table" and copy(v) or v end
+				return r
+			end
+			local function same(a, b)
+				if type(a) ~= "table" or type(b) ~= "table" then return a == b end
+				for k, v in pairs(a) do if not same(v, b[k]) then return false end end
+				for k in pairs(b) do if a[k] == nil then return false end end
+				return true
+			end
+			local db0 = copy(f.db.snmpd)
+			local off = snmp.parse("radio.1.channel=6\n")
+			local st = {}
+			for round = 1, 2 do
+				with_stderr(function() assert_true(snmp.apply(snmp.parse(ALL), st, true), "on " .. round) end)
+				assert_eq(f.db.snmpd.public.community, "c0mmunity", "controller's config " .. round)
+				assert_eq(f.files[snmp.BACKUP], STOCK, "kept " .. round)
+				if round == 1 then
+					with_stderr(function() assert_true(snmp.apply(off, st, true), "off " .. round) end)
+					assert_true(same(f.db.snmpd, db0), "device db back " .. round)
+					assert_eq(f.files[snmp.CONFIG], STOCK, "device file back " .. round)
+					assert_nil(f.files[snmp.BACKUP], "no backup left " .. round)
+					assert_nil(f.files[snmp.WAS], "no sidecar left " .. round)
+					assert_nil(next(st), "ledger empty " .. round)
+				end
+			end
+			with_stderr(function() assert_true(snmp.restore_if_owned(st), "last off") end)
+			assert_true(same(f.db.snmpd, db0), "device db back at the end")
+			assert_nil(f.files[snmp.BACKUP], "no backup left")
+			assert_nil(f.files[snmp.WAS], "no sidecar left")
+			assert_nil(f.db.snmpd.openuf_v3, "no v3 user leaked")
 		end
 	},
 }

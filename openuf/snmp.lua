@@ -25,7 +25,8 @@
 	While SNMP is on, openUF owns /etc/config/snmpd: the device's file is
 	kept once in /etc/openuf/snmpd.orig (0600: it may hold a community;
 	written only when no copy exists, so openUF's own config can never become
-	the "original"), with whether snmpd was enabled (st.snmp_was_enabled),
+	the "original"), with whether snmpd was enabled (st.snmp_was_enabled, and in snmpd.was beside
+	the backup so a crash before the state save cannot lose it),
 	and the config is rewritten from the push -- one read-only community, one
 	v3 user, sysLocation/sysContact -- so no community the controller does
 	not know about is left answering. Off (or a Forget) puts the kept file
@@ -45,6 +46,7 @@ local util = package.loaded["openuf.util"]
 
 M.CONFIG    = "/etc/config/snmpd"
 M.BACKUP    = "/etc/openuf/snmpd.orig"
+M.WAS       = "/etc/openuf/snmpd.was"
 M.INIT      = "/etc/init.d/snmpd"
 M.APK_DB    = "/lib/apk/db/installed"
 M.OPKG_INFO = "/usr/lib/opkg/info/"
@@ -233,7 +235,19 @@ local function write_config(w)
 		for k, v in pairs(sec[2]) do cursor:set("snmpd", name, k, v) end
 	end
 	cursor:commit("snmpd")
+	-- the community / v3 password are in it; uci commit leaves it 0644
+	if not util.exec_ok(M._exec("chmod 600 '" .. M.CONFIG .. "'")) then
+		io.stderr:write("snmp: cannot make " .. M.CONFIG .. " private (chmod failed)\n")
+	end
 	return true
+end
+
+-- The kept enabled flag: true/false, nil when missing or not 0/1 (an older
+-- build's backup has none).
+local function kept_was()
+	local k = M._read_file(M.WAS)
+	if k and k:match("^[01]\n?$") then return k:sub(1, 1) == "1" end
+	return nil
 end
 
 -- Keep the device's file (once) and whether snmpd was enabled. false when
@@ -241,14 +255,26 @@ end
 local function take_over(st)
 	if st.snmp_owned then return true end
 	if not M._read_file(M.BACKUP) then
+		-- beside the backup, before it: a crash before the state save must not
+		-- make the next run re-ask a snmpd that openUF has since enabled
+		local was = util.exec_ok(M._exec(M.INIT .. " enabled >/dev/null 2>&1"))
+		if not M._write_file(M.WAS, was and "1\n" or "0\n", true) then
+			io.stderr:write("snmp: cannot keep snmpd's enabled state in " .. M.WAS
+				.. " -- not taking snmpd over\n")
+			return false
+		end
 		local orig = M._read_file(M.CONFIG)
 		if orig and not M._write_file(M.BACKUP, orig, true) then
 			io.stderr:write("snmp: cannot keep a copy of " .. M.CONFIG .. " in " .. M.BACKUP
 				.. " -- not taking snmpd over\n")
+			M._remove(M.WAS)
 			return false
 		end
 	end
-	st.snmp_was_enabled = util.exec_ok(M._exec(M.INIT .. " enabled >/dev/null 2>&1"))
+	st.snmp_was_enabled = kept_was()
+	if st.snmp_was_enabled == nil then
+		st.snmp_was_enabled = util.exec_ok(M._exec(M.INIT .. " enabled >/dev/null 2>&1"))
+	end
 	st.snmp_owned = true
 	return true
 end
@@ -260,8 +286,12 @@ local function restore(st)
 	else
 		write_config(wanted(nil))
 	end
+	-- the sidecar outlives a lost state; the state value only without it
+	local was = kept_was()
+	if was == nil then was = st.snmp_was_enabled end
+	M._remove(M.WAS)
 	if M.installed() then
-		if st.snmp_was_enabled == false then
+		if was == false then
 			M._exec(M.INIT .. " stop >/dev/null 2>&1")
 			M._exec(M.INIT .. " disable >/dev/null 2>&1")
 		else
