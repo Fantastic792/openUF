@@ -1763,7 +1763,7 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 | `wifi_caps` | `0x80` (MESH) | — | **No observable effect** (2026-10-03): pushes with and without it were identical. |
 
 `wifi_caps2` is a **second, entirely separate** bitmask from `wifi_caps`. Since 2026-09-28
-openUF claims `wifi_caps` `0xC` (+`0x1000000` since 2026-11-12, +`0x20`, +`0x100000` where the device-side probe passes),
+openUF claims `wifi_caps` `0x1C` (+`0x801` with the backhaul module, +`0x1000000` since 2026-11-12, +`0x20`, +`0x100000` where the device-side probe passes),
 `wifi_caps2` `0x60` and `radio_caps2` `0x3` (+`0x8`); `debug_caps` in `conf.lua` still
 replaces any mask whole for an experiment. The rows below come from upstream's full sweep of
 the controller's gates.
@@ -1852,7 +1852,7 @@ hostapd generator and the 10.6.106 jar:
   `supportsRoamTopologyStats` (`wifi_caps2` `0x2000`).
 
 The mesh bits (`wifi_caps` `0x1`/`0x800`) stay the subject of REVERSE-ENGINEERING.md's
-mesh investigation and are only ever claimed through `debug_caps`.
+mesh investigation and are claimed by default (with `backhaul.lua`); `debug_caps` can still override them.
 
 #### The frontend's own names for the bits (Network app 10.6.106, `swai.*.js`, read 2026-10-03)
 
@@ -2233,7 +2233,7 @@ them for measured values.
 | `spectrum_scanning` = `false` | Always false: scans are run synchronously inside the cmd handler, so the device is never "currently scanning" when a payload is built |
 | `lldp_table[].is_wired` = `true` | LLDP is inherently a wired-link protocol |
 | `model` / `platform` / `version` / `required_version` / `bootrom_version` | The emulated UniFi identity from `ufmodel/*.lua` — deliberately not the host hardware. This is the point of the project, not an accidental approximation |
-| `fw_caps` = `0x110`, `wifi_caps` = `0x100001C`(+`0x20`/`0x100000`/`0x801` by probe), `wifi_caps2` = `0xE2` | Claimed capability bits, each derived from the controller's own bytecode and confirmed live — see [Capability bitmasks](#capability-bitmasks). openUF claims only bits whose features it actually implements |
+| `fw_caps` = `0x110`, `wifi_caps` = `0x100081D`(+`0x20`/`0x100000` by probe), `wifi_caps2` = `0xE2` | Claimed capability bits, each derived from the controller's own bytecode and confirmed live — see [Capability bitmasks](#capability-bitmasks). openUF claims only bits whose features it actually implements |
 | `ucihelper` `wps_device_name` / `ap_setup_locked` | Standards-based rather than Ubiquiti-derived — see the beacon row in the [feature matrix](#feature-matrix) |
 | ~~`usteer.lua`'s `USTEER_DEFAULTS`~~ | ✅ **Resolved upstream 2026-09-10.** Verified against the installed package (usteer 2025.10.04) on an Archer C5. `band_steering_threshold` is a real option — it is in the init script's own list of keys fed to `ubus call usteer set_config`. The named `local` section is read too: the loader does `config_foreach uci_usteer usteer`, which visits every section of type `usteer`, named or anonymous. `network` is read from `uci get usteer.@usteer[-1].network`, the last section of that type — openUF's — so both writes are load-bearing and correctly named. |
 

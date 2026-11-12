@@ -4135,7 +4135,8 @@ function M._parse_wifi_system_cfg(sys_raw)
 					-- section on wireless.<n>.devname (see mac_filter_by_dev
 					-- above for the wire shape and why the join is needed).
 					-- Both are nil when the control is off for this vap, which
-					-- the consumer turns into macfilter=disable.
+					-- the consumer turns into deleting macfilter and maclist (ucihelper;
+					-- OpenWrt 25.12 aborts on macfilter="disable").
 					mac_filter_policy     = (mac_filter_by_dev[w.devname] or {}).policy,
 					mac_filter_list       = (mac_filter_by_dev[w.devname] or {}).macs,
 					-- "WiFi Speed Limit", in kbps, nil when unlimited.

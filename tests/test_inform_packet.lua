@@ -2659,6 +2659,16 @@ return {
 				.. "\nmacacl.status=disabled\n")
 			assert_nil(un[1].mac_filter_policy, "unlock: no filter")
 			assert_nil(un[1].mac_filter_list, "unlock: no list")
+			-- Unlock of one AP: the global gate stays enabled (another AP is
+			-- still filtered) but THIS devname's block is gone.
+			local _, un2 = inform._parse_wifi_system_cfg(table.concat(base, "\n")
+				.. "\nmacacl.status=enabled\n"
+				.. "macacl.1.status=enabled\nmacacl.1.devname=ath9\n"
+				.. "macacl.1.acl.status=enabled\nmacacl.1.acl.policy=deny\n"
+				.. "macacl.1.acl.1.status=enabled\nmacacl.1.acl.1.mac=00:00:5e:00:53:01\n"
+				.. "macacl.1.acl.1.type=lock2ap\n")
+			assert_nil(un2[1].mac_filter_policy, "unlock (block gone, gate on): no filter")
+			assert_nil(un2[1].mac_filter_list, "unlock (block gone, gate on): no list")
 		end
 	},
 	{
