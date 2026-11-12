@@ -386,6 +386,8 @@ end
 -- a stage that refuses without raising (switchvlan on a board with no port
 -- map) is in the log only.
 M.PUSH_HINT = "Force Provision this device in the controller (or change one of its settings)"
+-- The rollback is not a push to repeat: Force Provision would send the VLANs that lost the controller again.
+M.SWVLAN_HINT = "the VLAN change was rolled back; fix the VLAN config in the controller before you Force Provision this device again"
 function M._note_push(st, failed, full, quiet)
 	M._push_open = false
 	if type(st) ~= "table" then return end
@@ -536,7 +538,7 @@ function M._swvlan_rollback_check(st, cfg, reached, now)
 	local ok, err = pcall(M._switchvlan.restore, st, cfg)
 	io.stderr:write("inform: controller not reached after a switch VLAN change; "
 		.. (ok and "stock port VLANs put back" or ("restore failed: " .. tostring(err)))
-		.. " -- check the port VLANs in the controller\n")
+		.. " -- " .. M.SWVLAN_HINT .. "\n")
 	M._note_push(st, {"swvlan_rollback"}, false, true)
 	pcall(M._state.save, st)
 	pcall(M._write_status, st, {})
@@ -562,6 +564,11 @@ function M._push_replay_arm(sys_raw, failed, now, cfgversion)
 	for _, n in ipairs(failed) do only[n] = true end
 	replay = {sys = sys_raw, only = only, cfgversion = cfgversion, n = 0,
 		due = now + M.REPLAY_DELAYS[1]}
+end
+
+-- A later setparam that carries only a cfgversion: the replay must not write the older one back.
+function M._push_replay_cfgversion(v)
+	if replay then replay.cfgversion = v end
 end
 
 function M._push_replay_tick(st, cfg, now)
@@ -996,7 +1003,11 @@ M._FEATURES = {
 				pcall(M._switchvlan.reconcile_mac_taps)
 			end
 		end,
-		forget = function(prev, cfg) if M._switchvlan then pcall(M._switchvlan.restore, prev, cfg) end end},
+		-- st.swvlan_rollback is spent too: a later miss must not write a false rollback status.
+		forget = function(prev, cfg, st)
+			if M._switchvlan then pcall(M._switchvlan.restore, prev, cfg) end
+			if st then st.swvlan_rollback = nil end
+		end},
 	-- A Locate does NOT survive a restart, and must not: it is a transient
 	-- "which box is it" blink, nobody is still standing in front of the AP,
 	-- and unset-locate only ever arrives while someone is watching the

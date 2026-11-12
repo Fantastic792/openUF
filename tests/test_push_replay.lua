@@ -45,8 +45,28 @@ local function fresh()
 end
 
 local function push(ver, sys)
-	return ('{"_type":"setparam","mgmt_cfg":"cfgversion=%s\n","system_cfg":"%s"}')
-		:format(ver, ((sys or SYS):gsub("\n", "\n")))
+	return ('{"_type":"setparam","mgmt_cfg":"cfgversion=%s\\n","system_cfg":"%s"}')
+		:format(ver, ((sys or SYS):gsub("\n", "\\n")))
+end
+
+-- A _tick whose controller answers with reply (or a noop) and records the
+-- state the tick ran on; _push_replay_tick runs only after such an answer.
+local function tick_env(h, st)
+	local inform = h.inform
+	inform.build_json = function() return '{"_type":"state"}' end
+	inform._announce = {get_ip = function() return nil end}
+	inform._state_mtime = function() return 1 end
+	inform._rrmscan = nil
+	st.authkey = inform._state.DEFAULT_KEY
+	st.inform_url = "http://192.0.2.1:8080/inform"
+	st.mac = "00:00:5e:00:53:01"
+	local ctx = {interval = 10, backoff = 10, last_mtime = 1}
+	return function(reply)
+		inform._http_post = function()
+			return inform.build_packet(reply or '{"_type":"noop"}', st)
+		end
+		inform._tick(st, CFG, nil, ctx)
+	end
 end
 
 -- Runs fn with stderr silenced and the module's status file cleaned up.
@@ -127,12 +147,57 @@ return {
 				local st = {cfgversion = "v1", adopted = true}
 				h.l2_boom = true
 				h.inform.handle_response(push("v2"), st, CFG)
-				local h2 = fresh()   -- the daemon restarted: a new module
-				quiet(h2, function()
-					assert_false(h2.inform._push_replay_tick(st, CFG, 30), "no replay after a restart")
-					assert_eq(h2.l2, 0, "nothing ran")
-				end)
-				assert_eq(st.push_fail_stages, "l2guard", "st failed record unchanged")
+				assert_eq(h.l2, 1, "the push ran l2guard once")
+				h.l2_boom = false
+				-- The daemon restarts: a fresh module, the same state file/st.
+				local h2 = fresh()
+				local tick2 = tick_env(h2, st)
+				h2.now = 1000
+				tick2(); tick2()
+				assert_eq(h2.l2, 0, "the restarted module replays nothing through _tick")
+				assert_eq(st.push_fail_stages, "l2guard", "the failed-stage record stays")
+				-- Control: the module that armed it does replay at that time.
+				h.now = 1000
+				tick_env(h, st)()
+				assert_eq(h.l2, 2, "the old module would have replayed")
+			end)
+		end
+	},
+	{
+		name = "test_replay_runs_through_tick",
+		fn = function()
+			local h = fresh()
+			quiet(h, function()
+				local st = {cfgversion = "v1", adopted = true}
+				local tick = tick_env(h, st)
+				h.l2_boom, h.now = true, 100
+				tick(push("v2"))
+				assert_eq(st.push_fail_stages, "l2guard", "the pushed stage failed")
+				h.l2_boom, h.now = false, 120
+				tick()
+				assert_eq(h.l2, 1, "not due at 20 s")
+				h.now = 131
+				tick()
+				assert_eq(h.l2, 2, "replayed once the delay is up, after a good reply")
+				assert_nil(st.push_fail_stages, "record cleared")
+			end)
+		end
+	},
+	{
+		name = "test_cfgversion_push_updates_replay",
+		fn = function()
+			local h = fresh()
+			quiet(h, function()
+				local st = {cfgversion = "v1", adopted = true}
+				h.wifi_boom = true
+				h.inform.handle_response(push("v2"), st, CFG)
+				assert_eq(st.cfgversion, "v1", "failed WiFi holds the cfgversion back")
+				-- A newer cfgversion with no system_cfg.
+				h.inform.handle_response('{"_type":"setparam","mgmt_cfg":"cfgversion=v3\n"}', st, CFG)
+				assert_eq(st.cfgversion, "v3", "recorded")
+				h.wifi_boom = false
+				assert_true(h.inform._push_replay_tick(st, CFG, 30), "replayed")
+				assert_eq(st.cfgversion, "v3", "the replay does not write the older cfgversion back")
 			end)
 		end
 	},

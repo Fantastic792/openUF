@@ -109,6 +109,44 @@ return {
 		end
 	},
 	{
+		name = "test_swvlan_rollback_own_hint",
+		fn = function()
+			local h = fresh()
+			local log = {}
+			quiet(h, function()
+				local st = {cfgversion = "v3", adopted = true, swvlan_backup = {["1"] = "0 1 2 3 6t"}}
+				h.inform._arm_swvlan_rollback(st, 0)
+				-- quiet() swallows stderr; capture inside it.
+				io.stderr = {write = function(_, s) log[#log + 1] = s end}
+				h.inform._swvlan_rollback_check(st, CFG, false, 10)
+				h.inform._swvlan_rollback_check(st, CFG, false, 20)
+				h.inform._swvlan_rollback_check(st, CFG, false, 90)
+			end)
+			local out = table.concat(log)
+			assert_true(h.inform.SWVLAN_HINT ~= h.inform.PUSH_HINT, "its own hint, not the generic one")
+			assert_contains(out, h.inform.SWVLAN_HINT, "the rollback line carries it")
+			assert_false(out:find(h.inform.PUSH_HINT, 1, true) ~= nil, "no plain Force Provision")
+		end
+	},
+	{
+		name = "test_swvlan_forget_clears_rollback",
+		fn = function()
+			local h = fresh()
+			quiet(h, function()
+				local st = {cfgversion = "v3", adopted = true, swvlan_backup = {["1"] = "0 1 2 3 6t"}}
+				h.inform._arm_swvlan_rollback(st, 0)
+				local prev = {}
+				for k, v in pairs(st) do prev[k] = v end
+				h.inform._forget_controller(prev, CFG, st)
+				assert_nil(st.swvlan_rollback, "an unadopt spends the pending rollback")
+				for t = 10, 200, 40 do
+					assert_nil(h.inform._swvlan_rollback_check(st, CFG, false, t), "no false status after")
+				end
+				assert_nil(st.push_fail_stages, "no swvlan_rollback stage written")
+			end)
+		end
+	},
+	{
 		name = "test_swvlan_rollback_once",
 		fn = function()
 			local h = fresh()

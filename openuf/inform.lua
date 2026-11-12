@@ -5307,6 +5307,9 @@ function M.handle_response(json_str, st, cfg)
 			pending_cfgversion = resp.cfgversion
 		end
 		if pending_cfgversion and wifi_applied then st.cfgversion = pending_cfgversion end
+		if type(sys_raw) ~= "string" and pending_cfgversion and wifi_applied and M._push_replay_cfgversion then
+			M._push_replay_cfgversion(pending_cfgversion)
+		end
 		if type(sys_raw) == "string" then
 			if only then
 				M._replay_failed = failed
@@ -5357,7 +5360,7 @@ function M.handle_response(json_str, st, cfg)
 		M._sync_bootstrap_account(false, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 		M._firewall.reconcile(st.blocked_stas)
 		M._deny_pending = true
-		M._forget_controller(prev, cfg)
+		M._forget_controller(prev, cfg, st)
 		return false
 	end
 
@@ -5949,13 +5952,13 @@ end
 -- originals stamped in UCI, USAGE § 6), the radios' channel, width, power and
 -- country (see ucihelper.forget), and the management address, which a
 -- reset to DHCP could take off the network.
-function M._forget_controller(prev, cfg)
+function M._forget_controller(prev, cfg, st)
 	prev = prev or {}
 	-- A replay copy holds the old site's WLANs: never put it back.
 	if M._push_replay_arm then M._push_replay_arm(nil) end
 	M._controller_interval = nil
 	-- Each feature's teardown, in the forget order (mainloop.lua M._FEATURES).
-	M._run_features("forget", prev, cfg)
+	M._run_features("forget", prev, cfg, st)
 	M._shape_obs = nil
 	-- What held SSIDs down for the controller's features starts over: the
 	-- reset cleared the persisted lists (sched_vaps_down, uplinkmon_down,
@@ -6010,7 +6013,7 @@ function M._reload_if_changed(st, cfg, last_mtime)
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	M._firewall.reconcile(st.blocked_stas)
 	M._deny_pending = true
-	if was_adopted and not st.adopted then M._forget_controller(prev, cfg) end
+	if was_adopted and not st.adopted then M._forget_controller(prev, cfg, st) end
 	return mtime
 end
 
