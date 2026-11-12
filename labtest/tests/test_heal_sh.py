@@ -182,6 +182,13 @@ class HealShTest(unittest.TestCase):
         self.assertEqual(self.sh("boot"), 0)
         self.assertFalse(os.path.exists(self.p("tmp/labtest-last")))
 
+    def test_disarm_syncs_so_a_power_cut_cannot_undo_it(self):
+        self.sh("arm")
+        os.makedirs(self.p("fakebin"))
+        self.write("fakebin/sync", f'#!/bin/sh\necho sync >> "{self.p("log/sync")}"\n', 0o755)
+        self.sh("disarm", PATH=self.p("fakebin") + os.pathsep + os.environ["PATH"])
+        self.assertEqual(self.lines("log/sync"), ["sync"])
+
     def test_disarm_leaves_nothing(self):
         self.sh("arm")
         self.write("etc/labtest-heal.sh", "")

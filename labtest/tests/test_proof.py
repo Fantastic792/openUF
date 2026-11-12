@@ -12,6 +12,11 @@ class ProofTest(unittest.TestCase):
             proof.run({"results_dir": "/nonexistent"}, t)
         self.assertEqual(t.cmds, [])
 
+    def test_openuf_back_is_synced_before_the_next_power_cut(self):
+        t = FakeTarget()
+        self.assertTrue(proof._openuf_back(t))
+        self.assertTrue(t.cmds[0].rstrip().endswith("sync"), t.cmds[0])
+
     def test_breaks_are_the_three_from_the_spec(self):
         self.assertEqual(set(proof.BREAKS), {"wrong_address", "deleted_network", "bad_vlan"})
 

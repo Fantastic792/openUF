@@ -112,6 +112,7 @@ heal) heal ;;
 disarm)
 	stop_watcher
 	rm -f "$RCD" "$INIT" "$GOOD" "$MARK" "$KNOCK" "$LAST" "$SELF"
+	sync  # else a power cut soon after can bring the healed state back
 	;;
 *)
 	echo "usage: $0 arm|boot|tick|watch|heal|disarm"

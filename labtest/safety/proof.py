@@ -15,7 +15,7 @@ BREAKS = {
 
 
 def _openuf_back(t):
-    t.ssh("/etc/init.d/openuf enable; /etc/init.d/openuf start")
+    t.ssh("/etc/init.d/openuf enable; /etc/init.d/openuf start; sync")  # sync: plug may cut power next
     for _ in range(12):
         if t.ssh("/etc/init.d/openuf running")[0] == 0:
             return True
