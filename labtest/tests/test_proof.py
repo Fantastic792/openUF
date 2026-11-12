@@ -1,3 +1,4 @@
+import re
 import unittest
 
 from labtest.safety import proof
@@ -14,9 +15,10 @@ class ProofTest(unittest.TestCase):
     def test_breaks_are_the_three_from_the_spec(self):
         self.assertEqual(set(proof.BREAKS), {"wrong_address", "deleted_network", "bad_vlan"})
 
-    def test_breaks_use_no_lab_address(self):
+    def test_breaks_use_only_documentation_addresses(self):
         for cmd in proof.BREAKS.values():
-            self.assertNotIn("10.99.", cmd)
+            for ip in re.findall(r"\d+\.\d+\.\d+\.\d+", cmd):
+                self.assertTrue(ip.startswith("198.51.100.") or ip.startswith("255."), ip)
 
 
 if __name__ == "__main__":
