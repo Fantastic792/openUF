@@ -435,7 +435,9 @@ What to expect afterwards: the controller sees no disconnect; new options are do
 **overwritten** (the backup tarball has your copy). Downgrading is the same command with an
 older `--ref`, or `tar xzf /tmp/openuf-backup-<stamp>.tgz -C / && /etc/init.d/openuf
 restart` while the backup still exists — `/tmp` is tmpfs, so that means until the next
-reboot.
+reboot. A build older than the guest-WLAN-without-portal support reads such a WLAN's saved
+state as a full portal with no URL: after such a downgrade, Force Provision the device so the
+older build rebuilds that state from the push.
 
 ---
 

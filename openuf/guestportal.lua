@@ -258,7 +258,14 @@ local function classify(v, spec)
 	local srv = v:match("^%-t nat %-A ALLOW_DNS_SERVERS %-p 0x800 %-%-ip%-dst (%S+) %-j ACCEPT$")
 	if srv then
 		srv = srv:gsub("/32$", "") -- the same host; dropping it would leave DNS open
-		if not is_ipv4(srv) then return false end
+		-- A malformed server must not open DNS: the restriction stands with
+		-- whoever is usable, and with nobody reconcile drops guest DNS.
+		spec.dns_restricted = true
+		if not is_ipv4(srv) then
+			io.stderr:write("guestportal: restricted DNS server "
+				.. ("%q"):format(srv) .. " is malformed, ignored; with no usable server guest DNS is blocked\n")
+			return false
+		end
 		spec.dns_servers[#spec.dns_servers + 1] = srv
 		return true
 	end
@@ -566,7 +573,7 @@ function M.reconcile(spec, vaps, macs, selfrun, garden)
 	local portal = spec.portal ~= false
 	local dns = type(spec.dns_servers) == "table" and spec.dns_servers or {}
 	-- Restricted DNS: the controller's last -I, so above everything.
-	if #dns > 0 then
+	if #dns > 0 or spec.dns_restricted then
 		add("guestin", "ether type ip udp dport 53 jump allow_dns")
 		add("guestin", "ether type ip tcp dport 53 jump allow_dns")
 		for _, ip in ipairs(dns) do add("allow_dns", "ip daddr " .. ip .. " accept") end

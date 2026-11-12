@@ -288,6 +288,18 @@ return {
 		end
 	},
 	{
+		name = "guestportal: restricted DNS with no usable server blocks guest DNS, not opens it",
+		fn = function()
+			local raw = PLAIN:gsub("(ALLOW_DNS_SERVERS %-p 0x800 %-%-ip%-dst )192%.0%.2%.53", "%1300.1.1.1")
+			local s = gp.parse(raw)
+			assert_eq(#s.dns_servers, 0, "the bad server was not taken")
+			local cmds = with_capture(function() gp.reconcile(s, VAPS, {}, true) end)
+			assert_not_nil(find(cmds, "guestin ether type ip udp dport 53 jump allow_dns"), "DNS still jumps into allow_dns")
+			assert_not_nil(find(cmds, "add rule bridge openuf_guest allow_dns drop"), "allow_dns ends in drop")
+			assert_eq(find(cmds, "allow_dns ip daddr"), nil, "and accepts nobody")
+		end
+	},
+	{
 		name = "guestportal: without the portal the restrictions stand and the rest passes",
 		fn = function()
 			local cmds = with_capture(function() gp.reconcile(gp.parse(PLAIN), VAPS, {}, true) end)
