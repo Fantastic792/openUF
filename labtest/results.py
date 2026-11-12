@@ -8,7 +8,9 @@ import subprocess
 def commit(repo="."):
     git = ["git", "-C", repo]
     h = subprocess.run(git + ["rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-    dirty = subprocess.run(git + ["status", "--porcelain"], capture_output=True, text=True, check=True).stdout.strip()
+    # untracked files (the owner's notes) do not change what the commit runs
+    dirty = subprocess.run(git + ["status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True,
+                           check=True).stdout.strip()
     return h + "+dirty" if dirty else h
 
 
