@@ -3458,6 +3458,97 @@ return {
 		end
 	},
 	{
+		-- Keys the 10.6.106 controller has no WLAN field for (owner
+		-- 2026-11-12: "port them anyways for now"). Wire names from
+		-- fonix232/openUF's decompile (MIT), not yet seen on the wire.
+		name = "inform packet: Hotspot 2.0 HESSID, network auth, ANQP domain id and QoS map reach hostapd",
+		fn = function()
+			local function cfg(extra)
+				local t = {
+					"aaa.1.ssid=openuf-eap", "aaa.1.status=enabled", "aaa.1.wpa=2",
+					"aaa.1.wpa.key.1.mgmt=WPA-EAP", "aaa.1.wpa.1.pairwise=CCMP",
+					"aaa.1.radius.auth.1.ip=192.0.2.10",
+					"aaa.1.radius.auth.1.port=1812",
+					"aaa.1.radius.auth.1.secret=openufradius",
+					"aaa.1.hs20.status=enabled",
+					"wireless.1.ssid=openuf-eap", "wireless.1.parent=radio0",
+					"wireless.1.usage=user",
+					"radio.1.phyname=radio0", "radio.1.devname=ath0",
+					"radio.1.channel=auto", "radio.1.status=enabled",
+				}
+				for _, l in ipairs(extra) do t[#t + 1] = "aaa.1.hs20." .. l end
+				return table.concat(t, "\n") .. "\n"
+			end
+			local good = {
+				"hessid=00:00:5E:00:53:01",
+				"network_auth_type=2",
+				"network_auth_url=https://example.com/redirect",
+				"anqp_domain_id=1234",
+				"qos.status=enabled",
+				"qos.exception.1.dcsp=53", "qos.exception.1.up=2",
+				"qos.exception.2.dcsp=22", "qos.exception.2.up=6",
+			}
+			local ranges = {{8, 15}, {0, 7}, {255, 255}, {16, 31}, {32, 39},
+				{255, 255}, {40, 47}, {48, 55}}
+			for k, r in ipairs(ranges) do
+				good[#good + 1] = "qos.map." .. k .. ".low=" .. r[1]
+				good[#good + 1] = "qos.map." .. k .. ".high=" .. r[2]
+			end
+			local rt, vt = inform._parse_wifi_system_cfg(cfg(good))
+			local hs = vt[1].hs20
+			assert_eq(hs.hessid, "00:00:5e:00:53:01", "HESSID lowercased")
+			assert_eq(hs.network_auth_type, "02https://example.com/redirect",
+				"type as one hex octet, then the redirect URL (types 0 and 2)")
+			assert_eq(hs.anqp_domain_id, "1234", "ANQP domain id")
+			assert_eq(hs.qos_map_set,
+				"53,2,22,6,8,15,0,7,255,255,16,31,32,39,255,255,40,47,48,55",
+				"exceptions first, then the eight UP ranges")
+
+			local ucihelper, db = new_apply_env()
+			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
+			local sec = db.wireless["openuf_radio0_openuf_eap_"
+				.. ucihelper.derive_mobility_domain("openuf-eap")]
+			local raw = table.concat(sec.hostapd_bss_options or {}, "\n")
+			for _, want in ipairs({
+				"hessid=00:00:5e:00:53:01",
+				"network_auth_type=02https://example.com/redirect",
+				"anqp_domain_id=1234",
+				"qos_map_set=53,2,22,6,8,15,0,7,255,255,16,31,32,39,255,255,40,47,48,55",
+			}) do
+				assert_contains(raw, want, "raw hostapd line: " .. want)
+			end
+
+			-- Bad shapes: each dropped alone; one bad QoS entry (or not eight
+			-- ranges) drops the map, since hostapd refuses the BSS over it.
+			local bad = {
+				"hessid=00:00:5e:00:53",
+				"network_auth_type=1",
+				"network_auth_url=https://example.com/ignored",
+				"anqp_domain_id=70000",
+				"qos.status=enabled",
+				"qos.exception.1.dcsp=64", "qos.exception.1.up=2",
+			}
+			for k, r in ipairs(ranges) do
+				bad[#bad + 1] = "qos.map." .. k .. ".low=" .. r[1]
+				bad[#bad + 1] = "qos.map." .. k .. ".high=" .. r[2]
+			end
+			local _, vt2 = inform._parse_wifi_system_cfg(cfg(bad))
+			hs = vt2[1].hs20
+			assert_nil(hs.hessid, "a short MAC dropped")
+			assert_eq(hs.network_auth_type, "01",
+				"type 1 (online enrollment) carries no URL")
+			assert_nil(hs.anqp_domain_id, "out of range dropped")
+			assert_nil(hs.qos_map_set, "DSCP 64 drops the whole map")
+			local seven = {"qos.status=enabled"}
+			for k = 1, 7 do
+				seven[#seven + 1] = "qos.map." .. k .. ".low=0"
+				seven[#seven + 1] = "qos.map." .. k .. ".high=7"
+			end
+			local _, vt3 = inform._parse_wifi_system_cfg(cfg(seven))
+			assert_nil(vt3[1].hs20.qos_map_set, "seven ranges is not a map")
+		end
+	},
+	{
 		name = "inform packet: the Hotspot 2.0 key table is indexed once, not once per collector",
 		fn = function()
 			-- _wire_hs20 has seven indexed collectors plus one per NAI realm,

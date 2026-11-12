@@ -2818,6 +2818,11 @@ function M.apply_config(resp, cfg, opts)
 					add_bss_option(extra, "hs20_conn_capab="
 						.. c.protocol .. ":" .. c.port .. ":" .. c.status)
 				end
+				-- Already in hostapd's own format (inform.lua _wire_hs20).
+				for _, opt in ipairs({"hessid", "network_auth_type",
+						"anqp_domain_id", "qos_map_set"}) do
+					if hs[opt] then add_bss_option(extra, opt .. "=" .. hs[opt]) end
+				end
 				if hs.wan_metrics then
 					local m = hs.wan_metrics
 					-- <WAN info>:<downlink speed>:<uplink speed>:<downlink

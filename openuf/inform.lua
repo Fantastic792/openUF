@@ -2946,12 +2946,14 @@ end
 -- timestamp, osu_ssid, osu.*, icon.*, gas_comeback_delay/gas_frag_limit or
 -- qos.map.*/qos.exception.* at all. A full-profile push (lab capture, every
 -- field the subset allows filled) carried exactly the keys read below and
--- none of the others. So the rest is deliberately NOT read: there is no
--- producer to test a consumer against. Re-checked for Task 9g (decompiled
+-- none of the others. Re-checked for Task 9g (decompiled
 -- VAZShipWTNxlo.Wbsqrl): the emitter reads the embedded object only,
 -- hotspot2conf_id is never resolved into a push, and those keys are gated on
--- fields (hessid_used, gas_advanced, ...) the WLAN schema lacks.
--- fonix232/openUF reads them; nothing sends them.
+-- fields (hessid_used, gas_advanced, ...) the WLAN schema lacks. Even so,
+-- hessid, network_auth_type/url, anqp_domain_id and the QoS map ARE read
+-- (owner 2026-11-12: "port them anyways for now"; wire names from
+-- fonix232/openUF's decompile, unseen on the wire). T&C, GAS timings, OSU and
+-- icons are not.
 --
 -- Independently unimplementable even if they did arrive:
 --   * osu.* / icon.*  -- the installed hostapd (wpad-mbedtls 2025.08.26,
@@ -2989,6 +2991,51 @@ local function _wire_hs20(a)
 		-- hostapd's domain_name format.
 		domain_name         = _wire_text(k("hs20_domain_name_list"), 1024),
 	}
+
+	-- No WLAN field on 10.6.106 sends these four (see above); ported anyway.
+	local hessid = k("hessid")
+	if type(hessid) == "string" and is_mac(hessid) then
+		hs.hessid = hessid:lower()
+	end
+	local nat = _wire_range(k("network_auth_type"), 0, 3)
+	if nat then
+		-- One octet in hex, then the redirect URL for types 0 (accept terms)
+		-- and 2 (HTTP redirect) only; hostapd reads the rest of the line as it.
+		local url = (nat == "0" or nat == "2") and k("network_auth_url")
+		url = type(url) == "string" and #url <= 250
+			and url:match("^https?://[%w%p]+$") or ""
+		hs.network_auth_type = string.format("%02x", tonumber(nat)) .. url
+	end
+	hs.anqp_domain_id = _wire_range(k("anqp_domain_id"), 0, 65535)
+	if _wire_bool(k("qos.status")) then
+		-- hostapd's qos_map_set: up to 21 DSCP,UP exceptions, then exactly
+		-- eight low,high DSCP ranges (UP 0-7; 255,255 = unused). It refuses
+		-- the BSS over a bad value, so one bad entry drops the whole map.
+		local bad = false
+		local function num(v, hi)
+			local r = _wire_range(v, 0, hi)
+			if not r then bad = true end
+			return tonumber(r)
+		end
+		local ex = _wire_indexed(idx, "qos.exception", "dcsp", function(i)
+			local p = "hs20.qos.exception." .. i .. "."
+			local d, u = num(a[p .. "dcsp"], 63), num(a[p .. "up"], 7)
+			return d and u and (d .. "," .. u)
+		end) or {}
+		local rg = _wire_indexed(idx, "qos.map", "low", function(i)
+			local p = "hs20.qos.map." .. i .. "."
+			local lo, hi = num(a[p .. "low"], 255), num(a[p .. "high"], 255)
+			if lo and hi and ((lo == 255 and hi == 255)
+					or (hi <= 63 and lo <= hi)) then
+				return lo .. "," .. hi
+			end
+			bad = true
+		end) or {}
+		if not bad and #rg == 8 and #ex <= 21 then
+			for _, r in ipairs(rg) do ex[#ex + 1] = r end
+			hs.qos_map_set = table.concat(ex, ",")
+		end
+	end
 
 	-- aaa.<n>.hs20.esr is sent and deliberately dropped: the live ucode
 	-- generator (ap.uc, iface_interworking) never appends `esr`, although the
