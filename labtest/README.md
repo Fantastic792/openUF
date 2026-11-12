@@ -12,6 +12,28 @@ python3 -m unittest discover -s labtest/tests -t . -v   # unit tests, no lab nee
 python3 labtest/run.py <stage> [--target vm1]            # a stage, default target vm1
 ```
 
+## Stages (part 1: the safety net)
+
+| Stage | What it checks | Needs | Time |
+|---|---|---|---|
+| `guards` | No firmware or flash write in openUF's code; nothing from `labtest/` in the package | the repo only | ~30 s |
+| `proof` | Breaks a VM three ways (wrong address, deleted network, bad VLAN); the self-heal timer must bring it back each time | lab up, VM running openUF | ~12 min |
+| `plug` | Kills a VM 1, 2, 4 and 7 s after a controller push; the config must be whole and openUF back | as `proof`, VM adopted, the account file | ~10-20 min |
+| `safety` | `guards`, `proof`, `plug` in that order; stops at the first stage that fails | as `plug` | the sum |
+
+`proof` and `plug` refuse any target whose `kind` is not `vm`.
+
+Results go to `results_dir` (default `/root/vmlab/results`): `timer-proof.json` and `plug.json`,
+each stamped with the git commit it ran on (`+dirty` when the tree had changes) and the date.
+
+The self-heal timer is `labtest/safety/heal.sh`: a test tool, never shipped. The runner copies it to
+`/etc/labtest-heal.sh`, knocks every 10 s, and removes every trace at the end. No knock for 180 s
+(counted with `/proc/uptime`) -> the target stops openUF, puts its saved config back, marks itself
+healed and reboots. It heals once, then stays off.
+
+`plug` needs a lab-only admin account on the lab controller: `account_file` holds the user name on
+line 1 and the password on line 2 (mode 600). Without it, `plug` prints `FAIL plug: no account file`.
+
 ## The config file
 
 Everything about the lab lives outside the repo, in `/root/vmlab/labtest.json`

@@ -7,8 +7,8 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from labtest import target  # noqa: E402
-from labtest.safety import flashguard, packguard, proof  # noqa: E402
+from labtest import target, unifi  # noqa: E402
+from labtest.safety import flashguard, packguard, plug, proof  # noqa: E402
 
 
 def guards(args):
@@ -25,8 +25,27 @@ def timer_proof(args):
     return [("timer_proof", r["pass"], "; ".join(f"{b['name']}: {b}" for b in bad) or "not all breaks ran")]
 
 
+def pull_plug(args):
+    conf = target.load_config()
+    if not os.path.exists(conf["account_file"]):
+        return [("plug", False, "no account file")]
+    r = plug.run(conf, target.get_target(conf, args.target), unifi.Controller(conf))
+    bad = [c for c in r["cuts"] if not (c["booted"] and not c["problems"] and c["connected"])]
+    return [("plug", r["pass"], "; ".join(str(c) for c in bad) or "not all cuts ran")]
+
+
+def safety(args):
+    out = []
+    for stage in (guards, timer_proof, pull_plug):
+        checks = stage(args)
+        out += checks
+        if not all(passed for _, passed, _ in checks):
+            break
+    return out
+
+
 # stage name -> function(args) returning [(check_name, passed, detail)]
-STAGES = {"guards": guards, "proof": timer_proof}
+STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety}
 
 
 def main(argv=None):
