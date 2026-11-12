@@ -1420,9 +1420,9 @@ the WPA-Enterprise section above applies first.
   nothing). A disabled NAI realm, and one with no EAP method, are left out.
 - **Read, although the controller does not send it on a WLAN:** HESSID
   (`hessid`), network auth type (`network_auth_type=<type as 2 hex
-  digits><redirect URL for types 0 and 2>`), ANQP domain id
+  digits><redirect URL for types 0 and 2>`; type 2 without a valid URL is dropped), ANQP domain id
   (`anqp_domain_id`) and the QoS map (`qos_map_set`: up to 21 exceptions, then
-  exactly eight ranges; one bad entry drops the map) go out as raw lines if they
+  exactly eight ranges with consecutive indices; one bad entry drops the map) go out as raw lines if they
   arrive. They exist in the controller's standalone Hotspot 2.0 profile schema
   but not in the subset a WLAN carries, so on 10.6.106 none arrives; the key
   names come from a decompile and have not been seen on the wire.

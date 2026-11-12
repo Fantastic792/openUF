@@ -3004,7 +3004,10 @@ local function _wire_hs20(a)
 		local url = (nat == "0" or nat == "2") and k("network_auth_url")
 		url = type(url) == "string" and #url <= 250
 			and url:match("^https?://[%w%p]+$") or ""
-		hs.network_auth_type = string.format("%02x", tonumber(nat)) .. url
+		-- Type 2 is "redirect to this URL"; without one it advertises nothing.
+		if not (nat == "2" and url == "") then
+			hs.network_auth_type = string.format("%02x", tonumber(nat)) .. url
+		end
 	end
 	hs.anqp_domain_id = _wire_range(k("anqp_domain_id"), 0, 65535)
 	if _wire_bool(k("qos.status")) then
@@ -3031,7 +3034,9 @@ local function _wire_hs20(a)
 			end
 			bad = true
 		end) or {}
-		if not bad and #rg == 8 and #ex <= 21 then
+		-- Ranges map to UP 0-7 by position, so their indices must not skip.
+		local ri = idx["qos.map/low"]
+		if not bad and #rg == 8 and ri[8] - ri[1] == 7 and #ex <= 21 then
 			for _, r in ipairs(rg) do ex[#ex + 1] = r end
 			hs.qos_map_set = table.concat(ex, ",")
 		end

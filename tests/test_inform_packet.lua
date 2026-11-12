@@ -3546,6 +3546,62 @@ return {
 			end
 			local _, vt3 = inform._parse_wifi_system_cfg(cfg(seven))
 			assert_nil(vt3[1].hs20.qos_map_set, "seven ranges is not a map")
+
+			-- The redirect URL is the one free-text value: each shape alone.
+			local function nat(t, url)
+				local l = {"network_auth_type=" .. t}
+				if url then l[2] = "network_auth_url=" .. url end
+				local _, v = inform._parse_wifi_system_cfg(cfg(l))
+				return v[1].hs20.network_auth_type
+			end
+			local long = "https://example.com/" .. string.rep("a", 231)
+			assert_eq(nat("0", "http://example.com/terms"), "00http://example.com/terms",
+				"type 0 carries the URL")
+			assert_eq(nat("3"), "03", "type 3 (DNS redirect) has no URL")
+			assert_nil(nat("4"), "type 4 does not exist")
+			assert_nil(nat("2"), "type 2 without a URL advertises nothing to redirect to")
+			for _, u in ipairs({"https://example.com/a b", "https://example.com/a\tb",
+					"https://example.com/a\r", "javascript:alert(1)",
+					"ftp://example.com/", long}) do
+				assert_nil(nat("2", u), "bad redirect URL drops type 2: " .. u:sub(1, 30))
+			end
+
+			-- QoS map: each bad shape drops the whole map.
+			local function qos(ranges_, extra)
+				local l = {"qos.status=enabled"}
+				for _, r in ipairs(ranges_) do
+					l[#l + 1] = "qos.map." .. r[1] .. ".low=" .. r[2]
+					l[#l + 1] = "qos.map." .. r[1] .. ".high=" .. r[3]
+				end
+				for _, e in ipairs(extra or {}) do l[#l + 1] = e end
+				local _, v = inform._parse_wifi_system_cfg(cfg(l))
+				return v[1].hs20.qos_map_set
+			end
+			local function eight(over)
+				local t = {}
+				for k = 1, 8 do t[k] = {k, 0, 7} end
+				for k, r in pairs(over or {}) do t[k] = r end
+				return t
+			end
+			assert_eq(qos(eight()), "0,7,0,7,0,7,0,7,0,7,0,7,0,7,0,7", "eight good ranges")
+			assert_nil(qos(eight({[3] = {3, 9, 8}})), "low > high")
+			assert_nil(qos(eight({[3] = {3, 255, 7}})), "half-unused range")
+			assert_nil(qos(eight({[3] = {3, 0, 64}})), "high 64")
+			assert_nil(qos(eight({[8] = {9, 0, 7}})), "a gap shifts every UP after it")
+			assert_nil(qos(eight(), {"qos.exception.1.dcsp=10"}), "exception without up")
+			local many = {}
+			for k = 1, 22 do
+				many[#many + 1] = "qos.exception." .. k .. ".dcsp=" .. k
+				many[#many + 1] = "qos.exception." .. k .. ".up=1"
+			end
+			assert_nil(qos(eight(), many), "22 exceptions")
+			local off = {}
+			for k = 1, 8 do
+				off[#off + 1] = "qos.map." .. k .. ".low=0"
+				off[#off + 1] = "qos.map." .. k .. ".high=7"
+			end
+			local _, vt4 = inform._parse_wifi_system_cfg(cfg(off))
+			assert_nil(vt4[1].hs20.qos_map_set, "no qos.status, no map")
 		end
 	},
 	{
