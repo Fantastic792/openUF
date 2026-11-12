@@ -41,9 +41,9 @@ class HealShTest(unittest.TestCase):
     def uptime(self, secs):
         self.write("uptime", f"{secs}.42 {secs * 3}.10\n")
 
-    def sh(self, cmd):
+    def sh(self, cmd, **extra):
         env = dict(os.environ, LABTEST_ROOT=self.r, LABTEST_UPTIME_FILE=self.p("uptime"),
-                   LABTEST_REBOOT=self.p("bin/reboot"), LABTEST_NO_WATCH="1")
+                   LABTEST_REBOOT=self.p("bin/reboot"), LABTEST_NO_WATCH="1", **extra)
         return subprocess.run(["sh", HEAL, cmd], env=env, capture_output=True, text=True, timeout=20).returncode
 
     def heal_now(self):
@@ -144,6 +144,33 @@ class HealShTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.p("etc/labtest-healed")))
         self.assertEqual(len(self.lines("log/reboot")), 1)
         self.assertFalse(os.path.exists(self.p("etc/config.new")))
+
+    def test_heal_puts_config_back_when_the_second_move_fails(self):
+        self.sh("arm")
+        self.write("etc/config/network", "bad")
+        os.makedirs(self.p("fakebin"))
+        self.write("fakebin/mv", '#!/bin/sh\ncase $1 in *config.new) exit 1 ;; esac\nexec /bin/mv "$@"\n', 0o755)
+        self.sh("heal", PATH=self.p("fakebin") + os.pathsep + os.environ["PATH"])
+        self.assertEqual(self.read("etc/config/network"), "bad")
+        self.assertFalse(os.path.exists(self.p("etc/config.bad")))
+        self.assertEqual(len(self.lines("log/reboot")), 1)
+
+    def test_heal_goes_on_when_openuf_stop_hangs(self):
+        self.write("etc/init.d/openuf", f'#!/bin/sh\necho "$1" >> "{self.p("log/openuf")}"\n'
+                   '[ "$1" = stop ] && exec sleep 1000\nexit 0\n', 0o755)
+        self.sh("arm")
+        self.write("etc/config/network", "bad")
+        self.sh("heal", LABTEST_STOP_WAIT="1")
+        self.assertEqual(self.read("etc/config/network"), "good")
+        self.assertEqual(self.lines("log/openuf"), ["stop", "disable"])
+        self.assertEqual(len(self.lines("log/reboot")), 1)
+
+    def test_heal_switches_off_its_boot_start_even_if_the_mark_fails(self):
+        self.sh("arm")
+        os.makedirs(self.p("etc/labtest-healed"))  # writing the mark now fails
+        self.sh("heal")
+        self.assertFalse(os.path.exists(self.p("etc/init.d/labtest-heal")))
+        self.assertFalse(os.path.lexists(self.p("etc/rc.d/S99labtest-heal")))
 
     def test_boot_gives_a_fresh_window(self):
         self.uptime(500)

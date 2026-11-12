@@ -49,16 +49,33 @@ tick() {
 
 heal() {
 	logger -t labtest-heal "no knock for over $LIMIT s: healing" 2>/dev/null
-	"$R/etc/init.d/openuf" stop
+	# a hung stop must not block the restore: wait a bounded time, then go on
+	"$R/etc/init.d/openuf" stop >/dev/null 2>&1 &
+	p=$! n=0
+	while kill -0 "$p" 2>/dev/null && [ "$n" -lt "${LABTEST_STOP_WAIT:-30}" ]; do
+		sleep 1
+		n=$((n + 1))
+	done
+	kill "$p" 2>/dev/null
 	"$R/etc/init.d/openuf" disable
 	# swap, so a power cut can never leave /etc/config empty
 	rm -rf "$CFG.new" "$CFG.bad"
 	if mkdir "$CFG.new" && tar xzf "$GOOD" -C "$CFG.new" 2>/dev/null; then
-		mv "$CFG" "$CFG.bad" && mv "$CFG.new" "$CFG" && rm -rf "$CFG.bad"
+		if mv "$CFG" "$CFG.bad"; then
+			if mv "$CFG.new" "$CFG"; then
+				rm -rf "$CFG.bad"
+			else
+				mv "$CFG.bad" "$CFG"
+				rm -rf "$CFG.new"
+				logger -t labtest-heal "restore failed: /etc/config put back as it was" 2>/dev/null
+			fi
+		fi
 	else
 		rm -rf "$CFG.new"
 		logger -t labtest-heal "saved config unreadable: /etc/config left as it is" 2>/dev/null
 	fi
+	# heal once: no boot start, even if the mark below cannot be written (flash full)
+	rm -f "$RCD" "$INIT"
 	: > "$MARK"
 	sync
 	$REBOOT
