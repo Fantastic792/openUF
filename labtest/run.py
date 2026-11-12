@@ -46,7 +46,8 @@ def catalog_stage(args):
         return [("catalog", False, "no fields_dir")]
     s = catalog.summary(catalog.load(d))
     results.save(conf, "catalog", s)
-    return [("catalog", s["fields"] > 0, f"{s['files']} files, {s['fields']} fields, in scope {s['in_scope']}, "
+    return [("catalog", s["fields"] > 0, f"{s['files']} files, {s['fields']} fields, in scope {s['in_scope']} "
+                                         f"({s['sections']} setting sections), "
                                          f"kinds in scope {s['kinds']}", True)]
 
 

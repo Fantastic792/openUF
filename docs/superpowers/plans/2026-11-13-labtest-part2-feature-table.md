@@ -56,9 +56,11 @@ New keys in `/root/vmlab/labtest.json` (outside the repo): `fields_dir`, `row_wl
 
 **Interfaces — Produces:**
 - `catalog.kind(spec) -> tuple[str, list | None]`: `("bool", [True, False])` for `"true|false"` / `"false|true"`; `("enum", [..literals..])` for an alternation of plain words (letters, digits, `_ - . +`), with or without `^( )$` around it; else `("other", None)`.
-- `catalog.load(fields_dir) -> list[dict]`: one `{"obj", "key", "kind", "values"}` per top-level key of every `*.json` file; `obj` is the file name without `.json`.
-- `catalog.in_scope(obj) -> bool`: `WlanConf`, `Device`, and every `Setting*` except `SettingSuper*`.
-- `catalog.section(obj) -> str | None`: `SettingGuestAccess` -> `guest_access`; not a `Setting*` -> `None`.
+- `catalog.load(fields_dir) -> list[dict]`: one `{"obj", "key", "kind", "values"}` per top-level key of every `*.json` file; `obj` is the file name without `.json`. One exception: `Setting.json` holds all 47 site sections as `{section: {key: spec}}`, so it is read one level deeper and `obj` is `Setting.<section>` (e.g. `Setting.guest_access`).
+- `catalog.in_scope(obj) -> bool`: `WlanConf`, `Device`, and every `Setting.<section>` except `Setting.super_*` (those change the controller itself).
+- `catalog.section(obj) -> str | None`: `Setting.guest_access` -> `guest_access`; anything else -> `None`.
+
+Measured on 10.6.106 (28 files): in scope are 528 fields = `WlanConf` 103, `Device` 94, `Setting` 331 in 38 sections. Of these 269 are on/off or pick-one and become automatic rows (66 + 46 + 157); 259 are numbers, text, lists or nested and show as "not covered".
 - `catalog.flip(field, current) -> value | None`: bool -> `not bool(current)`; enum -> the literal after `current` (wrapping), `None` when `current` is absent or not in the list; other -> `None`.
 
 - [ ] **Step 0 (owner, once):** the field list sits inside the controller's `internal-dependencies.jar` (not `ace.jar`), already on disk. Ask the owner to run this in a terminal, then set `fields_dir` to `/root/vmlab/unifi-fields/api/fields` in `labtest.json`:
@@ -82,16 +84,19 @@ def test_odd_shapes_are_other(self):
         self.assertEqual(catalog.kind(spec), ("other", None))
 
 def test_load_and_scope(self):
-    # temp dir: WlanConf.json {"hide_ssid": "true|false", "name": ".{1,32}"}, SettingSuperMgmt.json {...}, Broken.json "not json"
+    # temp dir: WlanConf.json {"hide_ssid": "true|false", "name": ".{1,32}"}, Broken.json "not json",
+    # Setting.json {"guest_access": {"portal_enabled": "true|false"}, "super_mgmt": {"x": "true|false"}, "odd": "true|false"}
     fields = catalog.load(self.dir)
     self.assertIn({"obj": "WlanConf", "key": "hide_ssid", "kind": "bool", "values": [True, False]}, fields)
-    self.assertTrue(catalog.in_scope("SettingGuestAccess"))
-    self.assertFalse(catalog.in_scope("SettingSuperMgmt"))
+    self.assertIn({"obj": "Setting.guest_access", "key": "portal_enabled", "kind": "bool", "values": [True, False]}, fields)
+    self.assertFalse(any(f["obj"] == "Setting" for f in fields))  # sections, never the file itself; "odd" is dropped
+    self.assertTrue(catalog.in_scope("Setting.guest_access"))
+    self.assertFalse(catalog.in_scope("Setting.super_mgmt"))
     self.assertFalse(catalog.in_scope("NetworkConf"))
     self.assertFalse(any(f["obj"] == "Broken" for f in fields))  # an unreadable file is skipped, not fatal
 
 def test_section_and_flip(self):
-    self.assertEqual(catalog.section("SettingGuestAccess"), "guest_access")
+    self.assertEqual(catalog.section("Setting.guest_access"), "guest_access")
     self.assertIsNone(catalog.section("WlanConf"))
     b = {"kind": "bool", "values": [True, False]}
     e = {"kind": "enum", "values": ["disabled", "optional", "required"]}
@@ -116,7 +121,7 @@ def test_section_and_flip(self):
 - `class unifi.Refused(RuntimeError)`: raised on HTTP 400; text is the path plus the reply's `meta.msg` only (never the body, never on `/api/login`).
 - `Controller._check`: on HTTP 401 for any path but `/api/login`, call `login()` once and repeat the request; a second 401 raises `RuntimeError`.
 - `Controller.settings() -> list` (`rest/setting`); `Controller.device(host) -> dict | None` (from `stat/device`, by `ip`).
-- `Controller.locate(obj, host, wlan_name) -> tuple[str, dict] | None`: the PUT path and the current object. `WlanConf` -> `rest/wlanconf/<_id>` of the WLAN named `wlan_name`; `Device` -> `rest/device/<_id>` of the device at `host`; `Setting*` -> `rest/setting/<section>/<_id>`; `None` when the site has no such object.
+- `Controller.locate(obj, host, wlan_name) -> tuple[str, dict] | None`: the PUT path and the current object. `WlanConf` -> `rest/wlanconf/<_id>` of the WLAN named `wlan_name`; `Device` -> `rest/device/<_id>` of the device at `host`; `Setting.<section>` -> `rest/setting/<section>/<_id>`; `None` when the site has no such object.
 
 - [ ] **Step 1: Failing tests** (extend the fake session in `test_unifi.py`):
 
@@ -140,8 +145,8 @@ def test_locate(self):
     # fake data: wlan "T" id w1; device ip "h" id d1; setting key guest_access id s1
     self.assertEqual(self.c.locate("WlanConf", "h", "T")[0], "rest/wlanconf/w1")
     self.assertEqual(self.c.locate("Device", "h", "T")[0], "rest/device/d1")
-    self.assertEqual(self.c.locate("SettingGuestAccess", "h", "T")[0], "rest/setting/guest_access/s1")
-    self.assertIsNone(self.c.locate("SettingNtp", "h", "T"))
+    self.assertEqual(self.c.locate("Setting.guest_access", "h", "T")[0], "rest/setting/guest_access/s1")
+    self.assertIsNone(self.c.locate("Setting.ntp", "h", "T"))
 ```
 
 - [ ] **Step 2:** Run, expect FAIL. **Step 3:** Implement. **Step 4:** Run, expect PASS; the Part 1 tests for `unifi` still pass.
@@ -366,7 +371,7 @@ First rows (each bool is flipped from its current value; the check follows the v
 
 | Unknown | Settled by |
 |---|---|
-| How many settings, and how many are on/off or pick-one | Task 1 Step 5 |
+| How many settings, and how many are on/off or pick-one | Settled 2026-11-13: 528 in scope, 269 automatic rows (Task 1 Step 5 confirms with the real code) |
 | The exact shape of a dump line on 10.6.106 | Task 3 Step 5 |
 | Seconds per row, and whether 25 s is enough to see a push | Task 4 Step 6 |
 | The lab can run a fourth VM | Task 6 Step 5 |

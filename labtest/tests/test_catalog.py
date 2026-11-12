@@ -12,8 +12,8 @@ class CatalogTest(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir)
         files = {"WlanConf.json": {"hide_ssid": "true|false", "name": ".{1,32}"},
-                 "SettingSuperMgmt.json": {"auto_upgrade": "true|false"},
-                 "SettingGuestAccess.json": {"auth": "none|hotspot"}}
+                 "Setting.json": {"guest_access": {"auth": "none|hotspot", "portal_enabled": "true|false"},
+                                  "super_mgmt": {"x": "true|false"}, "odd": "true|false"}}
         for name, body in files.items():
             with open(os.path.join(self.dir, name), "w") as f:
                 json.dump(body, f)
@@ -38,24 +38,29 @@ class CatalogTest(unittest.TestCase):
         fields = catalog.load(self.dir)
         self.assertIn({"obj": "WlanConf", "key": "hide_ssid", "kind": "bool", "values": [True, False]}, fields)
         self.assertIn({"obj": "WlanConf", "key": "name", "kind": "other", "values": None}, fields)
-        self.assertTrue(catalog.in_scope("SettingGuestAccess"))
+        self.assertIn({"obj": "Setting.guest_access", "key": "portal_enabled", "kind": "bool", "values": [True, False]},
+                      fields)
+        self.assertFalse(any(f["obj"] == "Setting" for f in fields))  # sections, never the file; "odd" is dropped
+        self.assertTrue(catalog.in_scope("Setting.guest_access"))
         self.assertTrue(catalog.in_scope("WlanConf"))
         self.assertTrue(catalog.in_scope("Device"))
-        self.assertFalse(catalog.in_scope("SettingSuperMgmt"))
+        self.assertFalse(catalog.in_scope("Setting.super_mgmt"))
+        self.assertFalse(catalog.in_scope("Setting"))
         self.assertFalse(catalog.in_scope("NetworkConf"))
         self.assertFalse(any(f["obj"] in ("Broken", "List") for f in fields))  # unreadable or not an object: skipped
 
     def test_summary_counts_in_scope_only(self):
         s = catalog.summary(catalog.load(self.dir))
-        self.assertEqual(s["files"], 3)
-        self.assertEqual(s["fields"], 4)
-        self.assertEqual(s["in_scope"], {"WlanConf": 2, "Device": 0, "Setting": 1})
-        self.assertEqual(s["kinds"], {"bool": 1, "enum": 1, "other": 1})
+        self.assertEqual(s["files"], 2)
+        self.assertEqual(s["fields"], 5)
+        self.assertEqual(s["in_scope"], {"WlanConf": 2, "Device": 0, "Setting": 2})
+        self.assertEqual(s["sections"], 1)
+        self.assertEqual(s["kinds"], {"bool": 2, "enum": 1, "other": 1})
 
     def test_section_and_flip(self):
-        self.assertEqual(catalog.section("SettingGuestAccess"), "guest_access")
-        self.assertEqual(catalog.section("SettingNtp"), "ntp")
+        self.assertEqual(catalog.section("Setting.guest_access"), "guest_access")
         self.assertIsNone(catalog.section("WlanConf"))
+        self.assertIsNone(catalog.section("SettingNtp"))
         b = {"kind": "bool", "values": [True, False]}
         e = {"kind": "enum", "values": ["disabled", "optional", "required"]}
         self.assertIs(catalog.flip(b, None), True)

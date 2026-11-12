@@ -101,8 +101,8 @@ class ControllerTest(unittest.TestCase):
         c = unifi.Controller(self.conf)
         self.assertEqual(c.locate("WlanConf", "h", "T"), ("rest/wlanconf/w1", {"_id": "w1", "name": "T"}))
         self.assertEqual(c.locate("Device", "h", "T")[0], "rest/device/d1")
-        self.assertEqual(c.locate("SettingGuestAccess", "h", "T")[0], "rest/setting/guest_access/s1")
-        self.assertIsNone(c.locate("SettingNtp", "h", "T"))
+        self.assertEqual(c.locate("Setting.guest_access", "h", "T")[0], "rest/setting/guest_access/s1")
+        self.assertIsNone(c.locate("Setting.ntp", "h", "T"))
         self.assertIsNone(c.locate("WlanConf", "h", "nope"))
         self.assertIsNone(c.locate("Device", "other", "T"))
 

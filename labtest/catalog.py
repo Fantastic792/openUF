@@ -28,20 +28,22 @@ def load(fields_dir):
         if not isinstance(body, dict):
             continue
         obj = os.path.basename(path)[:-5]
-        for key, spec in body.items():
-            k, values = kind(spec)
-            out.append({"obj": obj, "key": key, "kind": k, "values": values})
+        # Setting.json holds every site section as {section: {key: spec}}: one level deeper
+        groups = ({f"Setting.{s}": b for s, b in body.items() if isinstance(b, dict)} if obj == "Setting"
+                  else {obj: body})
+        for o, b in groups.items():
+            for key, spec in b.items():
+                k, values = kind(spec)
+                out.append({"obj": o, "key": key, "kind": k, "values": values})
     return out
 
 
 def in_scope(obj):
-    return obj in ("WlanConf", "Device") or (obj.startswith("Setting") and not obj.startswith("SettingSuper"))
+    return obj in ("WlanConf", "Device") or (obj.startswith("Setting.") and not obj.startswith("Setting.super_"))
 
 
 def section(obj):
-    if not obj.startswith("Setting"):
-        return None
-    return re.sub(r"(?<!^)([A-Z])", r"_\1", obj[len("Setting"):]).lower()
+    return obj[len("Setting."):] if obj.startswith("Setting.") else None
 
 
 def summary(fields):
@@ -51,7 +53,9 @@ def summary(fields):
         if in_scope(f["obj"]):
             groups["Setting" if f["obj"].startswith("Setting") else f["obj"]] += 1
             kinds[f["kind"]] += 1
-    return {"files": len({f["obj"] for f in fields}), "fields": len(fields), "in_scope": groups, "kinds": kinds}
+    return {"files": len({f["obj"].split(".")[0] for f in fields}), "fields": len(fields), "in_scope": groups,
+            "sections": len({f["obj"] for f in fields if f["obj"].startswith("Setting.") and in_scope(f["obj"])}),
+            "kinds": kinds}
 
 
 def flip(field, current):
