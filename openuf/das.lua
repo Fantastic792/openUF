@@ -108,34 +108,52 @@ local function is_ack(code)
 end
 
 -- The answer to one datagram from src_ip, or nil (nothing to send).
--- relay: function(port, data) -> hostapd's answer or nil.
+-- relay: function(ports, data) -> hostapd's answer or nil.
 function M.handle(plan, data, src_ip, relay)
 	local code, attrs = M.parse(data)
 	if code ~= M.CODE.DISCONNECT_REQUEST and code ~= M.CODE.COA_REQUEST then
 		return nil
 	end
-	local answer
-	for _, e in ipairs(M.route(plan, src_ip, attrs)) do
-		local r = relay(e.port, data)
-		if r then
-			answer = r
-			if is_ack(r:byte(1)) then break end
-		end
-	end
-	return answer
+	local ports = {}
+	for _, e in ipairs(M.route(plan, src_ip, attrs)) do ports[#ports + 1] = e.port end
+	if #ports == 0 then return nil end
+	return relay(ports, data)
 end
 
--- relay() for handle(): ask hostapd's listener on 127.0.0.1:port.
+-- relay() for handle(): ask hostapd's listeners on 127.0.0.1 from one socket.
+-- One shared budget for all of them: asking each in turn waited timeout per
+-- silent WLAN, so a fan-out (or spoofed senders inside the CIDR) stalled the
+-- idle wait for N x timeout. The first ACK wins, else the last answer. A reply
+-- needs the request's Identifier (byte 2) and a asked port, or a stray datagram
+-- on the ephemeral port could answer for hostapd.
 function M.udp_relay(socket, timeout)
-	return function(port, data)
+	return function(ports, data)
 		local u = socket.udp()
 		if not u then return nil end
 		if not u:setsockname("127.0.0.1", 0) then u:close() return nil end
-		u:settimeout(timeout or M.TIMEOUT)
-		u:sendto(data, "127.0.0.1", port)
-		local r = u:receive()
+		local pending, n = {}, 0
+		for _, port in ipairs(ports) do
+			u:sendto(data, "127.0.0.1", port)
+			if not pending[port] then pending[port] = true n = n + 1 end
+		end
+		local id = data:byte(2)
+		local deadline = socket.gettime() + (timeout or M.TIMEOUT)
+		local answer
+		while n > 0 do
+			local left = deadline - socket.gettime()
+			if left <= 0 then break end
+			u:settimeout(left)
+			local r, ip, port = u:receivefrom()
+			if not r then break end
+			if ip == "127.0.0.1" and pending[port] and #r >= 20 and r:byte(2) == id then
+				pending[port] = nil
+				n = n - 1
+				answer = r
+				if is_ack(r:byte(1)) then break end
+			end
+		end
 		u:close()
-		return r
+		return answer
 	end
 end
 

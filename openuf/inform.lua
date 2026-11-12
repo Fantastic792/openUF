@@ -3158,7 +3158,9 @@ end
 -- The dad.* shape's senders, aaa.<n>.radius.dad.client.<k>.cidr (every
 -- accounting server), as IPv4 "a.b.c.d/n" in index order -- the clients
 -- das.lua's dispatcher relays for. A bare address is a /32. nil when none
--- is usable. Their .secret is not read: hostapd checks das.secret.
+-- is usable, or when any is IPv6: the relay listens on IPv4 only and hostapd
+-- takes one client, so relaying would cut that server off; the direct path
+-- stays. Their .secret is not read: hostapd checks das.secret.
 local function _wire_dad_clients(a)
 	local idxs = {}
 	for k in pairs(a) do
@@ -3171,6 +3173,10 @@ local function _wire_dad_clients(a)
 		local c = a["radius.dad.client." .. i .. ".cidr"]
 		local ip, bits = c:match("^([^/]+)/(%d+)$")
 		ip, bits = ip or c, tonumber(bits or "32")
+		if ip:find(":", 1, true) then
+			io.stderr:write(("inform: RADIUS DAS: client CIDR %q is IPv6 -- no relay, the direct client stays\n"):format(c))
+			return nil
+		end
 		if netconfig.is_ipv4(ip) and bits <= 32 then
 			out[#out + 1] = ip .. "/" .. bits
 		else

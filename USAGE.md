@@ -1375,7 +1375,7 @@ neither limited to a WPA-Enterprise WLAN.
   when neither matches, tries each in turn until one ACKs — and forwards the bytes unchanged to hostapd from
   localhost — hostapd checks the authenticator with the same secret. The answer
   goes back to the server; a sender outside every CIDR, a packet that is not a
-  Disconnect/CoA-Request, or a hostapd silent for 2 s gets no answer, and the server retries.
+  Disconnect/CoA-Request, a reply whose RADIUS Identifier is not the request's (dropped), or a hostapd silent for 2 s in all (one shared wait for every WLAN tried) gets no answer, and the server retries. A `dad` client list holding an IPv6 CIDR turns the relay off (logged) and the direct client stays: the relay listens on IPv4 only and hostapd takes one client.
   No firewall rule is opened: on OpenWrt's default zones the request must reach
   the AP from a zone that accepts input (normally `lan`). A port it cannot bind
   is logged once (`RADIUS DAS: cannot listen on udp/3799`) and retried every

@@ -1935,6 +1935,12 @@ return {
 			local rad3 = r("aaa.1.radius.dad.client.1.cidr=bogus\n"
 				.. "aaa.1.radius.dad.client.2.cidr=192.0.2.0/24\n")
 			assert_eq(table.concat(rad3.das.relay, ","), "192.0.2.0/24", "the good one stays")
+			-- The relay listens on IPv4 only and hostapd takes one client, so an
+			-- IPv6 server behind the relay would lose its direct path: refuse.
+			local v6, logged6 = r("aaa.1.radius.dad.client.1.cidr=192.0.2.0/24\n"
+				.. "aaa.1.radius.dad.client.2.cidr=2001:db8::1/128\n")
+			assert_nil(v6.das.relay, "an IPv6 CIDR among them: the direct path stays")
+			assert_contains(logged6, "IPv6", "and said")
 			-- hostapd's own DAS port on the relay's: the two would fight for
 			-- the socket (and a BSS whose DAS socket fails stays down), so the
 			-- WLAN keeps the direct client.
