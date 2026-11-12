@@ -126,10 +126,17 @@ msgstr ""
 msgid "%s used · %s free of %s"
 msgstr ""
 
-#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:77
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:80
 msgid ""
 "%s. Force Provision this device in the controller (or change one of its "
 "settings) to send it again."
+msgstr ""
+
+#: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/overview.js:79
+msgid ""
+"%s. The change cut this device off from the controller and was put back; "
+"fix its IP or VLAN settings in the controller before you Force Provision "
+"this device again."
 msgstr ""
 
 #: package/luci-app-openuf/htdocs/luci-static/resources/view/openuf/setup.js:129

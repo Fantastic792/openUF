@@ -3015,9 +3015,16 @@ local function _wire_hs20(a)
 		-- Type 2 is "redirect to this URL"; without one it advertises nothing.
 		if not (nat == "2" and url == "") then
 			hs.network_auth_type = string.format("%02x", tonumber(nat)) .. url
+		else
+			_wire_hs20_drop("network_auth_type", nat, "type 2 needs an http(s) redirect URL")
 		end
+	elseif k("network_auth_type") ~= nil then
+		_wire_hs20_drop("network_auth_type", k("network_auth_type"), "not 0-3")
 	end
 	hs.anqp_domain_id = _wire_range(k("anqp_domain_id"), 0, 65535)
+	if not hs.anqp_domain_id and k("anqp_domain_id") ~= nil then
+		_wire_hs20_drop("anqp_domain_id", k("anqp_domain_id"), "not 0-65535")
+	end
 	if _wire_bool(k("qos.status")) then
 		-- hostapd's qos_map_set: up to 21 DSCP,UP exceptions, then exactly
 		-- eight low,high DSCP ranges (UP 0-7; 255,255 = unused). It refuses
@@ -3140,6 +3147,7 @@ local function _wire_hs20(a)
 			-- rejects anything else outright).
 			if type(oi) ~= "string" or not oi:match("^%x+$")
 					or #oi % 2 ~= 0 or #oi < 6 or #oi > 30 then
+				_wire_hs20_drop("roaming_consortium", oi, "not 3-15 octets of hex")
 				return nil
 			end
 			return oi
@@ -3150,8 +3158,12 @@ local function _wire_hs20(a)
 		local mcc, mnc = a[p .. "mcc"], a[p .. "mnc"]
 		-- Kept as sent, not renormalised: a two-digit MNC is not a
 		-- three-digit one with a leading zero.
-		if type(mcc) ~= "string" or not mcc:match("^%d%d%d$") then return nil end
-		if type(mnc) ~= "string" or not mnc:match("^%d%d%d?$") then return nil end
+		if type(mcc) ~= "string" or not mcc:match("^%d%d%d$")
+				or type(mnc) ~= "string" or not mnc:match("^%d%d%d?$") then
+			_wire_hs20_drop("cell_net", tostring(mcc) .. "," .. tostring(mnc),
+				"MCC is not 3 digits or MNC not 2-3")
+			return nil
+		end
 		return {mcc = mcc, mnc = mnc}
 	end)
 
@@ -3176,13 +3188,18 @@ local function _wire_hs20(a)
 		-- hostapd wants a number: 0 closed, 1 open, 2 unknown.
 		local STATUS = {closed = "0", open = "1", unknown = "2"}
 		local status = STATUS[a[p .. "status"] or ""]
-		if not (proto and port and status) then return nil end
+		if not (proto and port and status) then
+			_wire_hs20_drop("conn_capab", tostring(a[p .. "protocol"]) .. ":"
+				.. tostring(a[p .. "port"]) .. ":" .. tostring(a[p .. "status"]),
+				"protocol not 1-255, port not 0-65535 or status not closed/open/unknown")
+			return nil
+		end
 		return {protocol = proto, port = port, status = status}
 	end)
 
 	if _wire_bool(a["hs20.metrics.status"]) then
 		local m = {}
-		local ok = true
+		local bad
 		-- info is the WAN Info bitfield the controller has already assembled
 		-- from link status + symmetric + at-capacity. The four rate/load
 		-- fields are 0 when the admin left them unset, which is also
@@ -3191,9 +3208,14 @@ local function _wire_hs20(a)
 				uplink_speed = 4294967295, downlink_load = 255,
 				uplink_load = 255, measurement = 65535}) do
 			local v = _wire_range(a["hs20.metrics." .. field], 0, hi)
-			if v then m[field] = v else ok = false end
+			if v then m[field] = v else bad = bad or field end
 		end
-		if ok then hs.wan_metrics = m end
+		if not bad then
+			hs.wan_metrics = m
+		else
+			_wire_hs20_drop("wan_metrics", bad .. "=" .. tostring(a["hs20.metrics." .. bad]),
+				"a WAN metrics field is missing or out of range")
+		end
 	end
 
 	return hs

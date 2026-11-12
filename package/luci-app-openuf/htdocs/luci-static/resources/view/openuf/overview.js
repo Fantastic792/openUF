@@ -74,7 +74,10 @@ function controllerBlock(s) {
 		[ _('Controller configuration'), st.cfgversion ? _('received (version %s)').format(st.cfgversion) : _('none received yet') ],
 		[ _('Last configuration push'), h.push_fail_stages ?
 			E('span', {}, [ E('span', { 'class': 'label warning' }, _('not applied: %s').format(h.push_fail_stages)), ' ',
-				_('%s. Force Provision this device in the controller (or change one of its settings) to send it again.').format(age(s.now, h.push_fail)) ]) :
+				// A rollback is not a push to resend: Force Provision would cut the device off again.
+				(/(^|,)(ip|swvlan)_rollback(,|$)/.test(h.push_fail_stages) ?
+					_('%s. The change cut this device off from the controller and was put back; fix its IP or VLAN settings in the controller before you Force Provision this device again.') :
+					_('%s. Force Provision this device in the controller (or change one of its settings) to send it again.')).format(age(s.now, h.push_fail)) ]) :
 			(h.push_ok ? _('applied without errors %s').format(age(s.now, h.push_ok)) : _('none since openUF started')) ],
 		[ _('Address the controller knows this device by'), st.mac ],
 		[ _('IP address and hostname'), st.ip ? '%s (%s)'.format(st.ip, st.hostname || '') : st.hostname ],

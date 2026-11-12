@@ -3569,6 +3569,25 @@ return {
 			end)
 			assert_contains(logged, "inform: hs20: dropped qos_map", "qos drop logged")
 			assert_nil(qos({"qos.map.9.high=7"}), "a range with only high")
+
+			-- Every other drop site logs too; one pass, so a miss names them all.
+			local missing = {}
+			for _, c in ipairs({
+				{"roaming_consortium", {"1.roaming_consortium=zz"}},
+				{"cell_net", {"3gpp.1.mcc=12", "3gpp.1.mnc=34"}},
+				{"conn_capab", {"capab.1.protocol=6", "capab.1.port=99999", "capab.1.status=open"}},
+				{"wan_metrics", {"metrics.status=enabled", "metrics.info=999"}},
+				{"network_auth_type", {"network_auth_type=2"}},
+				{"anqp_domain_id", {"anqp_domain_id=70000"}},
+			}) do
+				local out = with_stderr(function()
+					inform._parse_wifi_system_cfg(cfg(c[2]))
+				end)
+				if not out:find("inform: hs20: dropped " .. c[1], 1, true) then
+					missing[#missing + 1] = c[1]
+				end
+			end
+			assert_eq(table.concat(missing, ","), "", "every hs20 drop site logs")
 		end
 	},
 	{
