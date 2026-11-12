@@ -18,7 +18,7 @@ python3 labtest/run.py <stage> [--target vm1]            # a stage, default targ
 |---|---|---|---|
 | `guards` | No firmware or flash write in openUF's code; nothing from `labtest/` in the package | the repo only | ~30 s |
 | `proof` | Breaks a VM three ways (wrong address, deleted network, bad VLAN); the self-heal timer must bring it back each time | lab up, VM running openUF | ~11 min |
-| `plug` | Kills a VM 1, 2, 4 and 7 s after a controller push; the config must be whole and openUF back | as `proof`, VM adopted, the account file | ~3 min |
+| `plug` | Pushes from the controller, watches the VM for the apply start (its write of `/etc/config/wireless`), and kills the VM 0, 0.1, 0.2 and 0.5 s after it. Each cut records the offset, the time from the apply start, and `mid_apply` (the apply had not finished). The config must be whole and openUF back; no apply start within 30 s fails that cut; at least one cut must land mid-apply | as `proof`, VM adopted, the account file | ~6 min |
 | `safety` | `guards`, `proof`, `plug` in that order; stops at the first stage that fails | as `plug` | ~15 min |
 
 `proof` and `plug` refuse any target whose `kind` is not `vm`.

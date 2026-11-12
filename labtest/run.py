@@ -30,8 +30,13 @@ def pull_plug(args):
     if not os.path.exists(conf["account_file"]):
         return [("plug", False, "no account file")]
     r = plug.run(conf, target.get_target(conf, args.target), unifi.Controller(conf))
-    bad = [c for c in r["cuts"] if not (c["booted"] and not c["problems"] and c["connected"])]
-    return [("plug", r["pass"], "; ".join(str(c) for c in bad) or "not all cuts ran")]
+    detail = "; ".join(
+        f"+{c['offset']}s cut_ms={c['cut_ms']} mid_apply={c['mid_apply']} booted={c['booted']} "
+        f"connected={c['connected']}" + "".join(f" [{e}]" for e in [c["error"]] + c["problems"] if e)
+        for c in r["cuts"])
+    if r["pass"] is False and not any(c["mid_apply"] for c in r["cuts"]):
+        detail += "; no cut landed inside the apply"
+    return [("plug", r["pass"], detail)]
 
 
 def safety(args):
