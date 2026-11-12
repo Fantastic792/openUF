@@ -7,7 +7,8 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from labtest.safety import flashguard, packguard  # noqa: E402
+from labtest import target  # noqa: E402
+from labtest.safety import flashguard, packguard, proof  # noqa: E402
 
 
 def guards(args):
@@ -17,8 +18,15 @@ def guards(args):
             ("pack_guard", not problems, "; ".join(problems))]
 
 
+def timer_proof(args):
+    conf = target.load_config()
+    r = proof.run(conf, target.get_target(conf, args.target))
+    bad = [b for b in r["breaks"] if not proof.ok(b)]
+    return [("timer_proof", r["pass"], "; ".join(f"{b['name']}: {b}" for b in bad) or "not all breaks ran")]
+
+
 # stage name -> function(args) returning [(check_name, passed, detail)]
-STAGES = {"guards": guards}
+STAGES = {"guards": guards, "proof": timer_proof}
 
 
 def main(argv=None):
