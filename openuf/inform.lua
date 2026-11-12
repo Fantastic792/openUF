@@ -2932,6 +2932,14 @@ local function _wire_hs20_lang(v)
 	return type(v) == "string" and v:match("^%a%a%a?$") and v or nil
 end
 
+-- One stderr line per hs20 value dropped, so a Passpoint profile that
+-- advertises less than the admin typed says why. The value is shown cut and
+-- with control characters blanked: it is the very thing that was refused.
+local function _wire_hs20_drop(key, val, why)
+	val = tostring(val):sub(1, 64):gsub("%c", "?")
+	io.stderr:write(("inform: hs20: dropped %s %q: %s\n"):format(key, val, why))
+end
+
 -- aaa.<n>.hs20.* -- Hotspot 2.0 / Passpoint.
 --
 -- Reachable only because openUF claims fw_caps 0x800000 and fw2_caps 0x80000
@@ -3025,6 +3033,16 @@ local function _wire_hs20(a)
 			local d, u = num(a[p .. "dcsp"], 63), num(a[p .. "up"], 7)
 			return d and u and (d .. "," .. u)
 		end) or {}
+		-- The buckets are keyed on dcsp / low, so an entry carrying only its
+		-- other half is never visited above; it is as malformed as a bad value.
+		for _, half in ipairs({{"qos.exception/up", "qos.exception.", "dcsp"},
+				{"qos.map/high", "qos.map.", "low"}}) do
+			for _, i in ipairs(idx[half[1]] or {}) do
+				if a["hs20." .. half[2] .. i .. "." .. half[3]] == nil then
+					bad = true
+				end
+			end
+		end
 		local rg = _wire_indexed(idx, "qos.map", "low", function(i)
 			local p = "hs20.qos.map." .. i .. "."
 			local lo, hi = num(a[p .. "low"], 255), num(a[p .. "high"], 255)
@@ -3039,6 +3057,10 @@ local function _wire_hs20(a)
 		if not bad and #rg == 8 and ri[8] - ri[1] == 7 and #ex <= 21 then
 			for _, r in ipairs(rg) do ex[#ex + 1] = r end
 			hs.qos_map_set = table.concat(ex, ",")
+		else
+			_wire_hs20_drop("qos_map", "hs20.qos.*", "a malformed or missing "
+				.. "exception or range, or not eight ranges in a row (hostapd "
+				.. "refuses the BSS over a bad map)")
 		end
 	end
 
@@ -3051,25 +3073,48 @@ local function _wire_hs20(a)
 	hs.venue_name = _wire_indexed(idx, "venue_name", "name", function(i)
 		local p = "hs20.venue_name." .. i .. "."
 		local lang, name = _wire_hs20_lang(a[p .. "lang"]), _wire_text(a[p .. "name"])
-		if not (lang and name) then return nil end
+		if not (lang and name) then
+			_wire_hs20_drop("venue_name", a[p .. "name"], lang
+				and "empty, over 128 bytes or has a control character"
+				or "language is not two or three letters")
+			return nil
+		end
 		return {lang = lang, name = name, url = _wire_text(a[p .. "url"], 1024)}
 	end)
 
 	hs.nai_realm = _wire_indexed(idx, "nai_realm", "name", function(i)
 		local p = "hs20.nai_realm." .. i .. "."
 		if a[p .. "status"] and not _wire_bool(a[p .. "status"]) then return nil end
-		-- RFC 7542 realm characters, ";" between the realms of one entry: a
-		-- "," would end hostapd's realm field and turn the rest into EAP methods.
-		-- hostapd also fails its whole config (every BSS on the radio) on an
-		-- empty realm or more than MAX_NAI_REALMS (10) in one entry.
+		-- ";" between the realms of one entry; a "," would end hostapd's realm
+		-- field and turn the rest into EAP methods (_wire_text already refuses
+		-- control characters). Encoding 0 is RFC 7542 characters only;
+		-- encoding 1 is free-format UTF-8 (an IDN), so only the separators
+		-- bind it. hostapd also fails its whole config (every BSS on the
+		-- radio) on an empty realm or more than MAX_NAI_REALMS (10) in one
+		-- entry. shortcut: UTF-8 well-formedness is not checked, hostapd
+		-- does not either.
+		local enc  = _wire_range(a[p .. "encoding"], 0, 1) or "0"
 		local name = _wire_text(a[p .. "name"])
-		if name and (not name:match("^[%w%.%-;]+$") or name:find("^;")
-				or name:find(";;", 1, true) or name:find(";$")
-				or select(2, name:gsub(";", "")) >= 10) then
-			name = nil
+		local why
+		if not name then
+			why = "empty, over 128 bytes or has a control character"
+		elseif name:find(",", 1, true) then
+			why = "a comma would end hostapd's realm field"
+		elseif enc == "0" and not name:match("^[%w%.%-;]+$") then
+			why = "not RFC 7542 characters (encoding 0)"
+		elseif name:find("^;") or name:find(";;", 1, true) or name:find(";$")
+				or select(2, name:gsub(";", "")) >= 10 then
+			why = "an empty realm or more than 10 in one entry"
+		end
+		if why then
+			_wire_hs20_drop("nai_realm", a[p .. "name"], why)
+			return nil
 		end
 		local eap  = _wire_range(a[p .. "eap_method"], 1, 255)
-		if not (name and eap) then return nil end
+		if not eap then
+			_wire_hs20_drop("nai_realm", name, "eap_method is not 1-255")
+			return nil
+		end
 		-- The auth parameters are a THIRD level down, under
 		-- aaa.<n>.hs20.nai_realm.<i>.eap_method.auth.<j>.{id,val}.
 		local auth = _wire_indexed(idx, "nai_realm." .. i
@@ -3081,7 +3126,7 @@ local function _wire_hs20(a)
 			return {id = id, val = val}
 		end)
 		return {
-			encoding = _wire_range(a[p .. "encoding"], 0, 1) or "0",
+			encoding = enc,
 			name = name, eap_method = eap, auth = auth,
 		}
 	end)
@@ -3115,7 +3160,12 @@ local function _wire_hs20(a)
 			local p = "hs20.friendly_name." .. i .. "."
 			local lang = _wire_hs20_lang(a[p .. "language"])
 			local text = _wire_text(a[p .. "text"])
-			if not (lang and text) then return nil end
+			if not (lang and text) then
+				_wire_hs20_drop("friendly_name", a[p .. "text"], lang
+					and "empty, over 128 bytes or has a control character"
+					or "language is not two or three letters")
+				return nil
+			end
 			return {lang = lang, text = text}
 		end)
 

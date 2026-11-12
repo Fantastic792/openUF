@@ -3474,6 +3474,104 @@ return {
 		end
 	},
 	{
+		-- Task 9g review minors: an encoding=1 realm is free-format UTF-8 (an
+		-- IDN), so the RFC 7542 charset applies to encoding 0 only; the
+		-- generated hostapd lines, not just the parsed table, are pinned; every
+		-- dropped value says so on stderr; a QoS entry missing its half drops
+		-- the map like every other malformed one.
+		name = "inform packet: Hotspot 2.0 free-format realms, hostapd lines, drop warnings and half QoS entries",
+		fn = function()
+			local function cfg(extra)
+				local t = {
+					"aaa.1.ssid=openuf-eap", "aaa.1.status=enabled", "aaa.1.wpa=2",
+					"aaa.1.wpa.key.1.mgmt=WPA-EAP", "aaa.1.wpa.1.pairwise=CCMP",
+					"aaa.1.radius.auth.1.ip=192.0.2.10",
+					"aaa.1.radius.auth.1.port=1812",
+					"aaa.1.radius.auth.1.secret=openufradius",
+					"aaa.1.hs20.status=enabled",
+					"wireless.1.ssid=openuf-eap", "wireless.1.parent=radio0",
+					"wireless.1.usage=user",
+					"radio.1.phyname=radio0", "radio.1.devname=ath0",
+					"radio.1.channel=auto", "radio.1.status=enabled",
+				}
+				for _, l in ipairs(extra) do t[#t + 1] = "aaa.1.hs20." .. l end
+				return table.concat(t, "\n") .. "\n"
+			end
+			local idn = "b\195\188cher.example"
+			local function realm(enc, name)
+				local _, v = inform._parse_wifi_system_cfg(cfg({
+					"nai_realm.1.encoding=" .. enc, "nai_realm.1.name=" .. name,
+					"nai_realm.1.eap_method=21"}))
+				return v[1].hs20.nai_realm
+			end
+			local r = realm("1", idn)
+			assert_true(r ~= nil and r[1].name == idn, "an encoding=1 IDN realm is kept")
+			assert_nil(realm("0", idn), "the same realm under encoding 0 is dropped")
+			assert_nil(realm("1", "a,b.example"), "a comma ends hostapd's realm field")
+			assert_nil(realm("1", "a\tb.example"), "a control character is dropped")
+			assert_nil(realm("1", "a\127b.example"), "DEL is dropped")
+			assert_nil(realm("1", "a.example;;b.example"), "an empty part is dropped")
+			assert_nil(realm("1", ";a.example"), "a leading ; is dropped")
+
+			-- Language codes and the generated lines.
+			local rt, vt = inform._parse_wifi_system_cfg(cfg({
+				"venue_name.1.lang=ENG", "venue_name.1.name=Upper",
+				"venue_name.2.lang=abcd", "venue_name.2.name=Four",
+				"venue_name.3.name=Default",
+				"nai_realm.1.encoding=1", "nai_realm.1.name=" .. idn,
+				"nai_realm.1.eap_method=21"}))
+			local hs = vt[1].hs20
+			assert_eq(#hs.venue_name, 2, "the 4-letter language dropped, uppercase kept")
+			assert_eq(hs.venue_name[1].lang, "ENG", "case is hostapd's business, kept as sent")
+			local ucihelper, db = new_apply_env()
+			ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
+			local sec = db.wireless["openuf_radio0_openuf_eap_"
+				.. ucihelper.derive_mobility_domain("openuf-eap")]
+			local raw = table.concat(sec.hostapd_bss_options or {}, "\n")
+			assert_contains(raw, "venue_name=ENG:Upper", "uppercase lang in the line")
+			assert_contains(raw, "venue_name=eng:Default", "missing lang in the line")
+			assert_true(raw:find("venue_name=abcd", 1, true) == nil
+				and raw:find("Four", 1, true) == nil, "4-letter lang not written")
+			assert_contains(raw, "nai_realm=1," .. idn .. ",21", "IDN realm line")
+
+			-- One stderr line per dropped value, naming key and reason.
+			local logged = with_stderr(function()
+				realm("0", idn)
+			end)
+			assert_contains(logged, "inform: hs20: dropped nai_realm", "key named")
+			assert_contains(logged, "b\195\188cher.example", "value named")
+			assert_contains(logged, "RFC 7542", "reason named")
+			logged = with_stderr(function()
+				inform._parse_wifi_system_cfg(cfg({
+					"venue_name.1.lang=abcd", "venue_name.1.name=Four"}))
+			end)
+			assert_contains(logged, "inform: hs20: dropped venue_name", "venue drop logged")
+			logged = with_stderr(function()
+				realm("1", idn)
+			end)
+			assert_true(logged:find("hs20: dropped", 1, true) == nil,
+				"a kept realm logs no drop")
+
+			-- A QoS entry with only one half drops the whole map, as a bad value does.
+			local function qos(extra)
+				local l = {"qos.status=enabled"}
+				for k = 1, 8 do
+					l[#l + 1] = "qos.map." .. k .. ".low=0"
+					l[#l + 1] = "qos.map." .. k .. ".high=7"
+				end
+				for _, e in ipairs(extra) do l[#l + 1] = e end
+				local _, v = inform._parse_wifi_system_cfg(cfg(l))
+				return v[1].hs20.qos_map_set
+			end
+			assert_true(qos({}) ~= nil, "control: eight ranges alone is a map")
+			logged = with_stderr(function()
+				assert_nil(qos({"qos.exception.1.up=3"}), "an exception with only up")
+			end)
+			assert_contains(logged, "inform: hs20: dropped qos_map", "qos drop logged")
+			assert_nil(qos({"qos.map.9.high=7"}), "a range with only high")
+		end
+	},
+	{
 		-- Keys the 10.6.106 controller has no WLAN field for (owner
 		-- 2026-11-12: "port them anyways for now"). Wire names from
 		-- fonix232/openUF's decompile (MIT), not yet seen on the wire.
