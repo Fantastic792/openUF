@@ -23,6 +23,16 @@ class PlugTest(unittest.TestCase):
     def test_config_problems_empty_when_clean(self):
         self.assertEqual(plug.config_problems(FakeTarget({"uci": (0, "")})), [])
 
+    def test_file_empty_before_the_cuts_is_not_a_problem(self):
+        # openUF's installers create /etc/config/openuf empty on purpose; uci reads it fine
+        t = FakeTarget({"uci": (0, "EMPTY /etc/config/openuf\nEMPTY /etc/openuf/state\n")})
+        p = plug.config_problems(t, known_empty={"/etc/config/openuf"})
+        self.assertEqual(p, ["zero-length file /etc/openuf/state"])
+
+    def test_empty_files_lists_zero_length_files(self):
+        t = FakeTarget({"find": (0, "/etc/config/openuf\n")})
+        self.assertEqual(plug.empty_files(t), {"/etc/config/openuf"})
+
     def test_config_problems_unreachable_is_a_problem(self):
         self.assertEqual(len(plug.config_problems(FakeTarget({"uci": (255, "")}))), 1)
 

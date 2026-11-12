@@ -6,12 +6,18 @@ from labtest import results
 
 DELAYS = [1, 2, 4, 7]  # seconds between the push and the power cut
 
+FIND_EMPTY = "find /etc/config /etc/openuf -type f -size 0 2>/dev/null"
 CHECK = ("for f in /etc/config/*; do uci -q show \"${f##*/}\" >/dev/null 2>&1 || echo \"BAD $f\"; done; "
-         "find /etc/config /etc/openuf -type f -size 0 2>/dev/null | sed 's/^/EMPTY /'; "
+         f"{FIND_EMPTY} | sed 's/^/EMPTY /'; "
          "/etc/init.d/openuf running || echo NOTRUNNING")
 
 
-def config_problems(t):
+def empty_files(t):
+    """Zero-length files before any cut: some are empty by design (/etc/config/openuf from the installer)."""
+    return set(t.ssh(FIND_EMPTY)[1].split())
+
+
+def config_problems(t, known_empty=()):
     rc, out = t.ssh(CHECK, timeout=30)
     if rc == 255:
         return ["target not reachable"]
@@ -19,7 +25,7 @@ def config_problems(t):
     for line in out.splitlines():
         if line.startswith("BAD "):
             problems.append(f"uci cannot read {line[4:]}")
-        elif line.startswith("EMPTY "):
+        elif line.startswith("EMPTY ") and line[6:] not in known_empty:
             problems.append(f"zero-length file {line[6:]}")
         elif line.strip() == "NOTRUNNING":
             problems.append("openuf not running")
@@ -46,6 +52,7 @@ def run(conf, t, ctl):
     ctl.login()
     wlan = ctl.wlans()[0]["_id"]
     first = _uapsd(ctl, wlan)
+    empty_before = empty_files(t)
     lab = ["sh", conf["lab_sh"]]
     cuts = []
     try:
@@ -58,7 +65,7 @@ def run(conf, t, ctl):
             cuts.append(c)
             if not c["booted"]:
                 break  # a finding: leave the VM as it is for the lead to look at
-            c["problems"] = config_problems(t)
+            c["problems"] = config_problems(t, empty_before)
             c["connected"] = _connected(t, ctl)
     finally:
         if _uapsd(ctl, wlan) != first:
