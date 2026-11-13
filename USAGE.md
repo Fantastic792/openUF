@@ -759,8 +759,14 @@ The modelmap sets:
 ### Device identity (`openuf/ufmodel/*.lua`)
 
 The U6-InWall identity is configured in `ufmodel/u6iw.lua`.  The firmware version
-(`fw.ver`) must be accepted by your controller.  If the controller rejects the
-device with "firmware too old" or similar, increment `fw.ver` and try again.
+(`fw.ver`) is where a fresh device starts; from there it follows the controller.  When the
+controller offers a firmware update (a real one from Ubiquiti's catalog, which openUF never
+downloads or flashes), openUF accepts it virtually and reports the offered version from the
+next inform on (`upgrade_requested_version` in `state.json`; `report_upgraded_version = false` in conf.lua turns this off), so the "Update Available" badge clears the way
+it does for a genuine AP: at the next automatic update window (03:00 by default) or when you
+click Update.  The controller then re-provisions the device, as after a real AP's reboot: one
+radio reload, a second or two without WiFi.  Only if the controller rejects the device outright
+("firmware too old") does `fw.ver` need a hand edit.
 
 ```lua
 uap = {
@@ -768,7 +774,7 @@ uap = {
     model    = "U6IW",
     fw = {
         pre        = "U6IW.",
-        ver        = "6.6.55",    -- tune this if the controller rejects the device
+        ver        = "8.8.14.20179",  -- the catalog's release entry when the file was written
         buildtime  = "230801.1200",
         factoryver = "6.5.28"
     },
@@ -782,8 +788,9 @@ than the WiFi 6 ones it would push at a U6-InWall and openUF would have to clamp
 `platform`/`model` are `UHDIW`, and its `fw.ver` (`6.7.57.15670`) is the release-channel entry
 of Ubiquiti's firmware catalog for that platform — the value the controller compares the
 reported version against with a strict string equality, so it must stay bare (`M.m.p.build`,
-no model prefix) and must track the catalog.  When the controller shows a spurious "Update
-Available" for the device, re-read the catalog URL in the file's header and update `fw.ver`.
+no model prefix) and must track the catalog.  An "Update
+Available" for the device clears itself once the controller sends the update and openUF
+accepts it virtually (above); `fw.ver` only matters for a fresh install's first contact.
 ⚠️ No controller has adopted a device under this identity yet; if adoption stalls, set
 `ufmodel = "u6iw"` in the modelmap and report what the controller did.
 
@@ -1475,7 +1482,7 @@ bridge; nothing on the UniFi AP changes), and since its release 1.4 ships an **o
 | `reassociation_deadline` | 3000 | OpenWrt's default |
 
 **Installing it.** `setup.sh` asks (question 7, default yes) and runs the project's own
-`rrb-unifi-setup install --yes` from a **pinned** release (v1.5, the one this openUF's test
+`rrb-unifi-setup install --yes` from a **pinned** release (v1.5.1, the one this openUF's test
 suite runs the plugin of: the plugin rewrites every 802.11r WLAN, so a release that changed
 what it expects of openUF must not reach a device before this tree was checked against it),
 confirms the tool's network watchdog, and puts the plugin in `/etc/openuf/plugins/rrb-unifi.lua`
@@ -1489,21 +1496,21 @@ the same thing by hand:
 
 ```sh
 # on the AP, with internet
-wget -qO /tmp/rrb.tgz https://github.com/d-malinowski/unifi-openwrt-roaming/archive/refs/tags/v1.5.tar.gz
+wget -qO /tmp/rrb.tgz https://github.com/d-malinowski/unifi-openwrt-roaming/archive/refs/tags/v1.5.1.tar.gz
 cd /tmp && tar xzf rrb.tgz && cd unifi-openwrt-roaming-*/
 sh rrb-unifi-setup install          # packages, translator, veth, the openUF plugin, a restart of openUF
 rrb-unifi-setup verify              # after the controller's next push (Force Provision makes it now)
 rrb-unifi-setup uninstall           # the safe order: plugin out, re-push, then the veth and the daemon
 ```
 
-The tool finds openUF under `/opt/openuf`, upstream's documented detection path; on a package
-install `setup.sh` links that path to `/usr/lib/openuf` before running the tool, and the
-package's postinst makes the same link from its next release on (an existing link is kept). On
-a package device set up before 2026-11-02, make it by hand first -- `ln -s /usr/lib/openuf
-/opt/openuf` -- or the tool installs the translator but not the plugin, and its `verify` and
-`uninstall` run in the no-openUF mode (a pull request to probe `/usr/lib/openuf` too is open
-on the project). `setup.sh` also places the plugin itself and starts the translator in case
-the tool ran in that mode anyway. The controller then
+The tool finds openUF under `/opt/openuf`, upstream's documented detection path, and since
+release 1.5.1 (2026-11-03; yesrab/openUF's pull request, merged) under `/usr/lib/openuf` as well, where the
+openuf package puts it. 1.5.1 also reads the package's UCI `list plugin` form of the plugin list,
+so it neither enables the plugin twice nor uninstalls past it. On a package install `setup.sh`
+still links `/opt/openuf` to `/usr/lib/openuf` before running the tool (upstream's guide and any
+older tool look only there), and the package's postinst makes the same link (an existing link is
+kept). `setup.sh` also places the plugin itself and starts the translator in case an older tool
+ran in its no-openUF mode. The controller then
 pushes the WLANs again within a few informs, because openUF notices the new plugin (the
 fingerprint in `state.json`, see "Plugins" below); Fast Roaming must be on for the WLAN in
 UniFi, or the controller sends no `iapp_key` and the plugin logs that. Only WPA2-PSK with
@@ -2426,7 +2433,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or reinstall with `--bootstrap-adopt` |
 | Mobile app or controller asks for root credentials ("advanced adoption") although the `ubnt` account exists | `logread` shows `User 'ubnt' has invalid shell, rejected`: the account's forced shell is not in `/etc/shells`, which dropbear checks before the password. Run `openuf bootstrap-account`, or `sh install.sh install --bootstrap-adopt` on a file install — both register it for an existing account |
 | Device stays stuck at "Adopting" forever | No AES-GCM backend — `lua-openssl` missing or built without AEAD support. The CLI `openssl-util` fallback is CBC-only and will not work (see § 1) |
-| Controller rejects device ("firmware incompatible") | Adjust `fw.ver` in `ufmodel/u6iw.lua` |
+| Controller rejects device ("firmware incompatible") | Adjust `fw.ver` in `ufmodel/u6iw.lua`. An "Update Available" badge is not this: it clears after the controller's next update push, which openUF accepts virtually |
 | hostapd fails: "unknown configuration item 'bss_transition'" | A `wpad-basic-*` build is installed — replace it with `apk add wpad-wolfssl` |
 | Multicast Suppression is on in the controller but nothing is filtered | `nft list table bridge openuf_bcfilt` shows the mode: `limit rate over` rules mean Conservative, `drop` rules mean Aggressive, an empty chain means nothing arrived. An empty chain with the control on means the keys were not pushed — Force Provision, and check `uci show wireless \| grep -E "openuf_mcast_suppress\|openuf_bcfilt"`. A table with the sets and no `meta pkttype` rule is the missing `kmod-nft-bridge`, which openUF logs by name |
 | Aggressive suppression still breaks DHCP or ARP | Check the controller actually sent the carve-out: the push must carry `wireless.<n>.bcfilt.bypass_types`, and the live rules must show four `accept` lines **above** the drop for that VAP. An older controller sends `bcfilt.status` alone, in which case the drop applies to DHCP and ARP too — Ubiquiti's documented behaviour for that control — and the DHCP server's MAC has to go on the excepted-devices list |

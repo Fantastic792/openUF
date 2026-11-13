@@ -4541,9 +4541,10 @@ local KNOWN_TOP_FIELDS = {
 	            live_update = true},
 	setparam = {_type = true, mgmt_cfg = true, system_cfg = true,
 	            server_time_in_utc = true, include_blocks = true, cfgversion = true,
-	            -- read by M._sync_blocked_stas; listing it keeps client MACs
-	            -- out of unhandled.json.
-	            blocked_sta = true},
+	            -- Both read by the setparam branch (the ledger counted them
+	            -- 50 times on each lab AP before 2026-11-13): the cadence,
+	            -- as on a noop, and the blocked-client list.
+	            interval = true, blocked_sta = true},
 }
 
 -- pcall'd: the ledger is a diagnostic and must never cost a heartbeat.
@@ -4804,14 +4805,24 @@ end
 -- reports the version the controller pushed instead: a stored bare version
 -- ("6.8.2.15592" form only) replaces the profile's, which ends the re-offer
 -- loop but claims firmware this host is not running. false restores the
--- profile's version.
-function M.reported_version(uap, st, cfg)
+-- profile's version. Bare only because the controller's offer gate is a
+-- verbatim string compare (yesrab 69e1ed0, 10.6.109 decompiled). The last
+-- value handed out is kept for the status file (`openuf status`).
+M.FW_VERSION_PAT = "^%d+%.%d+%.%d+%.%d+$"
+M._last_version = nil
+-- The pushed version when it is the one reported, else nil.
+function M._upgraded_version(st, cfg)
 	local v = st and st.upgrade_requested_version
 	if cfg and cfg.config and cfg.config.report_upgraded_version ~= false
-		and type(v) == "string" and v:match("^%d+%.%d+%.%d+%.%d+$") then
+		and type(v) == "string" and v:match(M.FW_VERSION_PAT) then
 		return v
 	end
-	return uap.fw and uap.fw.ver or "6.6.55"
+	return nil
+end
+function M.reported_version(uap, st, cfg)
+	local v = M._upgraded_version(st, cfg) or (uap.fw and uap.fw.ver) or "6.6.55"
+	M._last_version = v
+	return v
 end
 
 -- The uptime the inform reports. A real AP reboots into an upgrade, so its
@@ -4895,6 +4906,12 @@ function M.handle_response(json_str, st, cfg)
 	end
 
 	if _type == "setparam" then
+		-- The cadence field a noop carries rides the setparam too (10.6.109
+		-- puts it on the blocked_sta push, 11.0 on every one); a setparam
+		-- without it leaves the cadence as it was.
+		if resp.interval ~= nil then
+			M._controller_interval = M._sane_interval(resp.interval) or M._controller_interval
+		end
 		-- mgmt_cfg is a newline-delimited key=value string (real controller format,
 		-- confirmed by amd989/unifi-gateway _parse_mgmt_cfg).
 		local mgmt_raw = resp.mgmt_cfg
@@ -5459,18 +5476,44 @@ function M.handle_response(json_str, st, cfg)
 	end
 
 	if _type == "upgrade" then
-		-- Store only -- never download/verify/flash/reboot. A real controller's
-		-- upgrade URL targets genuine Ubiquiti firmware; applying it to this
-		-- (non-Ubiquiti) hardware would brick it. See amd989/unifi-gateway,
-		-- which handles this identically (log + store, no real upgrade path).
-		st.upgrade_requested_version = tostring(resp.version or "")
+		-- Never download/verify/flash/reboot: the URL names genuine Ubiquiti
+		-- firmware, and applying it to this hardware would brick it. The offer
+		-- is accepted VIRTUALLY instead (report_upgraded_version, on by
+		-- default; see reported_version and reported_uptime): the offered
+		-- version becomes the one this device reports, the way a real AP comes
+		-- back from its reboot with the new one. The controller (10.6.109, decompiled: devmgr.c.h, the
+		-- upgrade tracker) marks the device UPGRADING with a timer when it
+		-- sends this and clears it -- `upgradable` false, the "Update
+		-- Available" badge gone -- once an inform reports a version that
+		-- satisfies `upgrade_to_firmware`; its offer gate is a verbatim string
+		-- compare, so the version is kept exactly as sent. The stored-only
+		-- answer this replaces left the controller to time the upgrade out,
+		-- and with auto-upgrade on (the default) it tried again every night.
+		-- A real AP also sends `Upgrade` notifications on the way (up_type
+		-- UpgradeReady, up_stage FWDownloading then FWCheckOK), which the
+		-- controller turns into its progress states; one of each goes out
+		-- after this heartbeat so the UI walks the same stages. Returns true:
+		-- the next heartbeat, the first with the new version, goes out at once.
+		-- A version that will not be reported (option off, not bare
+		-- M.m.p.build) is stored only, as before: no stages, no follow-up.
+		local version = tostring(resp.version or "")
+		st.upgrade_requested_version = version
 		st.upgrade_requested_url     = tostring(resp.url or "")
 		st.upgrade_accepted_uptime   = M._uptime() or 0
 		st.upgrade_accepted_boot     = M._boot_id() or ""
-		io.stderr:write("inform: upgrade requested (version=" .. st.upgrade_requested_version
-			.. ") -- stored only, not applying\n")
+		if not M._upgraded_version(st, cfg) then
+			io.stderr:write("inform: upgrade requested (version=" .. version
+				.. ") -- stored only, still reporting " .. tostring(M._last_version) .. "\n")
+			M._state.save(st)
+			return false
+		end
+		io.stderr:write("inform: upgrade requested (version=" .. version
+			.. ") -- accepted virtually: nothing downloaded or flashed; this version"
+			.. " is reported from the next inform on\n")
 		M._state.save(st)
-		return false
+		M.queue_event({event_string = "Upgrade", up_type = "UpgradeReady", up_stage = "FWDownloading"})
+		M.queue_event({event_string = "Upgrade", up_type = "UpgradeReady", up_stage = "FWCheckOK"})
+		return true
 	end
 
 	if _type == "cmd" then

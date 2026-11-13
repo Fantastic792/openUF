@@ -46,7 +46,10 @@ credited to this repo), so diff before assuming a commit is new.
   https://github.com/d-malinowski/unifi-openwrt-roaming releases through
   `tools/rrb-unifi-compat.sh --bump`. yesrab/openUF (`b8797df`, 2026-11-10) was reviewed and
   ported by hand, not cherry-picked: b8797df, then 8a60095/97564d2 with the switch to the
-  external plugin (9e405c5's parts).
+  external plugin (9e405c5's parts). Second round 2026-11-14 to `69e1ed0` (v0.3.2): b0fad40 (rrb-unifi
+  1.5.1 pin, compat tool shim) and 69e1ed0 (virtual upgrade: stage notifs, follow-up inform,
+  announce version, setparam `interval`, U6IW fw.ver) on OUR report_upgraded_version state
+  (their `st.fw_version` not taken). Next yesrab review starts after `69e1ed0`.
 - **Mechanics that worked in syncs 3 and 4:** `git add -A` first, then per commit **in
   upstream's order** `git show --format= <c> -- openuf/ tests/ ':!openuf/guestportal.lua'
   ':!tests/test_guestportal.lua' | git apply --3way` (the fetch puts their blobs in our

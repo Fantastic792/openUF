@@ -622,6 +622,7 @@ function M._write_status(st, fields)
 		"cfgversion="    .. tostring(st and st.cfgversion or ""),
 		"mac="           .. tostring(st and st.mac or ""),
 		"inform_url="    .. tostring(st and st.inform_url or ""),
+		"version="       .. tostring(M._last_version or ""),
 		"build="         .. build_stamp(),
 		"push_ok="       .. tostring(s.push_ok or 0),
 		"push_fail="     .. tostring(st and st.push_fail or 0),

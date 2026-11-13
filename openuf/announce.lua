@@ -341,6 +341,19 @@ function M.upgrade_mark(state_file)
 	return m
 end
 
+-- The controller-pushed version inform.lua reports (reported_version: bare
+-- M.m.p.build only), or nil, which leaves the identity's fw.ver. The caller
+-- checks conf.lua's report_upgraded_version (yesrab 69e1ed0, our state field).
+function M.fw_version(state_file)
+	local sm = state_module()
+	if not sm then return nil end
+	if state_file then sm._state_file = state_file end
+	local ok, s = pcall(sm.load)
+	local v = ok and type(s) == "table" and s.upgrade_requested_version
+	if type(v) == "string" and v:match("^%d+%.%d+%.%d+%.%d+$") then return v end
+	return nil
+end
+
 -- Re-read, before each broadcast, the facts that change while the broadcaster
 -- runs. The packet used to be built from startup values for the life of the
 -- process:
@@ -353,6 +366,7 @@ end
 -- Every read here is a proc file or one `ip` call.
 --   cfg.iface       interface to read the IP from (optional)
 --   cfg.state_file  state.json path for the adopted flag (optional)
+--   cfg.report_upgraded  conf.lua report_upgraded_version (fw_ver follows it)
 -- A field whose source cannot be read keeps its previous value.
 function M._refresh(cfg)
 	if cfg.iface then
@@ -374,6 +388,11 @@ function M._refresh(cfg)
 	end
 	local adopted = M.adopted(cfg.state_file)
 	if adopted ~= nil then cfg.adopted = adopted end
+	-- The firmware version follows state.json too (a controller upgrade
+	-- accepted virtually, inform.lua); the identity's value stays while the
+	-- state names none.
+	local fw_ver = cfg.report_upgraded and M.fw_version(cfg.state_file)
+	if fw_ver then cfg.fw_ver = fw_ver end
 	return cfg
 end
 
@@ -598,6 +617,8 @@ if not OPENUF_TEST_MODE then
 		-- hook/syswrapper.lua honour it, so all three agree on the file.
 		local state_file = (config and type(config.state_file) == "string"
 			and config.state_file ~= "") and config.state_file or nil
+		-- Absent means on, as in inform.reported_version.
+		local report_upgraded = not (config and config.report_upgraded_version == false)
 
 		M.run({
 			mac           = mac,
@@ -608,7 +629,8 @@ if not OPENUF_TEST_MODE then
 			state_file    = state_file,
 			platform      = ufhw.uap.platform,
 			fw_pre        = ufhw.uap.fw.pre,
-			fw_ver        = ufhw.uap.fw.ver,
+			report_upgraded = report_upgraded,
+			fw_ver        = report_upgraded and M.fw_version(state_file) or ufhw.uap.fw.ver,
 			fw_buildtime  = ufhw.uap.fw.buildtime,
 			fw_factoryver = ufhw.uap.fw.factoryver,
 			version_suffix = M.VERSION_SUFFIX,

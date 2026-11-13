@@ -653,6 +653,23 @@ return {
 		end
 	},
 	{
+		name = "announce: _refresh and fw_version follow a virtual upgrade recorded in state.json",
+		fn = function()
+			local path = os.tmpname()
+			local f = io.open(path, "w"); f:write('{"adopted":true,"upgrade_requested_version":"8.8.14.20179"}'); f:close()
+			assert_eq(announce.fw_version(path), "8.8.14.20179", "state's pushed version is read")
+			local cfg = announce._refresh({state_file = path, fw_ver = "6.8.2.15592", report_upgraded = true})
+			assert_eq(cfg.fw_ver, "8.8.14.20179", "the broadcast follows it")
+			cfg = announce._refresh({state_file = path, fw_ver = "6.8.2.15592", report_upgraded = false})
+			assert_eq(cfg.fw_ver, "6.8.2.15592", "report_upgraded_version off: the identity's version")
+			f = io.open(path, "w"); f:write('{"adopted":true,"upgrade_requested_version":"U6IW.8.8.14"}'); f:close()
+			assert_nil(announce.fw_version(path), "a non-bare value is ignored")
+			cfg = announce._refresh({state_file = path, fw_ver = "6.8.2.15592", report_upgraded = true})
+			assert_eq(cfg.fw_ver, "6.8.2.15592", "the identity's version stays")
+			os.remove(path)
+		end
+	},
+	{
 		name = "announce: _refresh keeps the previous value when a source cannot be read",
 		fn = function()
 			announce._holder = nil

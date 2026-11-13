@@ -13,7 +13,7 @@ Landmines moved from CLAUDE.md; they load when a matching file is touched.
 
 - **openUF carries no UniFi translator of its own since 2026-11-10.** d-malinowski's rrb-unifi
   (translator daemon + `openuf-plugin/rrb-unifi.lua`) is a separate install: `setup.sh` offers
-  it at the pinned release (`RRB_UNIFI_TAG=v1.5`, `RRB_UNIFI_PLUGIN_SHA256`), through the plugin
+  it at the pinned release (`RRB_UNIFI_TAG=v1.5.1`, `RRB_UNIFI_PLUGIN_SHA256`), through the plugin
   hook (`plugins.lua`, api 1, `docs/PLUGINS.md`). The plugin rewrites every FT WLAN in
   `vap_options` (UniFi's mobility domain, `ft_psk_generate_local 0`, nasid, `ft_iface=vft0`
   while its veth exists). Nothing in ucihelper knows about it. Removed with the vendored
