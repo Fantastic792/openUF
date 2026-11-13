@@ -10,6 +10,8 @@ from labtest.safety import plug
 BOARD = "jiorouter,ax6000-jidu6j01"
 MAP = "jiorouter-ax6000-jidu6j01.lua"
 MARK = "fakeboard install"
+WAIT = 120  # seconds for the controller to show a change
+HOST_MAC = "02:00:00:00:00:77"  # the made-up wired host
 MODEL = "JioRouter AX6000 JIDU6J01"
 PORTS = ["lan1", "lan2", "lan3", "lan4", "wan"]  # list position + 1 = port idx in openUF's map
 FAR_BRIDGE = "br-far"
@@ -71,9 +73,9 @@ def verify(t):
         bad.append("model is not " + MODEL)
     links = set(t.ssh("ls /sys/class/net")[1].split())
     bad += [f"no link {n}" for n in PORTS + [far(p) for p in PORTS] + [FAR_BRIDGE] if n not in links]
-    lan = sorted(t.ssh("ls /sys/class/net/br-lan/brif")[1].split())
-    if lan != sorted(PORTS):
-        bad.append(f"br-lan ports are {lan}, not the five")
+    lan = t.ssh("ls /sys/class/net/br-lan/brif")[1].split()  # openUF's WiFi interfaces join br-lan too
+    if set(PORTS) - set(lan) or "eth0" in lan:
+        bad.append(f"br-lan ports are {sorted(lan)}: not all five, or eth0 still in it")
     ports = t.ssh(f"ls /sys/class/net/{FAR_BRIDGE}/brif")[1].split()
     if "eth0" not in ports or len([p for p in ports if p in map(far, PORTS)]) != 1 or len(ports) != 2:
         bad.append(f"{FAR_BRIDGE} ports are {ports}, not eth0 and one far end")
@@ -107,8 +109,8 @@ def dress(t, adopted):
     return verify(t)
 
 
-def wait_for(fn, secs=120, step=10):
-    end = time.monotonic() + secs
+def wait_for(fn, secs=None, step=10):
+    end = time.monotonic() + (WAIT if secs is None else secs)
     while not fn():
         if time.monotonic() >= end:
             return False
@@ -150,6 +152,121 @@ def adopt(t, ctl):
     return (True, "adopted") if plug._connected(t, ctl, secs=300) else (False, "not connected 300 s after adopt")
 
 
+def ports(dev):
+    return {p["port_idx"]: {"name": p.get("name", ""), "up": bool(p.get("up")), "uplink": bool(p.get("is_uplink")),
+                            "macs": [m["mac"] for m in p.get("mac_table", [])]} for p in dev.get("port_table", [])}
+
+
+def uplink_idx(dev):
+    up = [i for i, p in ports(dev).items() if p["uplink"]]
+    return up[0] if len(up) == 1 else None
+
+
+def pull(t, port):
+    t.ssh(f"ip link set {far(port)} down")
+
+
+def plug_in(t, port):
+    t.ssh(f"ip link set {far(port)} up")
+
+
+def move_uplink(t, old, new):
+    t.ssh(f"ip link set {far(old)} nomaster; ip link set {far(old)} down; "
+          f"ip link set {far(new)} master {FAR_BRIDGE}; ip link set {far(new)} up")
+
+
+def add_host(t, port):
+    t.ssh(f"bridge fdb add {HOST_MAC} dev {port} master static")
+
+
+def del_host(t, port):
+    t.ssh(f"bridge fdb del {HOST_MAC} dev {port} master static")
+
+
+def restore(t):
+    """Uplink back on lan1, every far end up, the fake host gone. Safe when nothing was moved."""
+    c = [f"ip link set {far(p)} nomaster" for p in PORTS if p != "lan1"] + [f"ip link set {far(p)} up" for p in PORTS]
+    c += [f"bridge fdb del {HOST_MAC} dev lan4 master static 2>/dev/null", f"ip link set {far('lan1')} master {FAR_BRIDGE}"]
+    t.ssh("; ".join(c))
+
+
+def checks(t, ctl):
+    out, before = [], {}
+
+    def dev():
+        return ctl.device(t.host) or {}
+
+    def c_ports():
+        d = dev()
+        p = ports(d)
+        return sorted(p) == [1, 2, 3, 4, 5] and d.get("model") == "U6IW", \
+            f"model {d.get('model')}, ports {[(i, p[i]['name']) for i in sorted(p)]}"
+
+    def c_uplink():
+        i = uplink_idx(dev())
+        return i == 1, f"uplink idx {i}"
+
+    def c_moved():
+        d = dev()
+        before["id"] = (d.get("mac"), d.get("_id"), len(ctl.devices()))
+        start = time.monotonic()
+        move_uplink(t, "lan1", "lan3")
+
+        def moved():
+            d = dev()
+            return uplink_idx(d) == 3 and not ports(d).get(1, {}).get("up")
+
+        ok = wait_for(moved)
+        return ok, f"{round(time.monotonic() - start)} s, uplink idx {uplink_idx(dev())}"
+
+    def c_identity():
+        d = dev()
+        now = (d.get("mac"), d.get("_id"), len(ctl.devices()))
+        restore(t)
+        back = wait_for(lambda: uplink_idx(dev()) == 1)
+        return now == before.get("id") and back, f"same device and count: {now == before.get('id')}, uplink back on 1: {back}"
+
+    def c_cable():
+        pull(t, "lan2")
+        down = wait_for(lambda: not ports(dev()).get(2, {}).get("up", True))
+        plug_in(t, "lan2")
+        up = wait_for(lambda: ports(dev()).get(2, {}).get("up", False))
+        return down and up, f"down seen: {down}, up again: {up}"
+
+    def c_host():
+        t0 = time.time() - 5
+        add_host(t, "lan4")
+        # the controller lists a port's wired hosts as clients (stat/sta sw_port), not in port_table's mac_table
+        seen = wait_for(lambda: any(s.get("mac") == HOST_MAC and s.get("is_wired") and s.get("sw_port") == 4 and
+                                    s.get("last_seen", 0) >= t0 for s in ctl.get("stat/sta")))
+        del_host(t, "lan4")
+        gone = HOST_MAC not in t.ssh("bridge fdb show br br-lan")[1]
+        return seen and gone, f"seen on port 4: {seen}, gone from fdb: {gone}"
+
+    def c_reboot():
+        t.ssh("(sleep 1; reboot) >/dev/null 2>&1 &")
+        t.wait(False, 60)
+        if not t.wait(True, 180):
+            return False, f"did not come back: sh /root/vmlab/lab.sh reset {t.lab_n}"
+        conn = plug._connected(t, ctl, secs=300)
+        bad = verify(t)
+        up1 = wait_for(lambda: uplink_idx(dev()) == 1)
+        n = len(ports(dev()))
+        return conn and not bad and up1 and n == 5, f"connected {conn}, verify {bad or 'clean'}, uplink 1 {up1}, ports {n}"
+
+    try:
+        for name, fn in (("ports", c_ports), ("uplink", c_uplink), ("uplink_moved", c_moved), ("identity", c_identity),
+                         ("cable", c_cable), ("wired_host", c_host), ("reboot", c_reboot)):
+            try:
+                ok, detail = fn()
+            except Exception as e:  # noqa: BLE001 -- one check's error must not skip the rest or the restore
+                ok, detail = False, f"{type(e).__name__}: {e}"
+            out.append({"name": name, "ok": bool(ok), "detail": detail})
+    finally:
+        restore(t)
+    return out
+
+
 def run(conf, t, ctl):
     ctl.login()
     d = ctl.device(t.host)
@@ -166,8 +283,9 @@ def run(conf, t, ctl):
         if not ok:
             break
     else:
-        out["pass"] = True
         with open(os.path.join(conf["results_dir"], "fakeboard-device.json"), "w") as f:
-            json.dump(ctl.device(t.host), f, indent=1)  # outside the repo: Task 4 reads the field names
+            json.dump(ctl.device(t.host), f, indent=1)  # outside the repo: the field names checks() reads
+        out["checks"] += checks(t, ctl)
+        out["pass"] = all(c["ok"] for c in out["checks"])
     results.save(conf, "fakeboard", out)
     return out
