@@ -37,6 +37,12 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.session.put.call_args[0][0], "https://198.51.100.9:8443/api/s/default/rest/wlanconf/1")
         self.assertEqual(self.session.put.call_args[1]["headers"]["X-CSRF-Token"], "T")
 
+    def test_post_sends_the_body_and_csrf_token(self):
+        unifi.Controller(self.conf).post("cmd/devmgr", {"cmd": "adopt"})
+        self.assertEqual(self.session.post.call_args[0][0], "https://198.51.100.9:8443/api/s/default/cmd/devmgr")
+        self.assertEqual(self.session.post.call_args[1]["json"], {"cmd": "adopt"})
+        self.assertEqual(self.session.post.call_args[1]["headers"]["X-CSRF-Token"], "T")
+
     def test_get_returns_the_data_list(self):
         self.session.get.return_value = answer(data=[{"_id": "a"}])
         self.assertEqual(unifi.Controller(self.conf).devices(), [{"_id": "a"}])

@@ -37,6 +37,27 @@ class FakeTarget:
         return self.comes_back or not up
 
 
+class FakeCtl:
+    """One device; an adopt post makes it adopted and connected."""
+
+    def __init__(self, device=None):
+        self.dev, self.posts = device, []
+
+    def login(self):
+        pass
+
+    def device(self, host):
+        return self.dev and dict(self.dev, ip=host)
+
+    def devices(self):
+        return [dict(self.dev, ip="h")] if self.dev else []
+
+    def post(self, path, body):
+        self.posts.append((path, body))
+        self.dev.update(adopted=True, state=1)
+        return []
+
+
 class TestText(unittest.TestCase):
     def test_far(self):
         self.assertEqual([fb.far(p) for p in fb.PORTS], ["lan1p", "lan2p", "lan3p", "lan4p", "wanp"])
@@ -128,6 +149,29 @@ class TestDress(unittest.TestCase):
             fb.dress(t, adopted=False)
         self.assertIn("uci batch", str(e.exception))
         self.assertFalse(any("reboot" in c for c in t.cmds))
+
+
+class TestAdopt(unittest.TestCase):
+    def test_map_pick_ok(self):
+        self.assertTrue(fb.map_pick(FakeTarget(board=fb.BOARD))[0])
+
+    def test_map_pick_fails_on_refusal_line(self):
+        t = FakeTarget(board=fb.BOARD, log="openuf: no modelmap declares board jiorouter,ax6000-jidu6j01")
+        self.assertFalse(fb.map_pick(t)[0])
+
+    def test_map_pick_fails_when_two_maps_claim_the_board(self):
+        t = FakeTarget(board=fb.BOARD, claimers="modelmap/a.lua\nmodelmap/jiorouter-ax6000-jidu6j01.lua")
+        self.assertFalse(fb.map_pick(t)[0])
+
+    def test_adopt_posts_the_devices_own_mac(self):
+        ctl = FakeCtl(device={"mac": "02:00:00:00:00:01", "adopted": False})
+        self.assertTrue(fb.adopt(FakeTarget(board=fb.BOARD), ctl)[0])
+        self.assertEqual(ctl.posts, [("cmd/devmgr", {"cmd": "adopt", "mac": "02:00:00:00:00:01"})])
+
+    def test_adopt_skips_when_adopted_and_connected(self):
+        ctl = FakeCtl(device={"mac": "02:00:00:00:00:01", "adopted": True, "state": 1})
+        self.assertTrue(fb.adopt(FakeTarget(board=fb.BOARD), ctl)[0])
+        self.assertEqual(ctl.posts, [])
 
 
 if __name__ == "__main__":

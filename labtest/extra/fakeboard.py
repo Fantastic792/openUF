@@ -1,7 +1,15 @@
 """A lab VM dressed as a JioRouter AX6000 JIDU6J01: board name at boot, five veth ports in br-lan."""
-from labtest import results
+import json
+import os
+import time
+
+from labtest import results, table
+from labtest.extra import cycle
+from labtest.safety import plug
 
 BOARD = "jiorouter,ax6000-jidu6j01"
+MAP = "jiorouter-ax6000-jidu6j01.lua"
+MARK = "fakeboard install"
 MODEL = "JioRouter AX6000 JIDU6J01"
 PORTS = ["lan1", "lan2", "lan3", "lan4", "wan"]  # list position + 1 = port idx in openUF's map
 FAR_BRIDGE = "br-far"
@@ -99,10 +107,67 @@ def dress(t, adopted):
     return verify(t)
 
 
+def wait_for(fn, secs=120, step=10):
+    end = time.monotonic() + secs
+    while not fn():
+        if time.monotonic() >= end:
+            return False
+        time.sleep(step)
+    return True
+
+
+def install(conf, t):
+    """The lab installer with this repo tree (every run: results match the commit), then modelmap 'auto'."""
+    inst = os.path.join(os.path.dirname(conf["lab_sh"]), "src", "install-openuf.sh")
+    ok, out = cycle._sh(["sh", inst, str(t.lab_n), cycle.REPO])
+    if not ok:
+        return False, out[-200:]
+    rc, out = t.ssh(f"uci set openuf.main=openuf && uci set openuf.main.modelmap='auto' && uci commit openuf && "
+                    f"logger -t labtest '{MARK}' && /etc/init.d/openuf restart", timeout=60)
+    return rc == 0, out.strip()[-200:]
+
+
+def map_pick(t):
+    if not table._pid(t):
+        return False, "openuf is not running"
+    log = t.ssh(f"logread | sed -n '/{MARK}/,$p'", timeout=30)[1].splitlines()
+    bad = [x for x in log if "no modelmap declares" in x or ("modelmap" in x and "unreadable" in x)]
+    if bad:
+        return False, bad[0][-200:]
+    claim = t.ssh(f"grep -l '{BOARD}' /opt/openuf/modelmap/*.lua")[1].split()
+    if [os.path.basename(c) for c in claim] != [MAP]:
+        return False, f"maps naming the board: {claim}"
+    return True, MAP
+
+
+def adopt(t, ctl):
+    d = ctl.device(t.host)
+    if d and d.get("adopted") and plug._connected(t, ctl, secs=0):
+        return True, "already adopted and connected"
+    if not wait_for(lambda: ctl.device(t.host)):
+        return False, "the controller never saw the device"
+    ctl.post("cmd/devmgr", {"cmd": "adopt", "mac": ctl.device(t.host)["mac"]})
+    return (True, "adopted") if plug._connected(t, ctl, secs=300) else (False, "not connected 300 s after adopt")
+
+
 def run(conf, t, ctl):
     ctl.login()
     d = ctl.device(t.host)
-    bad = dress(t, adopted=bool(d and d.get("adopted")))
-    out = {"pass": not bad, "checks": [{"name": "dress", "ok": not bad, "detail": "; ".join(bad)}]}
+    out = {"pass": False, "checks": []}
+
+    def dress_step():
+        bad = dress(t, adopted=bool(d and d.get("adopted")))
+        return not bad, "; ".join(bad)
+
+    steps = [("dress", dress_step), ("install", lambda: install(conf, t)), ("map_pick", lambda: map_pick(t)), ("adopt", lambda: adopt(t, ctl))]
+    for name, fn in steps:
+        ok, detail = fn()
+        out["checks"].append({"name": name, "ok": ok, "detail": detail})
+        if not ok:
+            break
+    else:
+        out["pass"] = True
+        with open(os.path.join(conf["results_dir"], "fakeboard-device.json"), "w") as f:
+            json.dump(ctl.device(t.host), f, indent=1)  # outside the repo: Task 4 reads the field names
     results.save(conf, "fakeboard", out)
     return out
