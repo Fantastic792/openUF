@@ -1,4 +1,5 @@
 """A lab VM dressed as a JioRouter AX6000 JIDU6J01: board name at boot, five veth ports in br-lan."""
+from labtest import results
 
 BOARD = "jiorouter,ax6000-jidu6j01"
 MODEL = "JioRouter AX6000 JIDU6J01"
@@ -41,9 +42,67 @@ def uci_batch(base, uplink="lan1"):
     b += ["set network.fb_far=device", f"set network.fb_far.name='{FAR_BRIDGE}'", "set network.fb_far.type='bridge'",
           "add_list network.fb_far.ports='eth0'", f"add_list network.fb_far.ports='{far(uplink)}'",
           "set network.fb_farif=interface", f"set network.fb_farif.device='{FAR_BRIDGE}'",
-          "set network.fb_farif.proto='none'"]
+          "set network.fb_farif.proto='none'",
+          "set network.lan.force_link='1'"]  # netifd misses br-lan's link-up on about every second boot
     for p in PORTS:
         if p != uplink:  # an interface keeps the far end up: cable plugged
             b += [f"set network.fb_{far(p)}=interface", f"set network.fb_{far(p)}.device='{far(p)}'",
                   f"set network.fb_{far(p)}.proto='none'"]
     return "\n".join(b + ["commit network"]) + "\n"
+
+
+def dressed(t):
+    return t.ssh("cat /tmp/sysinfo/board_name")[1].strip() == BOARD and t.ssh("uci -q get network.fb_far")[0] == 0
+
+
+def verify(t):
+    bad = []
+    if t.ssh("cat /tmp/sysinfo/board_name")[1].strip() != BOARD:
+        bad.append("board_name is not " + BOARD)
+    if t.ssh("cat /tmp/sysinfo/model")[1].strip() != MODEL:
+        bad.append("model is not " + MODEL)
+    links = set(t.ssh("ls /sys/class/net")[1].split())
+    bad += [f"no link {n}" for n in PORTS + [far(p) for p in PORTS] + [FAR_BRIDGE] if n not in links]
+    lan = sorted(t.ssh("ls /sys/class/net/br-lan/brif")[1].split())
+    if lan != sorted(PORTS):
+        bad.append(f"br-lan ports are {lan}, not the five")
+    ports = t.ssh(f"ls /sys/class/net/{FAR_BRIDGE}/brif")[1].split()
+    if "eth0" not in ports or len([p for p in ports if p in map(far, PORTS)]) != 1 or len(ports) != 2:
+        bad.append(f"{FAR_BRIDGE} ports are {ports}, not eth0 and one far end")
+    if t.ssh("cat /sys/class/net/br-lan/address")[1].strip().startswith("02:"):
+        bad.append("br-lan has a made-up 02: address, not the lab's")
+    return bad
+
+
+def dress(t, adopted):
+    if t.kind != "vm":
+        raise SystemExit(f"fakeboard rewires the network: refused on {t.name} (kind {t.kind}, not vm)")
+    if dressed(t):
+        return verify(t)
+    if adopted:
+        raise SystemExit(f"refused: {t.name} is adopted and not a fake board")
+    dev = t.ssh("uci get network.@device[0].name")[1].strip()
+    if dev != "br-lan":
+        raise SystemExit(f"refused: {t.name}'s first network device is {dev!r}, not br-lan")
+    if t.ssh("ls /lib/modules/*/veth.ko")[0] != 0:  # a fresh lab VM has no veth: netifd would make no ports
+        t.ssh("apk add kmod-veth", timeout=120)
+        if t.ssh("ls /lib/modules/*/veth.ko")[0] != 0:
+            raise SystemExit(f"refused: no kmod-veth on {t.name} after apk add kmod-veth; nothing written")
+    base = t.ssh("cat /sys/class/net/eth0/address")[1].strip()  # only on an undressed VM: the lab's own MAC
+    t.ssh(f"cat > {INIT} && chmod 755 {INIT} && {INIT} enable", stdin=BOOT_SCRIPT.encode())
+    if t.ssh("uci batch", stdin=uci_batch(base).encode())[0] != 0:
+        raise SystemExit(f"uci batch failed on {t.name}: not rebooted; sh /root/vmlab/lab.sh reset {t.lab_n}")
+    t.ssh("(sleep 1; reboot) >/dev/null 2>&1 &")
+    t.wait(False, 60)
+    if not t.wait(True, 180):
+        raise SystemExit(f"{t.name} did not come back: sh /root/vmlab/lab.sh reset {t.lab_n}, then the fresh-VM recipe")
+    return verify(t)
+
+
+def run(conf, t, ctl):
+    ctl.login()
+    d = ctl.device(t.host)
+    bad = dress(t, adopted=bool(d and d.get("adopted")))
+    out = {"pass": not bad, "checks": [{"name": "dress", "ok": not bad, "detail": "; ".join(bad)}]}
+    results.save(conf, "fakeboard", out)
+    return out

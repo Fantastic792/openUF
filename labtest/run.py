@@ -9,7 +9,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 from labtest import catalog, report, results, rows, table, target, unifi  # noqa: E402
-from labtest.extra import cycle, garbage, soak, writes  # noqa: E402
+from labtest.extra import cycle, fakeboard, garbage, soak, writes  # noqa: E402
 from labtest.safety import flashguard, packguard, plug, proof  # noqa: E402
 
 
@@ -96,6 +96,14 @@ def garbage_stage(args):
     return [(f"garbage.{c['name']}", c["ok"], "; ".join(c["problems"]) or f"rss {c['rss_kb']} kB") for c in r["cases"]]
 
 
+def fakeboard_stage(args):
+    conf = target.load_config()
+    if not os.path.exists(conf["account_file"]):
+        return [("fakeboard", False, "no account file")]
+    r = fakeboard.run(conf, target.get_target(conf, args.target), unifi.Controller(conf))
+    return [(c["name"], c["ok"], c["detail"]) for c in r["checks"]]
+
+
 def soak_stage(args):
     conf = target.load_config()
     if not os.path.exists(conf["account_file"]):
@@ -130,7 +138,8 @@ def safety(args):
 # stage name -> function(args) returning [(check_name, passed, detail)]
 STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety, "catalog": catalog_stage,
           "table": table_stage, "writes": writes_stage, "cycle": cycle_stage,
-          "garbage": garbage_stage, "soak": soak_stage, "vm": vm_stage}
+          "garbage": garbage_stage, "soak": soak_stage, "vm": vm_stage,
+          "fakeboard": fakeboard_stage}
 
 
 def main(argv=None):
