@@ -30,4 +30,7 @@ def markdown(result):
         out += [f"| {r['name']} | {_cell(r['note'])} | {_cell(r['sent'])} | {_cell(r['changed'])} | "
                 f"{_cell(r.get('also_changed', []))} |" for r in group]
         out.append("")
+    hw = [r["name"] for r in result["rows"] if r.get("needs") == "hw"]
+    if hw:  # a VM only says sent or not sent for these; the router-side check is Part 3
+        out += [f"## Waits for hardware ({len(hw)})", "", ", ".join(hw), ""]
     return "\n".join(out)

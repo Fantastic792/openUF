@@ -18,8 +18,22 @@ class RowsTest(unittest.TestCase):
         self.assertEqual(rows.risk(f("wlan_band")), "safe")  # "wlan" is not "lan"
         self.assertEqual(rows.risk(f("iptv_enabled")), "safe")  # "iptv" is not "ip"
 
+    def test_port_rows_are_cutoff_and_hw(self):
+        fields = [f("isolation", obj="Device.port_overrides"), f("eee_enabled", obj="PortConf"),
+                  f("stp_enabled", obj="Device"), f("jumbo", obj="Setting.global_switch"), f("led_enabled", obj="Device"),
+                  f("igmp_snooping", obj="NetworkConf")]
+        got = {r["name"]: (r["risk"], r["needs"]) for r in rows.build(fields)}
+        self.assertEqual(got["Device.port_overrides.isolation"], ("cutoff", "hw"))
+        self.assertEqual(got["PortConf.eee_enabled"], ("cutoff", "hw"))
+        self.assertEqual(got["Device.stp_enabled"][1], "hw")
+        self.assertEqual(got["Setting.global_switch.jumbo"][1], "hw")
+        self.assertEqual(got["Device.led_enabled"], ("safe", "vm"))
+        self.assertEqual(got["NetworkConf.igmp_snooping"], ("safe", "vm"))  # the hw rule is for Device keys only
+        self.assertEqual(got["Device.port_overrides.forward_disabled"], ("cutoff", "hw"))  # hand row (ports.py)
+        self.assertEqual(got["UserGroup.rate_limit"][1], "vm")                             # hand row (linked.py)
+
     def test_build_orders_safe_before_cutoff_and_keeps_skipped(self):
-        fields = [f("vlan_enabled"), f("name", "other"), f("bc_filter_enabled"), f("x", obj="NetworkConf"),
+        fields = [f("vlan_enabled"), f("name", "other"), f("bc_filter_enabled"), f("x", obj="Account"),
                   f("auto", obj="Setting.super_mgmt"), f("led_enabled", obj="Setting.mgmt")]
         built = [r for r in rows.build(fields) if r["name"] not in rows.CHECKS]  # registry rows: test_rows_wifi
         self.assertEqual([r["name"] for r in built],

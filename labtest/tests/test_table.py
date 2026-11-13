@@ -92,6 +92,12 @@ class Ctl:
     def login(self):
         pass
 
+    def get(self, path):  # ring-2 lists (fixtures.clean)
+        return [dict(x) for x in getattr(self, "items", {}).get(path, [])]
+
+    def delete(self, path):
+        self.deletes = getattr(self, "deletes", []) + [path]
+
     def locate(self, obj, host, wlan):
         return ("rest/wlanconf/w1", dict(self.obj)) if obj == "WlanConf" and wlan == "T" else None
 
@@ -316,6 +322,22 @@ class TableTest(unittest.TestCase):
             heal.healed.return_value = True
             out = table.run(self.conf, self.r, self.ctl, rowlist)
         return out, save, heal
+
+    def test_no_row_port_is_skip(self):
+        r = table.one(self.env(), row(obj="Device.port_overrides", key="isolation", risk="cutoff"))
+        self.assertEqual(r["result"], "not_covered")
+        self.assertIn("no row_port", r["note"])
+        self.assertEqual(self.flips(), [])
+
+    def test_clean_at_start_removes_dead_run_leftovers(self):
+        with open(os.path.join(self.dir, "table-ties.json"), "w") as f:
+            json.dump([{"path": "rest/wlanconf/w1", "old": {"usergroup_id": "g0"}}], f)
+        self.ctl.items = {"rest/usergroup": [{"_id": "g9", "name": "labtest-fixture"}]}
+        self.run_table([])
+        untie = self.ctl.puts.index(("rest/wlanconf/w1", {"usergroup_id": "g0"}))
+        self.assertGreaterEqual(untie, 0)
+        self.assertIn("rest/usergroup/g9", self.ctl.deletes)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "table-ties.json")))
 
     def test_pending_row_is_put_back_at_start(self):
         with open(self.journal(), "w") as fh:

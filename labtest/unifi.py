@@ -64,6 +64,9 @@ class Controller:
     def post(self, path, body):
         return self._call("post", path, body)
 
+    def delete(self, path):
+        self._call("delete", path)
+
     def wlans(self):
         return self.get("rest/wlanconf")
 

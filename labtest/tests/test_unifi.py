@@ -43,6 +43,19 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.session.post.call_args[1]["json"], {"cmd": "adopt"})
         self.assertEqual(self.session.post.call_args[1]["headers"]["X-CSRF-Token"], "T")
 
+    def test_post_delete_refused(self):
+        self.session.delete.return_value = answer()
+        unifi.Controller(self.conf).delete("rest/usergroup/g1")
+        self.assertEqual(self.session.delete.call_args[0][0], "https://198.51.100.9:8443/api/s/default/rest/usergroup/g1")
+        self.assertEqual(self.session.delete.call_args[1]["headers"]["X-CSRF-Token"], "T")
+        bad = answer(400, meta={"rc": "error", "msg": "api.err.ObjectReferredBy"})
+        self.session.delete.return_value = self.session.post.return_value = bad
+        with self.assertRaises(unifi.Refused) as e:
+            unifi.Controller(self.conf).delete("rest/usergroup/g1")
+        self.assertIn("api.err.ObjectReferredBy", str(e.exception))
+        with self.assertRaises(unifi.Refused):
+            unifi.Controller(self.conf).post("rest/usergroup", {"name": "n"})
+
     def test_get_returns_the_data_list(self):
         self.session.get.return_value = answer(data=[{"_id": "a"}])
         self.assertEqual(unifi.Controller(self.conf).devices(), [{"_id": "a"}])

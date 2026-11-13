@@ -46,7 +46,7 @@ class CatalogTest(unittest.TestCase):
         self.assertTrue(catalog.in_scope("Device"))
         self.assertFalse(catalog.in_scope("Setting.super_mgmt"))
         self.assertFalse(catalog.in_scope("Setting"))
-        self.assertFalse(catalog.in_scope("NetworkConf"))
+        self.assertFalse(catalog.in_scope("Account"))
         self.assertFalse(any(f["obj"] in ("Broken", "List") for f in fields))  # unreadable or not an object: skipped
 
     def test_summary_counts_in_scope_only(self):
@@ -56,6 +56,30 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(s["in_scope"], {"WlanConf": 2, "Device": 0, "Setting": 2})
         self.assertEqual(s["sections"], 1)
         self.assertEqual(s["kinds"], {"bool": 2, "enum": 1, "other": 1})
+
+    def ring2_dir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        files = {"WlanConf.json": {"hide_ssid": "true|false"}, "NetworkConf.json": {"igmp_snooping": "true|false"},
+                 "UserGroup.json": {"qos_rate_max_up": "-1|[2-9]|[1-9][0-9]{1,4}", "name": ".{1,128}"},
+                 "Device.json": {"led_override": "default|on|off", "port_overrides": [
+                     {"port_idx": "[1-9]", "isolation": "true|false", "poe_mode": "auto|off", "name": ".{0,128}",
+                      "excluded_networkconf_ids": [""]}]}}
+        for name, body in files.items():
+            with open(os.path.join(d, name), "w") as f:
+                json.dump(body, f)
+        return d
+
+    def test_ring2_in_scope_and_counted_apart(self):
+        for obj in ("NetworkConf", "PortConf", "UserGroup", "RadiusProfile", "Device.port_overrides"):
+            self.assertTrue(catalog.in_scope(obj), obj)
+        s = catalog.summary(catalog.load(self.ring2_dir()))
+        self.assertEqual(s["in_scope"], {"WlanConf": 1, "Device": 2, "Setting": 0})  # ring 1: Device's own 2 keys
+        self.assertEqual(s["ring2"], {"NetworkConf": 1, "UserGroup": 2, "Device.port_overrides": 4})
+
+    def test_port_overrides_fields_loaded(self):
+        po = {f["key"]: f["kind"] for f in catalog.load(self.ring2_dir()) if f["obj"] == "Device.port_overrides"}
+        self.assertEqual(po, {"isolation": "bool", "poe_mode": "enum", "name": "other", "excluded_networkconf_ids": "other"})
 
     def test_section_and_flip(self):
         self.assertEqual(catalog.section("Setting.guest_access"), "guest_access")

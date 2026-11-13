@@ -53,6 +53,15 @@ Before each flip the runner writes `results_dir/table-pending.json` (`{"path", "
 the old value is verified back. A run that died mid-row puts that value back first at its next start. A
 put-back the controller refuses stops the run and keeps the journal.
 
+Ring 2 (counted apart by `catalog`): the objects the test WiFi or a switch port points at (`UserGroup`,
+`NetworkConf`, `RadiusProfile`, `PortConf`, `Hotspot2Conf`, ...) and `Device.port_overrides`. For each kind
+the table makes one object named `labtest-fixture` (`labtest/fixtures.py`) and ties it to `row_wlan`, or a
+`PortConf` to port `row_port` (never the uplink port; without `row_port` the port rows are skipped). Every
+tie is journaled in `results_dir/table-ties.json`; at the start and end of a run the ties go back and every
+`labtest-fixture` object is deleted. A RADIUS fixture's secret is random per run and is replaced by
+`<secret>` in everything saved. Switch-port rows (`needs: hw`) are listed under "Waits for hardware": a VM
+can only say sent or not sent.
+
 The put-back sends every catalog field of the object (never `x_*`), because the controller rewrites some
 fields itself on a flip; those are listed per row under "Controller also changed". The router counts as back
 when a settled snapshot matches the one before the flip, waiting up to 70 s (openUF's l2guard resyncs once a
@@ -87,6 +96,7 @@ Everything about the lab lives outside the repo, in `/root/vmlab/labtest.json`
   "results_dir": "/root/vmlab/results",
   "fields_dir": "/root/vmlab/unifi-fields/api/fields",
   "row_wlan": "<name of the WLAN the WlanConf rows change>",
+  "row_port": 2,
   "fake_host": "<the host address the VMs reach; garbage's fake controller binds it>",
   "targets": { "vm1": { "host": "<vm1's lab address>", "kind": "vm", "lab_n": 1 },
                "vm4": { "host": "<vm4's lab address>", "kind": "vm", "lab_n": 4 } }

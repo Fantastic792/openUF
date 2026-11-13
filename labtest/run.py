@@ -50,7 +50,8 @@ def catalog_stage(args):
     results.save(conf, "catalog", s)
     return [("catalog", s["fields"] > 0, f"{s['files']} files, {s['fields']} fields, in scope {s['in_scope']} "
                                          f"({s['sections']} setting sections), "
-                                         f"kinds in scope {s['kinds']}", True)]
+                                         f"kinds in scope {s['kinds']}, ring 2 {sum(s['ring2'].values())} "
+                                         f"{s['ring2']}", True)]
 
 
 def table_stage(args):

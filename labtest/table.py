@@ -5,7 +5,7 @@ import os
 import re
 import time
 
-from labtest import catalog, push, report, results, snapshot, unifi
+from labtest import catalog, fixtures, push, report, results, snapshot, unifi
 from labtest.safety import heal, plug, proof
 
 PUSH_WAIT = 25  # seconds for the controller's push to reach openUF
@@ -48,7 +48,7 @@ def _journal(conf):
 def _write_journal(conf, path, old):
     os.makedirs(conf["results_dir"], exist_ok=True)
     with open(_journal(conf), "w") as f:
-        json.dump({"path": path, "old": old}, f)
+        json.dump(fixtures.scrub({"path": path, "old": old}), f)
 
 
 def _drop_journal(conf):
@@ -123,10 +123,26 @@ def _health(env, pid, mark):
     return f"lua error in log: {errs[0]}" if errs else ""
 
 
+def _locate(env, obj):
+    """(PUT path, current object): a ring-2 kind is its fixture; a port setting is row_port's override entry,
+    with the device's whole port_overrides list under "port_overrides"."""
+    t, ctl = env["t"], env["ctl"]
+    if obj in catalog.RING2:
+        return fixtures.make(ctl, obj, env["conf"], t.host)
+    if obj == catalog.PORTS:
+        loc = ctl.locate("Device", t.host, env["wlan"])
+        if loc is None:
+            return None
+        lst = loc[1].get("port_overrides") or []
+        cur = next((p for p in lst if p.get("port_idx") == env["conf"]["row_port"]), {})
+        return loc[0], dict(cur, port_overrides=lst)
+    return ctl.locate(obj, t.host, env["wlan"])
+
+
 def one(env, row):
     t, ctl, start = env["t"], env["ctl"], time.monotonic()
     r = {"name": row["name"], "result": "not_covered", "note": "", "sent": [], "changed": [], "also_changed": [],
-         "secs": 0}
+         "secs": 0, "needs": row.get("needs", "vm")}
 
     def done(result, note=""):
         r.update(result=result, note=note, secs=round(time.monotonic() - start))
@@ -134,7 +150,13 @@ def one(env, row):
 
     if row["risk"].startswith("skip"):
         return done("not_covered", row["risk"][len("skip: "):])
-    loc = ctl.locate(row["obj"], t.host, env["wlan"])
+    port = row["obj"] == catalog.PORTS
+    if port and not env["conf"].get("row_port"):
+        return done("not_covered", "skip: no row_port")
+    try:
+        loc = _locate(env, row["obj"])
+    except unifi.Refused as e:
+        return done("not_covered", f"no fixture: {e}")
     if loc is None:
         return done("not_covered", "the site has no such object")
     path, cur = loc
@@ -145,10 +167,14 @@ def one(env, row):
         new = None if v is None else {row["key"]: v}
     if not new:
         return done("not_covered", "not set on this object")
-    # every known field goes back, not only the flipped one: the controller changes others on its own
-    # (enhanced_iot narrows wlan_band, setting_preference resets minrate). x_* secrets are never sent or stored.
-    old = {k: cur[k] for k in row.get("keys", []) if k in cur and not k.startswith("x_")}
-    old.update({k: cur.get(k, False) for k in new})  # an absent flipped key goes back as False
+    if port:  # the device takes the whole list: row_port's entry with the flip; back goes the list as it was
+        new = {"port_overrides": [{"port_idx": env["conf"]["row_port"], **new}]}
+        old = {"port_overrides": cur["port_overrides"]}
+    else:
+        # every known field goes back, not only the flipped one: the controller changes others on its own
+        # (enhanced_iot narrows wlan_band, setting_preference resets minrate). x_* secrets are never sent or stored.
+        old = {k: cur[k] for k in row.get("keys", []) if k in cur and not k.startswith("x_")}
+        old.update({k: cur.get(k, False) for k in new})  # an absent flipped key goes back as False
     _write_journal(env["conf"], path, old)
     stamp = f"row {row['name']} {int(time.time())}"
     t.ssh(f"logger -t labtest '{stamp}'")
@@ -162,7 +188,7 @@ def one(env, row):
     pushed, cut = None, False
     try:
         # fields the controller rewrote itself (enhanced_iot narrows wlan_band): a router change may be theirs
-        now = (ctl.locate(row["obj"], t.host, env["wlan"]) or (path, {}))[1]
+        now = (_locate(env, row["obj"]) or (path, {}))[1]
         r["also_changed"] = sorted(k for k, v in old.items() if k not in new and now.get(k, False) != v)
         pushed = _new_push(env, base)
         if pushed is None:
@@ -196,7 +222,7 @@ def _put_back(env, row, r, path, old, pushed, before, cut):
     t, ctl = env["t"], env["ctl"]
     try:
         ctl.put(path, old)
-        now = ctl.locate(row["obj"], t.host, env["wlan"])
+        now = _locate(env, row["obj"])
     except Exception as e:  # noqa: BLE001 -- any failure here leaves the setting flipped
         raise PutBackFailed(f"{row['name']}: put-back failed: {e}") from None
     if now is None or any(now[1].get(k, False) != v for k, v in old.items()):
@@ -274,6 +300,7 @@ def run(conf, t, ctl, rows, push_wait=PUSH_WAIT, apply_wait=APPLY_WAIT):
             j = json.load(f)
         ctl.put(j["path"], j["old"])
         os.remove(jp)
+    fixtures.clean(ctl, conf)  # a dead run's ties and fixtures go too
     env = {"conf": conf, "t": t, "ctl": ctl, "wlan": conf["row_wlan"], "push_wait": push_wait,
            "apply_wait": apply_wait}
     out = {"pass": False, "finished": False, "stopped": None, "counts": {}, "rows": []}
@@ -281,6 +308,11 @@ def run(conf, t, ctl, rows, push_wait=PUSH_WAIT, apply_wait=APPLY_WAIT):
     heal.arm(t)
     try:
         with heal.Knocker(t):
+            for obj in sorted({r["obj"] for r in rows} & set(catalog.RING2)):  # made and tied before the baseline
+                try:
+                    fixtures.make(ctl, obj, conf, t.host)
+                except unifi.Refused:
+                    pass  # its rows say "no fixture"
             env["ignore"] = _rest(env)
             env["base"] = _baseline(env)
             for row in rows:
@@ -292,7 +324,7 @@ def run(conf, t, ctl, rows, push_wait=PUSH_WAIT, apply_wait=APPLY_WAIT):
                 except CutOff:
                     note, out["stopped"] = _recover(env)
                     res = {"name": row["name"], "result": "broken", "note": note, "sent": [], "changed": [], "secs": 0}
-                out["rows"].append(res)
+                out["rows"].append(fixtures.scrub(res))
                 _finish(conf, out)
                 results.save(conf, "table", out)
                 if out["stopped"]:
@@ -305,6 +337,7 @@ def run(conf, t, ctl, rows, push_wait=PUSH_WAIT, apply_wait=APPLY_WAIT):
             out["left"] = heal.disarm(t)
         except RuntimeError as e:
             out["left"] = [str(e)]
+        out["cleaned"] = fixtures.clean(ctl, conf)
         _finish(conf, out)
         out["pass"] = out["pass"] and not out["left"]
         results.save(conf, "table", out)

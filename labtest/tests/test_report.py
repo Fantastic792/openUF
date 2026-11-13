@@ -23,6 +23,13 @@ class ReportTest(unittest.TestCase):
         self.assertNotIn("## Not covered", md)  # empty groups are left out
         self.assertIn("| A.ign |  | +b=1 |  | wlan_band |", md)  # fields the controller changed itself
         self.assertIn("| A.ok |  |  |  |  |", md)  # rows from before also_changed existed still render
+        self.assertNotIn("Waits for hardware", md)
+
+    def test_hw_rows_listed_apart(self):
+        result = {"pass": True, "counts": {"not_sent": 1}, "rows": [
+            {"name": "Device.port_overrides.forward", "result": "not_sent", "note": "", "sent": [], "changed": [],
+             "needs": "hw"}]}
+        self.assertIn("## Waits for hardware (1)\n\nDevice.port_overrides.forward", report.markdown(result))
 
 
 if __name__ == "__main__":
