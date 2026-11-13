@@ -9,11 +9,13 @@ from labtest.extra import cycle
 class FakeTarget:
     def __init__(self, kind="vm"):
         self.name, self.kind, self.host, self.lab_n, self.cmds = "fake", kind, "h", 4, []
+        self.leave = ""  # a file that appears after the first find: a leftover
 
     def ssh(self, cmd, timeout=20, stdin=None):
         self.cmds.append(cmd)
         if cmd.startswith("find /"):
-            return 0, "/etc/passwd\n/etc/config/wireless\n"
+            extra = self.leave if any(c.startswith("find /") for c in self.cmds[:-1]) else ""
+            return 0, "/etc/passwd\n/etc/config/wireless\n" + extra
         if "md5sum" in cmd:
             return 0, "abc  /opt/openuf/conf.lua\n"
         return 0, ""
@@ -75,6 +77,14 @@ class CycleTest(unittest.TestCase):
         self.assertEqual([s["name"] for s in r["steps"]], ["fresh", "before", "install"])
         self.assertFalse(r["steps"][-1]["ok"])
         self.assertFalse(any("uninstall" in c for c in t.cmds))
+
+    def test_leftovers_fail_but_the_upgrade_still_runs(self):
+        t = FakeTarget()
+        t.leave = "/etc/config/openuf\n"
+        r = cycle.run(self.conf, t, FakeCtl())
+        self.assertFalse(r["pass"])
+        self.assertEqual([(s["name"], s["ok"]) for s in r["steps"]][5:],
+                         [("leftovers", False), ("install_old", True), ("upgrade", True), ("after_upgrade", True)])
 
     def test_cycle_passes_when_every_step_does(self):
         t = FakeTarget()

@@ -9,7 +9,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 from labtest import catalog, report, results, rows, table, target, unifi  # noqa: E402
-from labtest.extra import cycle, writes  # noqa: E402
+from labtest.extra import cycle, garbage, writes  # noqa: E402
 from labtest.safety import flashguard, packguard, plug, proof  # noqa: E402
 
 
@@ -86,6 +86,16 @@ def cycle_stage(args):
     return [(f"cycle.{s['name']}", s["ok"], s["detail"]) for s in r["steps"]]
 
 
+def garbage_stage(args):
+    conf = target.load_config()
+    if not os.path.exists(conf["account_file"]):
+        return [("garbage", False, "no account file")]
+    r = garbage.run(conf, target.get_target(conf, args.target), unifi.Controller(conf))
+    if r["error"]:
+        return [("garbage", False, r["error"])]
+    return [(f"garbage.{c['name']}", c["ok"], "; ".join(c["problems"]) or f"rss {c['rss_kb']} kB") for c in r["cases"]]
+
+
 def safety(args):
     out = []
     for stage in (guards, timer_proof, pull_plug):
@@ -98,7 +108,8 @@ def safety(args):
 
 # stage name -> function(args) returning [(check_name, passed, detail)]
 STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety, "catalog": catalog_stage,
-          "table": table_stage, "writes": writes_stage, "cycle": cycle_stage}
+          "table": table_stage, "writes": writes_stage, "cycle": cycle_stage,
+          "garbage": garbage_stage}
 
 
 def main(argv=None):

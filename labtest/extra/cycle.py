@@ -12,7 +12,8 @@ SKIP = ("/proc/", "/sys/", "/dev/", "/tmp/", "/var/run/")
 OLD = "v0.13.0"
 BOOT_WAIT = 45  # the lab's fresh-VM recipe: reset; start; sleep 45; provision; prepare
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-UNINSTALL = "f=/opt/openuf/install.sh; [ -f $f ] || f=/tmp/openUF/install.sh; sh $f uninstall"
+GOES_ON = {"leftovers"}  # recorded failure; later steps do not need it, so the upgrade data still comes
+UNINSTALL ="f=/opt/openuf/install.sh; [ -f $f ] || f=/tmp/openUF/install.sh; sh $f uninstall"
 
 
 def leftovers(before, after, keep=KEEP):
@@ -100,9 +101,9 @@ def run(conf, t, ctl):
                      ("install_old", install_old), ("upgrade", upgrade), ("after_upgrade", after_upgrade)):
         ok, detail = fn()
         out["steps"].append({"name": name, "ok": bool(ok), "detail": detail})
-        if not ok:
+        if not ok and name not in GOES_ON:
             break
     else:
-        out["pass"] = True
+        out["pass"] = all(s["ok"] for s in out["steps"])
     results.save(conf, "cycle", out)
     return out
