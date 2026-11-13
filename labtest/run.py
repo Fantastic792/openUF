@@ -2,12 +2,13 @@
 """labtest runner: python3 labtest/run.py <stage> [--target NAME]. One PASS/FAIL line per check."""
 import argparse
 import os
+import re
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from labtest import catalog, results, target, unifi  # noqa: E402
+from labtest import catalog, report, results, rows, table, target, unifi  # noqa: E402
 from labtest.safety import flashguard, packguard, plug, proof  # noqa: E402
 
 
@@ -51,6 +52,19 @@ def catalog_stage(args):
                                          f"kinds in scope {s['kinds']}", True)]
 
 
+def table_stage(args):
+    conf = target.load_config()
+    if not os.path.exists(conf["account_file"]):
+        return [("table", False, "no account file")]
+    if not conf.get("fields_dir") or not os.path.isdir(conf["fields_dir"]):
+        return [("table", False, "no fields_dir")]
+    todo = [r for r in rows.build(catalog.load(conf["fields_dir"])) if re.search(args.only, r["name"])][:args.limit]
+    r = table.run(conf, target.get_target(conf, args.target), unifi.Controller(conf), todo)
+    detail = report.counts_line(r) + (f"; stopped: {r['stopped']}" if r["stopped"] else "") + \
+        (f"; left on target: {r['left']}" if r.get("left") else "")
+    return [("table", r["pass"], detail, True)]
+
+
 def safety(args):
     out = []
     for stage in (guards, timer_proof, pull_plug):
@@ -62,13 +76,16 @@ def safety(args):
 
 
 # stage name -> function(args) returning [(check_name, passed, detail)]
-STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety, "catalog": catalog_stage}
+STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety, "catalog": catalog_stage,
+          "table": table_stage}
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="labtest/run.py")
     ap.add_argument("stage")
     ap.add_argument("--target", default="vm1")
+    ap.add_argument("--only", default="", help="table: run only rows whose name matches this regex")
+    ap.add_argument("--limit", type=int, default=None, help="table: at most this many rows")
     args = ap.parse_args(argv)
     if args.stage not in STAGES:
         print(f"unknown stage {args.stage}; stages: {', '.join(STAGES) or '(none yet)'}")

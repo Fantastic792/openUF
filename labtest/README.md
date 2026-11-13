@@ -29,6 +29,30 @@ python3 labtest/run.py <stage> [--target vm1]            # a stage, default targ
 |---|---|---|---|
 | `catalog` | Reads the controller's field list (`fields_dir`) and prints files, fields, in-scope fields (WlanConf / Device / Setting; `Setting.json` is one file of site sections, read as `Setting.<section>`, `Setting.super_*` left out) and bool / enum / other counts. Writes `catalog.json` | `fields_dir` | ~1 s |
 
+| `table` | One row per in-scope field: flips it through the controller API, reads the push openUF got (its own `debug_dump_file`), waits for the apply, compares the router's whole config (uci, hostapd, nft, tc, ip) before and after, checks openUF's health, puts the setting back. `--only REGEX` (row names, e.g. `'^WlanConf\.'`), `--limit N`. Writes `table.json` after every row, then `table.md` and a kept copy `table-<commit>-<date>.json` | lab up, VM adopted, the account file, `fields_dir`, `row_wlan` | see below |
+
+The five results of a row:
+
+| Result | Meaning |
+|---|---|
+| `works` | a real check (`labtest/rows/`) says the router did what the setting asks |
+| `ignored` | the controller sent a change; the router's config did not change |
+| `broken` | push not applied in 60 s, openUF died or restarted, a Lua error in the log, the router did not go back, or the row cut the target off |
+| `not_sent` | no new push with a changed key reached openUF within 25 s |
+| `not_covered` | skipped (secret `x_*`, not on/off or pick-one), no such object on the site, controller refused, or the router changed and no check is written yet |
+
+Rows whose key names a VLAN, network, address, uplink, switch port and similar run last (`cutoff`). A row
+that cuts a VM off waits for the self-heal timer, brings openUF back and goes on; on hardware it stops the run.
+
+Before each flip the runner writes `results_dir/table-pending.json` (`{"path", "old"}`) and deletes it once
+the old value is verified back. A run that died mid-row puts that value back first at its next start. A
+put-back the controller refuses stops the run and keeps the journal.
+
+The put-back sends every catalog field of the object (never `x_*`), because the controller rewrites some
+fields itself on a flip; those are listed per row under "Controller also changed". The router counts as back
+when a settled snapshot matches the one before the flip, waiting up to 70 s (openUF's l2guard resyncs once a
+minute).
+
 `fields_dir` is the controller's `api/fields` folder, unpacked once from its
 `internal-dependencies.jar` (`unzip -o -q internal-dependencies.jar 'api/fields/*' -d /root/vmlab/unifi-fields`).
 
@@ -57,6 +81,7 @@ Everything about the lab lives outside the repo, in `/root/vmlab/labtest.json`
   "lab_sh": "/root/vmlab/lab.sh",
   "results_dir": "/root/vmlab/results",
   "fields_dir": "/root/vmlab/unifi-fields/api/fields",
+  "row_wlan": "<name of the WLAN the WlanConf rows change>",
   "targets": { "vm1": { "host": "<vm1's lab address>", "kind": "vm", "lab_n": 1 } }
 }
 ```
