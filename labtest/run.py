@@ -9,6 +9,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 from labtest import catalog, report, results, rows, table, target, unifi  # noqa: E402
+from labtest.extra import cycle, writes  # noqa: E402
 from labtest.safety import flashguard, packguard, plug, proof  # noqa: E402
 
 
@@ -65,6 +66,26 @@ def table_stage(args):
     return [("table", r["pass"], detail, True)]
 
 
+def writes_stage(args):
+    conf = target.load_config()
+    if not os.path.exists(conf["account_file"]):
+        return [("writes", False, "no account file")]
+    r = writes.run(conf, target.get_target(conf, args.target), unifi.Controller(conf))
+    if r["error"]:
+        return [("writes", False, r["error"])]
+    i, p = r["idle"], r["push"]
+    return [("writes", r["pass"], f"idle {i['secs']} s: {i['sectors']} sectors, files {i['files'][:5]}; "
+                                  f"push there and back: {p['sectors']} sectors, files {p['files'][:5]}", True)]
+
+
+def cycle_stage(args):
+    conf = target.load_config()
+    if not os.path.exists(conf["account_file"]):
+        return [("cycle", False, "no account file")]
+    r = cycle.run(conf, target.get_target(conf, args.target), unifi.Controller(conf))
+    return [(f"cycle.{s['name']}", s["ok"], s["detail"]) for s in r["steps"]]
+
+
 def safety(args):
     out = []
     for stage in (guards, timer_proof, pull_plug):
@@ -77,7 +98,7 @@ def safety(args):
 
 # stage name -> function(args) returning [(check_name, passed, detail)]
 STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety, "catalog": catalog_stage,
-          "table": table_stage}
+          "table": table_stage, "writes": writes_stage, "cycle": cycle_stage}
 
 
 def main(argv=None):
