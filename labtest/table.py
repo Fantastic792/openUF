@@ -217,7 +217,7 @@ def _put_back(env, row, r, path, old, pushed, before, cut):
     if gone and _known(gone):
         _note(r, _known(gone))
     elif gone:
-        r.update(result="broken", note="; ".join(x for x in (r["note"], f"did not go back: {gone[:3]}") if x))
+        r.update(result="broken", back=gone, note="; ".join(x for x in (r["note"], f"did not go back: {gone[:3]}") if x))
     _drop_journal(env["conf"])
 
 

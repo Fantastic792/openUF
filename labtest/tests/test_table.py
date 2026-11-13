@@ -236,6 +236,16 @@ class TableTest(unittest.TestCase):
         res = table.one(self.env(), row())
         self.assertEqual(res["result"], "broken")
         self.assertIn("did not go back", res["note"])
+        # table.json keeps every line (the note is cut to 3), so the one that is not l2guard can be seen
+        self.assertTrue(any("01:80:c2" not in x for x in res["back"]), res["back"])
+        self.assertTrue(any("01:80:c2" in x for x in res["back"]), res["back"])
+
+    def test_l2guard_set_form_is_known_f2(self):
+        lines = ['nft: -\t\tiifname "phy0-ap0" ether daddr 01:80:c2:00:00:00 drop',
+                 'nft: +\t\tiifname { "phy0-ap0", "phy1-ap0" } ether daddr 01:80:c2:00:00:00 drop',
+                 'nft: +\t\toifname { "phy0-ap0", "phy1-ap0" } ether daddr 01:80:c2:00:00:00 drop']
+        self.assertEqual(table._known(lines), ["known: F2 (l2guard rebuilt late)"])
+        self.assertIsNone(table._known(lines + ["uci: +wireless.x.y='1'"]))
 
     def test_flip_that_only_moves_l2guard_is_ignored_known_f2(self):
         self.r.guard = "flip"
