@@ -9,7 +9,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 from labtest import catalog, report, results, rows, table, target, unifi  # noqa: E402
-from labtest.extra import cycle, garbage, writes  # noqa: E402
+from labtest.extra import cycle, garbage, soak, writes  # noqa: E402
 from labtest.safety import flashguard, packguard, plug, proof  # noqa: E402
 
 
@@ -96,6 +96,27 @@ def garbage_stage(args):
     return [(f"garbage.{c['name']}", c["ok"], "; ".join(c["problems"]) or f"rss {c['rss_kb']} kB") for c in r["cases"]]
 
 
+def soak_stage(args):
+    conf = target.load_config()
+    if not os.path.exists(conf["account_file"]):
+        return [("soak", False, "no account file")]
+    r = soak.run(conf, target.get_target(conf, args.target), unifi.Controller(conf), hours=args.hours)
+    last = r["samples"][-1]
+    return [("soak", r["pass"], "; ".join(r["problems"]) or f"{len(r['samples'])} samples, last rss "
+             f"{last['rss_kb']}, fds {last['fds']}, tmp {last['tmp_kb']} kB, pushes {r['pushes']}", True)]
+
+
+def vm_stage(args):
+    out = []
+    for fn, tgt in ((catalog_stage, args.target), (table_stage, args.target), (writes_stage, args.target),
+                    (cycle_stage, "vm4"), (garbage_stage, "vm4")):  # cycle wipes its VM: always the spare one
+        checks = fn(argparse.Namespace(**dict(vars(args), target=tgt)))
+        out += checks
+        if not all(c[1] for c in checks):
+            break
+    return out
+
+
 def safety(args):
     out = []
     for stage in (guards, timer_proof, pull_plug):
@@ -109,7 +130,7 @@ def safety(args):
 # stage name -> function(args) returning [(check_name, passed, detail)]
 STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety, "catalog": catalog_stage,
           "table": table_stage, "writes": writes_stage, "cycle": cycle_stage,
-          "garbage": garbage_stage}
+          "garbage": garbage_stage, "soak": soak_stage, "vm": vm_stage}
 
 
 def main(argv=None):
@@ -118,6 +139,7 @@ def main(argv=None):
     ap.add_argument("--target", default="vm1")
     ap.add_argument("--only", default="", help="table: run only rows whose name matches this regex")
     ap.add_argument("--limit", type=int, default=None, help="table: at most this many rows")
+    ap.add_argument("--hours", type=float, default=24, help="soak: how long")
     args = ap.parse_args(argv)
     if args.stage not in STAGES:
         print(f"unknown stage {args.stage}; stages: {', '.join(STAGES) or '(none yet)'}")
