@@ -8,6 +8,8 @@ from unittest import mock
 from labtest import table, unifi
 
 BOOL = {"kind": "bool", "values": [True, False]}
+GUARD_ONE = '\t\tiifname "phy0-ap0" ether daddr 01:80:c2:00:00:00 drop'  # nft -s list ruleset, as seen on vm1
+GUARD_ALL = '\t\tiifname { "phy0-ap0", "phy1-ap0" } ether daddr 01:80:c2:00:00:00 drop'
 
 
 def row(key="hide_ssid", risk="safe", obj="WlanConf", field=BOOL, keys=None):
@@ -24,7 +26,8 @@ class Router:
         self.lines, self.pushes, self.applied, self.pid, self.errors = ["base=1"], [], None, "100", []
         self.sends = self.applies = True
         self.changes = self.sticks = self.restarts = self.logs_error = self.cuts = False
-        self.cmds, self.lag, self.late = [], 0, None
+        self.cmds, self.lag, self.late, self.newkey = [], 0, None, []
+        self.nft, self.guard = [GUARD_ONE], None  # guard "flip" / "back": the l2guard rule regroups then (F2)
 
     # target side
     def ssh(self, cmd, timeout=20, stdin=None):
@@ -49,7 +52,7 @@ class Router:
             self.late[0] -= 1
             if self.late[0] < 0:
                 self.lines, self.late = self.late[1], None
-        return {"uci": list(self.lines)}
+        return {"uci": list(self.lines), "nft": list(self.nft)}
 
     # what the router does with a push carrying the controller's object
     def react(self, obj, is_flip):
@@ -62,9 +65,13 @@ class Router:
             return
         if self.applies or not is_flip:
             self.applied = cv
+        if self.guard:
+            self.nft = [GUARD_ALL if (self.guard == "flip") == is_flip else GUARD_ONE]
         if self.changes and not (self.sticks and not is_flip):
             lines = ["base=1"] + [f"w.{k}={v}" for k, v in sorted(obj.items()) if k not in ("_id", "name", "uapsd_enabled")
                                   and v is True]
+            if self.newkey and not is_flip:  # the controller made a new roaming key on the put-back
+                lines += [f"w.r1kh=<{cv}>"] + self.newkey
             if self.lag and not is_flip:
                 self.late = [self.lag, lines]
             else:
@@ -181,6 +188,17 @@ class TableTest(unittest.TestCase):
         self.assertEqual(res["also_changed"], [])
         self.assertEqual(self.ctl.obj["hide_ssid"], False)
 
+    def test_check_result_decides_works_or_broken(self):
+        self.r.changes = True
+        seen = []
+        with mock.patch("labtest.table.snapshot.bss", lambda snap, ssid: (seen.append(ssid), [["x"]])[1]):
+            ok = dict(row(), check=lambda blocks, new: (blocks == [["x"]] and new == {"hide_ssid": True}, ""))
+            self.assertEqual(table.one(self.env(), ok)["result"], "works")
+            bad = dict(row(), check=lambda blocks, new: (False, "ignore_broadcast_ssid=0"))
+            res = table.one(self.env(), bad)
+        self.assertEqual((res["result"], res["note"]), ("broken", "check failed: ignore_broadcast_ssid=0"))
+        self.assertEqual(seen, ["T", "T"])
+
     def test_snapshot_waits_until_the_router_is_quiet(self):
         snaps = [{"uci": ["a"]}, {"uci": ["b"]}, {"uci": ["c"]}, {"uci": ["c"]}, {"uci": ["d"]}]
         with mock.patch("labtest.table.snapshot.take", side_effect=snaps):
@@ -192,6 +210,42 @@ class TableTest(unittest.TestCase):
         res = table.one(self.env(), row())
         self.assertEqual(res["result"], "not_covered")
         self.assertNotIn("did not go back", res["note"])
+
+    def test_only_new_roaming_keys_after_put_back_is_known_f4(self):
+        self.r.changes, self.r.newkey = True, ["w.r0kh=<n>"]
+        res = table.one(self.env(), row())
+        self.assertEqual(res["result"], "not_covered")  # judged from the flip, not "did not go back"
+        self.assertIn("known: F4 (controller made a new roaming key)", res["note"])
+        self.assertNotIn("did not go back", res["note"])
+
+    def test_roaming_keys_plus_another_difference_is_still_broken(self):
+        self.r.changes, self.r.newkey = True, ["w.r0kh=<n>", "w.other=1"]
+        res = table.one(self.env(), row())
+        self.assertEqual(res["result"], "broken")
+        self.assertIn("did not go back", res["note"])
+
+    def test_only_l2guard_after_put_back_is_known_f2(self):
+        self.r.changes, self.r.guard = True, "back"
+        res = table.one(self.env(), row())
+        self.assertEqual(res["result"], "not_covered")  # the flip's own result stays
+        self.assertIn("known: F2 (l2guard rebuilt late)", res["note"])
+        self.assertNotIn("did not go back", res["note"])
+
+    def test_l2guard_plus_another_difference_after_put_back_is_still_broken(self):
+        self.r.changes, self.r.guard, self.r.sticks = True, "back", True
+        res = table.one(self.env(), row())
+        self.assertEqual(res["result"], "broken")
+        self.assertIn("did not go back", res["note"])
+
+    def test_flip_that_only_moves_l2guard_is_ignored_known_f2(self):
+        self.r.guard = "flip"
+        res = table.one(self.env(), row())
+        self.assertEqual((res["result"], res["note"]), ("ignored", "known: F2 (l2guard rebuilt late)"))
+
+    def test_flip_with_l2guard_and_a_real_change_is_judged_as_before(self):
+        self.r.changes, self.r.guard = True, "flip"
+        res = table.one(self.env(), row())
+        self.assertEqual((res["result"], res["note"]), ("not_covered", "router changed, no check yet"))
 
     def test_router_that_does_not_go_back_is_broken(self):
         self.r.changes = self.r.sticks = True

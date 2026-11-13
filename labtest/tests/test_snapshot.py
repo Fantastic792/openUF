@@ -8,7 +8,10 @@ class SnapshotTest(unittest.TestCase):
     def test_secret_values_never_stored(self):
         for line in ("wireless.w.key='hunter2hunter2'", "wpa_passphrase=hunter2hunter2",
                      "aaa.1.radius_secret=hunter2hunter2", "mgmt.authkey=hunter2hunter2",
-                     "r0kh=02:00:00:00:00:01 id hunter2hunter2", "sae_password=hunter2hunter2"):
+                     "r0kh=02:00:00:00:00:01 id hunter2hunter2", "sae_password=hunter2hunter2",
+                     "r1kh=02:00:00:00:00:01 02:00:00:00:00:01 hunter2hunter2",
+                     "wireless.openuf_radio0_T.r0kh='ff:ff:ff:ff:ff:ff,*,hunter2hunter2' 'x,y,hunter2'",
+                     "wireless.openuf_radio0_T.r1kh='00:00:00:00:00:00,00:00:00:00:00:00,hunter2hunter2'"):
             out = snapshot.redact(line)
             self.assertNotIn("hunter2", out)
             self.assertEqual(out, snapshot.redact(line))  # stable
@@ -34,6 +37,9 @@ class SnapshotTest(unittest.TestCase):
                             "ap_isolate=1", "## g", "interface=q0", "ssid=B"]}
         self.assertEqual(snapshot.bss(snap, "B"), [["bss=p1", "ssid=B", "ap_isolate=1"], ["interface=q0", "ssid=B"]])
         self.assertEqual(snapshot.bss(snap, "Z"), [])
+        # OpenWrt writes the quoted ssid2= form (seen on vm1)
+        ow = {"hostapd": ["## f", "interface=phy0-ap0", 'ssid2="LabTest"', "bss=phy0-ap1", 'ssid2="LabTest2"']}
+        self.assertEqual(snapshot.bss(ow, "LabTest"), [["interface=phy0-ap0", 'ssid2="LabTest"']])
 
     def test_take_splits_sections_and_redacts(self):
         out = ("@@labtest@@ uci\nwireless.w.key='hunter2'\nwireless.w.ssid='T'\n@@labtest@@ hostapd\n## /var/run/h.conf\n"

@@ -19,15 +19,15 @@ class RowsTest(unittest.TestCase):
         self.assertEqual(rows.risk(f("iptv_enabled")), "safe")  # "iptv" is not "ip"
 
     def test_build_orders_safe_before_cutoff_and_keeps_skipped(self):
-        fields = [f("vlan_enabled"), f("name", "other"), f("hide_ssid"), f("x", obj="NetworkConf"),
+        fields = [f("vlan_enabled"), f("name", "other"), f("bc_filter_enabled"), f("x", obj="NetworkConf"),
                   f("auto", obj="Setting.super_mgmt"), f("led_enabled", obj="Setting.mgmt")]
         built = [r for r in rows.build(fields) if r["name"] not in rows.CHECKS]  # registry rows: test_rows_wifi
         self.assertEqual([r["name"] for r in built],
-                         ["WlanConf.hide_ssid", "Setting.mgmt.led_enabled", "WlanConf.name", "WlanConf.vlan_enabled"])
+                         ["WlanConf.bc_filter_enabled", "Setting.mgmt.led_enabled", "WlanConf.name", "WlanConf.vlan_enabled"])
         r = built[0]
-        self.assertEqual((r["obj"], r["key"], r["risk"], r["needs"], r["set"]), ("WlanConf", "hide_ssid", "safe", "vm", None))
-        self.assertEqual(r["field"], f("hide_ssid"))
-        self.assertEqual(r["keys"], ["vlan_enabled", "name", "hide_ssid"])  # every field of the object, for the put-back
+        self.assertEqual((r["obj"], r["key"], r["risk"], r["needs"], r["set"]), ("WlanConf", "bc_filter_enabled", "safe", "vm", None))
+        self.assertEqual(r["field"], f("bc_filter_enabled"))
+        self.assertEqual(r["keys"], ["vlan_enabled", "name", "bc_filter_enabled"])  # every field of the object, for the put-back
 
 
 if __name__ == "__main__":

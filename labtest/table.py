@@ -2,6 +2,7 @@
 import datetime
 import json
 import os
+import re
 import time
 
 from labtest import catalog, push, report, results, snapshot, unifi
@@ -17,6 +18,19 @@ LUA_ERR = "traceback|attempt to (index|call|compare|perform|concatenate)|lua: "
 STATE = "/etc/openuf/state.json"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NO_PUSH = {"cfgversion": None, "keys": {}}
+# known noise, labelled not judged (findings.md): an 802.11r key-holder line (F4), the l2guard drop rule (F2)
+KNOWN = [(re.compile(r"[ .+-]r[01]kh="), "known: F4 (controller made a new roaming key)"),
+         (re.compile(r"^nft: .*ether daddr 01:80:c2:00:00:00 drop"), "known: F2 (l2guard rebuilt late)")]
+
+
+def _known(lines):
+    """The labels when every line is known noise, else None."""
+    hits = [next((note for rx, note in KNOWN if rx.search(x)), None) for x in lines]
+    return None if None in hits else sorted(set(hits))
+
+
+def _note(r, extra):
+    r["note"] = "; ".join(x for x in (r["note"], *extra) if x)
 
 
 class CutOff(Exception):
@@ -157,12 +171,18 @@ def one(env, row):
         if not _wait_applied(env, pushed):
             _alive(t)
             return done("broken", f"push not applied in {env['apply_wait']} s")
-        r["changed"] = snapshot.diff(before, _snap(env), env["ignore"])
+        after = _snap(env)
+        r["changed"] = snapshot.diff(before, after, env["ignore"])
         bad = _health(env, pid, f"labtest: {stamp}")
         if bad:
             return done("broken", bad)
         if not r["changed"]:
             return done("ignored")
+        if row.get("check"):
+            ok, why = row["check"](snapshot.bss(after, env["wlan"]), new)
+            return done("works") if ok else done("broken", f"check failed: {why}")
+        if _known(r["changed"]):  # a before-snapshot inside the F2 gap: the setting itself did nothing
+            return done("ignored", "; ".join(_known(r["changed"])))
         return done("not_covered", "router changed, no check yet")
     except CutOff:
         cut = True
@@ -194,7 +214,9 @@ def _put_back(env, row, r, path, old, pushed, before, cut):
             break
         time.sleep(POLL)
         gone = snapshot.diff(before, _snap(env), env["ignore"])
-    if gone:
+    if gone and _known(gone):
+        _note(r, _known(gone))
+    elif gone:
         r.update(result="broken", note="; ".join(x for x in (r["note"], f"did not go back: {gone[:3]}") if x))
     _drop_journal(env["conf"])
 

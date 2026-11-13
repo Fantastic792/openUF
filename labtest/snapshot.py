@@ -58,4 +58,4 @@ def bss(snap, ssid):
             cur = None
         elif cur is not None:
             cur.append(line)
-    return [b for b in blocks if f"ssid={ssid}" in b]
+    return [b for b in blocks if f"ssid={ssid}" in b or f'ssid2="{ssid}"' in b]  # OpenWrt writes ssid2="..."

@@ -28,3 +28,8 @@ def build(fields):
              "needs": "vm", "set": c["set"], "check": c["check"], "keys": keys.get(n.rsplit(".", 1)[0], [])}
             for n, c in CHECKS.items()]
     return sorted(out, key=lambda r: ORDER.get(r["risk"], 1))
+
+
+from labtest.rows import wifi  # noqa: E402 -- fills CHECKS; needs the names above
+
+wifi.register(CHECKS)
