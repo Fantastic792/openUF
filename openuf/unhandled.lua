@@ -23,7 +23,8 @@
 	that), strings cut at MAX_VALUE_CHARS, and any field whose NAME looks
 	like a secret (psk, passphrase, password, secret, authkey, token, *key)
 	redacted at any depth. Writes are the rare event: a NEW entry is written
-	at once, a repeat count only every FLUSH_INTERVAL seconds, both through a
+	at once but no more than once per NEW_FLUSH_GAP seconds (a burst of new
+	shapes costs one write), a repeat count only every FLUSH_INTERVAL, both through a
 	sibling temp file and rename the way state.json is. The file is research
 	data, not adoption state: a factory reset leaves it alone, and losing it
 	costs nothing but history.
@@ -41,6 +42,7 @@ M.MAX_ENTRIES       = 150
 M.MAX_PAYLOAD_BYTES = 2048
 M.MAX_VALUE_CHARS   = 200
 M.FLUSH_INTERVAL    = 300
+M.NEW_FLUSH_GAP     = 60
 -- Injectable clock, as in inform.lua.
 M._time             = os.time
 -- Injectable opener for the ledger's temp file.
@@ -50,6 +52,7 @@ M._entries         = {}
 M._dirty           = false
 M._new_since_flush = false
 M._last_flush      = 0
+M._last_write      = 0
 
 -- Field NAMES whose values are never recorded. Matched case-insensitively
 -- against the lowercased name; deliberately broad ("token" catches
@@ -138,8 +141,11 @@ end
 -- | "system_cfg"; key: the thing openUF did not understand (the _type, the
 -- cmd name, the config key shape); payload: what came with it, redacted
 -- here. Returns the entry and whether it was new.
+-- A JSON null ({"cmd": null}) would otherwise print as "userdata: (nil)".
+local function name(v) return v == cjson.null and "null" or tostring(v) end
+
 function M.record(category, key, payload)
-	category, key = tostring(category), tostring(key)
+	category, key = name(category), name(key)
 	local id  = category .. "/" .. key
 	local now = M._time()
 	local e = M._entries[id]
@@ -159,7 +165,7 @@ function M.record(category, key, payload)
 end
 
 function M.entry(category, key)
-	return M._entries[tostring(category) .. "/" .. tostring(key)]
+	return M._entries[name(category) .. "/" .. name(key)]
 end
 
 function M.count()
@@ -218,7 +224,8 @@ local function flush_failed(msg)
 end
 
 -- Write if there is anything to write and it is time to: at once for a new
--- entry, every FLUSH_INTERVAL for repeat counts, always with force. Returns
+-- entry unless the last write was under NEW_FLUSH_GAP ago, every
+-- FLUSH_INTERVAL for repeat counts, always with force. Returns
 -- true when the file was written.
 function M.flush(force)
 	if not M._dirty then return false end
@@ -227,7 +234,8 @@ function M.flush(force)
 		return false
 	end
 	local now = M._time()
-	if not (force or M._new_since_flush
+	if not (force
+	        or (M._new_since_flush and now - M._last_write >= M.NEW_FLUSH_GAP)
 	        or now - M._last_flush >= M.FLUSH_INTERVAL) then
 		return false
 	end
@@ -253,14 +261,14 @@ function M.flush(force)
 		os.remove(tmp)
 		return flush_failed("unhandled: cannot replace " .. M._file .. ": " .. tostring(err))
 	end
-	M._dirty, M._new_since_flush, M._last_flush = false, false, now
+	M._dirty, M._new_since_flush, M._last_flush, M._last_write = false, false, now, now
 	M._flush_err = nil
 	return true
 end
 
 -- Test seam: forget everything; optionally point at another file.
 function M._reset(file)
-	M._entries, M._dirty, M._new_since_flush, M._last_flush = {}, false, false, 0
+	M._entries, M._dirty, M._new_since_flush, M._last_flush, M._last_write = {}, false, false, 0, 0
 	if file ~= nil then M._file = file end
 end
 

@@ -15,6 +15,7 @@ local function fresh(t0)
 	unhandled.MAX_PAYLOAD_BYTES = 2048
 	unhandled.MAX_VALUE_CHARS   = 200
 	unhandled.FLUSH_INTERVAL    = 300
+	unhandled.NEW_FLUSH_GAP     = 60
 	local now = t0 or 1700000000
 	unhandled._time = function() return now end
 	return function(t) now = t end
@@ -100,9 +101,10 @@ return {
 	{
 		name = "unhandled: a failed write never replaces the ledger and is said once",
 		fn = function()
-			fresh(1700000000)
+			local set_time = fresh(1700000000)
 			unhandled.record("mgmt_cfg", "a", {})
 			assert_true(unhandled.flush(), "a good ledger on disk")
+			set_time(1700000000 + unhandled.NEW_FLUSH_GAP)  -- past the new-entry gap
 			local good = read_file()
 			-- A full overlay: open works, the write (or the flush at close) fails.
 			local said = {}
@@ -158,7 +160,38 @@ return {
 		end
 	},
 	{
-		name = "unhandled: repeat counts are written only every FLUSH_INTERVAL, new entries at once",
+		name = "unhandled: a JSON null key is stored as 'null', not as a userdata address",
+		fn = function()
+			fresh(1700000000)
+			local e = unhandled.record("cmd", cjson.null, {cmd = cjson.null})
+			assert_eq(e.key, "null", "key")
+			assert_eq(unhandled.entry("cmd", cjson.null), e, "entry() finds it by the same null")
+			assert_eq(unhandled.entry("cmd", "null"), e, "and by its name")
+		end
+	},
+	{
+		name = "unhandled: a burst of new entries costs one write per NEW_FLUSH_GAP",
+		fn = function()
+			local set_time = fresh(1700000000)
+			unhandled.load()
+			unhandled.record("cmd", "a", {})
+			assert_true(unhandled.flush(), "first new entry -> written at once")
+			set_time(1700000010)
+			unhandled.record("cmd", "b", {})
+			assert_false(unhandled.flush(), "a second new entry 10 s later waits")
+			assert_true(unhandled._dirty, "but is still to be written")
+			set_time(1700000000 + unhandled.NEW_FLUSH_GAP)
+			unhandled.record("cmd", "c", {})
+			assert_true(unhandled.flush(), "written once the gap has passed")
+			local doc = cjson.decode(read_file())
+			assert_not_nil(doc.entries["cmd/b"], "the entry that waited is on disk")
+			assert_not_nil(doc.entries["cmd/c"], "with the one that came after it")
+			unhandled.record("cmd", "d", {})
+			assert_true(unhandled.flush(true), "force (shutdown) writes inside the gap")
+		end
+	},
+	{
+		name = "unhandled: repeat counts are written only every FLUSH_INTERVAL, new entries sooner",
 		fn = function()
 			local set_time = fresh(1700000000)
 			unhandled.load()   -- sets last_flush = now, as run() does
@@ -171,10 +204,10 @@ return {
 			set_time(1700000010 + 300)
 			assert_true(unhandled.flush(), "repeat after the interval -> written")
 			assert_false(unhandled.flush(), "clean -> nothing to write")
-			set_time(1700000010 + 301)
+			set_time(1700000010 + 300 + unhandled.NEW_FLUSH_GAP)
 			unhandled.record("cmd", "b", {})
-			assert_true(unhandled.flush(), "a NEW entry is written at once whatever the clock says")
-			set_time(1700000010 + 302)
+			assert_true(unhandled.flush(), "a NEW entry does not wait for FLUSH_INTERVAL")
+			set_time(1700000010 + 301 + unhandled.NEW_FLUSH_GAP)
 			unhandled.record("cmd", "b", {})
 			assert_true(unhandled.flush(true), "force writes a repeat")
 		end
