@@ -162,7 +162,7 @@ local TYPED = {
 	backhaul_pin              = "string",
 	backhaul_blacklist        = "string",
 	-- The last pushed mesh uplink ({radio, vport, devname}): a push that
-	-- leaves the uplink out (a wired child) rebuilds the station from it.
+	-- leaves the uplink out while the AP is on the mesh keeps the station.
 	backhaul_ul               = "table",
 	-- The stages of the last config push that failed ("switch,l2guard") and
 	-- when (inform._note_push): kept so a restart does not hide a drift the

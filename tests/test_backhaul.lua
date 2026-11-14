@@ -334,51 +334,53 @@ return {
 		end
 	},
 	{
-		name = "backhaul: plan() builds the station from the mesh block when the push leaves the uplink out",
+		name = "backhaul: a push with no mesh uplink entry builds no standby station (Allow meshing is off)",
+		fn = function()
+			local real_popen, real_log = backhaul._popen, backhaul._log
+			backhaul._log = function() end
+			backhaul._popen = function() return "wireless.radio1.band='5g'\n" end
+			backhaul._no_uplink_logged = nil
+			-- A wired AP: the site's mesh block, no station entry.
+			assert_nil(backhaul.plan(MESH, {}, {}, {backhaul_mode = "wired"}), "nothing to write")
+			-- A parent-only push (the wired root): the downlink and no station beside it.
+			local only_dl = backhaul.plan(MESH, {ENTRIES[1]}, {}, {})
+			assert_true(only_dl.downlink ~= nil, "the downlink")
+			assert_nil(only_dl.uplink, "no station")
+			-- A station the controller did send earlier does not come back
+			-- once the push leaves it out.
+			local st = {backhaul_mode = "wired"}
+			assert_true(backhaul.plan(MESH, ENTRIES, {}, st).uplink ~= nil, "pushed: built")
+			assert_eq(st.backhaul_ul.radio, "radio1", "radio remembered")
+			assert_eq(st.backhaul_ul.vport, "vport-00005e005320", "vport remembered")
+			assert_eq(st.backhaul_ul.devname, "ath4", "devname remembered")
+			assert_nil(backhaul.plan(MESH, {}, {}, st), "left out: gone")
+			-- hwmode-only radios (older OpenWrt) count as 5 GHz too.
+			backhaul._popen = function() return "wireless.wifi1.hwmode='11a'\nwireless.wifi0.hwmode='11g'\n" end
+			assert_eq(backhaul.mesh_radio(), "wifi1", "11a is 5 GHz")
+			backhaul._popen, backhaul._log = real_popen, real_log
+			backhaul._no_uplink_logged = nil
+		end
+	},
+	{
+		name = "backhaul: an AP on its mesh uplink keeps the station when a push leaves the entry out",
 		fn = function()
 			local real_popen, real_log = backhaul._popen, backhaul._log
 			local logs = {}
 			backhaul._log = function(m) logs[#logs + 1] = m end
-			backhaul._popen = function(cmd)
-				assert_eq(cmd, "uci -q show wireless", "the radios' bands")
-				return "wireless.radio0=wifi-device\nwireless.radio0.band='2g'\n"
-					.. "wireless.radio1=wifi-device\nwireless.radio1.band='5g'\nwireless.default_radio1.ssid='OpenWrt'\n"
-			end
-			-- A wired child (captured 2026-10-29): the mesh block, no vwire entry.
-			local st = {backhaul_mode = "wired"}
+			backhaul._popen = function() error("not needed: the radio is remembered") end
+			-- Removing it would cut the only link this AP has.
+			local st = {backhaul_mode = "wireless"}
+			backhaul.plan(MESH, ENTRIES, {}, st)
 			local plan = backhaul.plan(MESH, {}, {}, st)
-			assert_true(plan ~= nil and plan.uplink ~= nil, "a station")
-			assert_nil(plan.downlink, "no downlink was pushed")
-			assert_eq(plan.uplink.radio, "radio1", "on the 5 GHz radio")
+			backhaul._popen, backhaul._log = real_popen, real_log
+			assert_true(plan ~= nil and plan.uplink ~= nil, "the station stays")
+			assert_true(plan.uplink.enabled, "and stays enabled")
+			assert_eq(plan.uplink.radio, "radio1", "remembered radio")
 			assert_eq(plan.uplink.ssid, MESH.essid, "joining the mesh essid")
 			assert_eq(plan.uplink.key, MESH.psk, "with the mesh PSK")
-			assert_false(plan.uplink.enabled, "written disabled while wired")
-			assert_true(logs[1]:find("built from the mesh block on radio1", 1, true) ~= nil, "said so")
-			-- A parent-only push (the wired root): on the downlink's radio.
-			local only_dl = backhaul.plan(MESH, {ENTRIES[1]}, {}, {})
-			assert_true(only_dl.downlink ~= nil, "the downlink")
-			assert_eq(only_dl.uplink.radio, "radio1", "and a station beside it")
-			-- A pushed uplink is remembered and reused, names included.
-			st = {backhaul_mode = "wired"}
-			backhaul.plan(MESH, ENTRIES, {}, st)
-			assert_eq(st.backhaul_ul.radio, "radio1", "radio remembered")
-			assert_eq(st.backhaul_ul.vport, "vport-00005e005320", "vport remembered")
-			assert_eq(st.backhaul_ul.devname, "ath4", "devname remembered")
-			backhaul._popen = function() error("not needed: the radio is remembered") end
-			plan = backhaul.plan(MESH, {}, {}, st)
-			assert_eq(plan.uplink.radio, "radio1", "remembered radio")
 			assert_eq(plan.uplink.vport, "vport-00005e005320", "remembered vport for the report")
 			assert_eq(plan.uplink.devname, "ath4", "remembered devname")
-			-- No 5 GHz radio and nothing remembered: none, and a log line.
-			backhaul._popen = function() return "wireless.radio0.band='2g'\n" end
-			logs = {}
-			backhaul._no_mesh_radio_logged = nil   -- said once per run
-			assert_nil(backhaul.plan(MESH, {}, {}, {}), "no station possible")
-			assert_true(logs[1]:find("cannot fail over", 1, true) ~= nil, "logged")
-			-- hwmode-only radios (older OpenWrt) count too.
-			backhaul._popen = function() return "wireless.wifi1.hwmode='11a'\nwireless.wifi0.hwmode='11g'\n" end
-			assert_eq(backhaul.mesh_radio(), "wifi1", "11a is 5 GHz")
-			backhaul._popen, backhaul._log = real_popen, real_log
+			assert_true(logs[#logs]:find("kept", 1, true) ~= nil, "said so")
 		end
 	},
 	{
@@ -1082,24 +1084,30 @@ return {
 		end
 	},
 	{
-		name = "backhaul: a board with no 5 GHz radio says it cannot fail over once, not on every push",
+		name = "backhaul: a push with no mesh uplink says once that this AP will not fail over, and again after an entry came and went",
 		fn = function()
 			local orig_popen, orig_log = backhaul._popen, backhaul._log
 			local logs = {}
 			backhaul._log = function(m) logs[#logs + 1] = m end
-			backhaul._popen = function() return "wireless.radio0.band='2g'\n" end
-			backhaul._no_mesh_radio_logged = nil
-			local dl_only = {{role = "downlink"}}   -- no radio: nothing to imply the station from
+			backhaul._popen = function() return "wireless.radio1.band='5g'\n" end
+			backhaul._no_uplink_logged = nil
+			local function said()
+				local n = 0
+				for _, m in ipairs(logs) do if m:find("will not fail over", 1, true) then n = n + 1 end end
+				return n
+			end
 			local ok, err = pcall(function()
-				backhaul.plan(MESH, dl_only, {}, {})
-				backhaul.plan(MESH, dl_only, {}, {})
+				local st = {}
+				backhaul.plan(MESH, {}, {}, st)
+				backhaul.plan(MESH, {}, {}, st)
+				assert_eq(said(), 1, "one line for two pushes")
+				backhaul.plan(MESH, ENTRIES, {}, st)
+				backhaul.plan(MESH, {}, {}, st)
+				assert_eq(said(), 2, "said again when the entry went away again")
 			end)
 			backhaul._popen, backhaul._log = orig_popen, orig_log
-			backhaul._no_mesh_radio_logged = nil
+			backhaul._no_uplink_logged = nil
 			assert_true(ok, tostring(err))
-			local n = 0
-			for _, m in ipairs(logs) do if m:find("no 5 GHz radio", 1, true) then n = n + 1 end end
-			assert_eq(n, 1, "one line for two pushes")
 		end
 	},
 	{

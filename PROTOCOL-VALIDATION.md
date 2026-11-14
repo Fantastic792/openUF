@@ -1544,6 +1544,17 @@ uplink (`st.backhaul_ul`), else the downlink's, else the 5 GHz one, written disa
 always. What real firmware does in this case was not captured; it has to do the same to
 fail over, since the push gives it nothing else.
 
+**Corrected 2026-11-14.** The lab (10.6.106, a wired AP that never meshed) shows the entry
+follows the device's "Allow meshing to another access point" switch (`mesh_sta_vap_enabled`):
+on, the push carries `wireless.N ... mode=managed usage=uplink vport=enabled` and
+`connectivity.uplink_wds`; off, it carries the mesh block and no entry, and nothing else
+differs. So "only to a device it last saw on its wireless uplink" was too narrow, and the
+station built from the mesh block made an AP with the switch off join the mesh once its
+cable went. `backhaul.plan` builds no station without the entry again; only an AP on its
+mesh uplink right now keeps it. Open: which of the two meshing switches "Wireless Meshing
+on" meant for the child above; with "Allow meshing to another access point" on, the
+controller should send it the entry (not re-captured on the 6401s).
+
 ### The parent names its children — 2026-10-03
 
 The controller resolves each station of a downlink VAP to a device by the station's

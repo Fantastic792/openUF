@@ -267,15 +267,19 @@ function M.mesh_radio()
 	return band[1]
 end
 
--- The uplink a push leaves out. The controller sends the station entry only
--- to a device it last saw on its wireless uplink: a wired child gets the mesh
--- block (status, essid, psk) and no vwire entry at all, captured on a
--- JIDU6401 2026-10-29. Taking that literally left a wired child with no
--- station, so pulling its cable stranded it -- no mesh, no log line. The block
--- carries everything a station needs, so it is built here on the radio the
--- last pushed uplink used (st.backhaul_ul), else the downlink's, else the
--- 5 GHz one, and written disabled like any other: tick() enables it only once
--- the wired carrier is gone.
+-- The uplink a push leaves out. The station entry is the device's "Allow
+-- meshing to another access point" switch on the wire: a wired AP with the
+-- switch on gets it (lab, 2026-11-13), one with it off gets the site's mesh
+-- block (status, essid, psk) and no entry, and nothing else in the push tells
+-- the two apart. So no entry means no standby station: building one anyway
+-- (2026-10-29 to 2026-11-14) made an AP with the switch off join the mesh
+-- when its cable went. The one exception is an AP on its mesh uplink right
+-- now -- removing the station would cut the only link it has -- which keeps
+-- it, on the radio and under the names the last pushed uplink used
+-- (st.backhaul_ul), until it is wired again and a push arrives.
+-- shortcut: between the cable coming back and that push the kept station is
+-- only disabled, so a second cable loss in that gap joins the mesh again;
+-- remove it in tick() if that ever matters.
 local function implied_uplink(dl_radio, st)
 	local last = st and type(st.backhaul_ul) == "table" and st.backhaul_ul or {}
 	local radio = last.radio or dl_radio or M.mesh_radio()
@@ -299,21 +303,20 @@ function M.plan(mesh, entries, cfg, st)
 	if ul_entry then
 		-- Remembered for the pushes that leave it out (implied_uplink).
 		if st then st.backhaul_ul = {radio = ul_entry.radio, vport = ul_entry.ssid, devname = ul_entry.devname} end
-	else
+		M._no_uplink_logged = nil
+	elseif st and st.backhaul_mode == "wireless" then
 		local implied = implied_uplink(dl_radio, st)
 		if implied then
 			list[#list + 1] = implied
-			M._log(("no mesh uplink in the push -- the station is built from the mesh block on %s, "
-				.. "so this AP can still fail over"):format(implied.radio))
-		else
-			-- Once per run, not once per push: a single-band 2.4 GHz board
-			-- is always in this state, and UniFi meshes on 5 GHz only.
-			if not M._no_mesh_radio_logged then
-				M._no_mesh_radio_logged = true
-				M._log("no mesh uplink in the push and no 5 GHz radio -- this AP cannot fail over "
-					.. "to the mesh (UniFi meshes on 5 GHz only)")
-			end
+			M._log(("no mesh uplink in the push while on the mesh -- the station on %s is kept, "
+				.. "it is this AP's only link"):format(implied.radio))
 		end
+	elseif not M._no_uplink_logged then
+		-- Once per run, not once per push: a wired AP with the switch off
+		-- is always in this state.
+		M._no_uplink_logged = true
+		M._log("no mesh uplink in the push (\"Allow meshing to another access point\" is off "
+			.. "for this AP) -- no standby station, this AP will not fail over to the mesh")
 	end
 	entries = list
 	for _, e in ipairs(entries) do

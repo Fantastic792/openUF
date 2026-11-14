@@ -327,7 +327,7 @@ Compared with [yesrab/openUF](https://github.com/yesrab/openUF) `main` at `6277b
 | Area | Before | Now |
 |---|---|---|
 | Mesh | One hop | Several hops, with the loop guard and the controller's parent choice; a downlink beacons its path element even with no uplink station |
-| Mesh station on a cabled AP | The controller sends a cabled AP no uplink entry, so its station went with the next push and a later cable pull stranded it | Built from the mesh name and key when the push leaves it out |
+| Mesh station on a cabled AP | A cabled AP whose "Allow meshing to another access point" is off still joined the mesh when its cable went: the station was built even when the controller sent none | Built only when the controller sends the station entry (the switch is on); an AP on its mesh uplink keeps it |
 | Mesh failover time | Checked once per report, after two failed ones: 39 s to 98 s | The cable is read every second; the station comes up 10 to 16 s after it goes |
 | Mesh failback (DSA) | A device that crossed the wireless link could stay unreachable from other ports until a reboot | The switch entries left behind are rewritten |
 | Mesh child's SSIDs after a WiFi reload | The AP on the station's radio could stay up but silent until a reboot | Its beacon is restarted after two silent heartbeats |

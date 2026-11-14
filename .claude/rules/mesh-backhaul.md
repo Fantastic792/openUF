@@ -10,13 +10,14 @@ paths:
 
 Landmines moved from CLAUDE.md; they load when a matching file is touched.
 
-- **A wired AP's push has no mesh uplink entry; the station is built anyway.** The
-  controller sends `usage=uplink` only to a device it last saw meshed; a cabled child gets
-  `mesh.status/essid/psk` and no vwire entry (PROTOCOL-VALIDATION § Wireless uplink,
-  2026-10-29). `backhaul.plan` builds the station from the mesh block on the last pushed
-  uplink's radio (`st.backhaul_ul`), else the downlink's, else `mesh_radio()` (5 GHz).
-  Taking the push literally removed the station on the next push and stranded a child
-  whose cable was then pulled.
+- **No mesh uplink entry in the push = no standby station.** The entry (`usage=uplink`) is
+  the device's "Allow meshing to another access point" switch on the wire: a wired AP with
+  it on gets the entry (lab, 2026-11-13), one with it off gets `mesh.status/essid/psk` and
+  no entry. `backhaul.plan` builds no station then, so "off" means off. Only an AP on its
+  mesh uplink right now (`st.backhaul_mode == "wireless"`) keeps the station, rebuilt from
+  `st.backhaul_ul`. From 2026-10-29 to 2026-11-14 the station was built anyway (a cabled
+  6401 child had been stranded); that made an AP with the switch off join the mesh. Not
+  re-checked on the 6401s: whether that child's switch was on (PROTOCOL-VALIDATION).
 - **On swconfig, mesh is two problems DSA does not have** (since 2026-10-18; first run on a
   Deco M4R v1 on 2026-10-19: untagged, online over the air with the cable pulled). (1)
   `br-lan`'s wired port is the CPU trunk's sub-device, whose carrier never
