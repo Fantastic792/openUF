@@ -488,7 +488,7 @@ check "uninstall runs (UCI file with settings)" run_install uninstall
 check "uninstall keeps an /etc/config/openuf that has settings" test -s "$R/etc/config/openuf"
 check "uninstall names the settings file it keeps" has 'etc/config/openuf' "$R/out"
 
-# ── F16: install drops what the tree no longer ships ───────────────────────
+# ── F16 + F5: install drops what the tree no longer ships, keeps itself ────
 # The block is run from a scratch source tree, as install.sh runs it from the
 # release directory.
 prune_block() {
@@ -525,6 +525,8 @@ prune_root prune-empty; : > "$D/gone.lua"; printf '%s\n' ./inform.lua ./gone.lua
 rm "$R/src/openuf/inform.lua"
 prune_block
 check "a source tree without inform.lua removes nothing" test -e "$D/gone.lua"
+check "install.sh copies itself beside the install (uninstall after a reboot)" \
+	grep -q 'cp "\$0" "\$INSTALL_DIR/install.sh"' install.sh
 
 # ── dist.sh: a script's --help header survives the strip ───────────────────
 # openuf-convert/-deps/-bootstrap and the openuf CLI print their usage

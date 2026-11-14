@@ -189,6 +189,10 @@ case "$ACTION" in
 		else
 			rm -f "$_new"
 		fi
+		# The uninstaller, where a reboot cannot lose it (the release directory
+		# usually sits in /tmp). Not there when this script came down a pipe.
+		[ -f "$0" ] && cp "$0" "$INSTALL_DIR/install.sh" 2>/dev/null
+
 		# Release tarballs arrive already comment-stripped (tools/dist.sh).
 		# When installing from a git clone, strip on the way in using the same
 		# tool so the device gets the same lean tree -- roughly half the bytes,
@@ -453,6 +457,8 @@ case "$ACTION" in
 		echo "     For a controller elsewhere (another subnet, another port):"
 		echo "       syswrapper.sh set-inform http://<controller>:<port>/inform   (UniFi's default port: 8080)"
 		echo "  2. Open the UniFi controller → Devices → click Adopt"
+		echo ""
+		echo "To remove openUF later: sh $INSTALL_DIR/install.sh uninstall"
 		;;
 
 	# ────────────────────────────────────────────────────────────────────────
