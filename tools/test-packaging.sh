@@ -528,6 +528,19 @@ check "a source tree without inform.lua removes nothing" test -e "$D/gone.lua"
 check "install.sh copies itself beside the install (uninstall after a reboot)" \
 	grep -q 'cp "\$0" "\$INSTALL_DIR/install.sh"' install.sh
 
+# ── F1: service start removes the uci temp files a power cut left ──────────
+newroot uci-tmp; mkdir -p "$R/etc/config"
+for f in .wireless.uci-AbCdEf wireless; do
+	: > "$R/etc/config/$f"; touch -d '10 minutes ago' "$R/etc/config/$f"
+done
+: > "$R/etc/config/.network.uci-QwErTy"   # a commit running right now
+grep 'find /etc/config .*uci-' openuf/etc/init.d/openuf | reroot > "$R/clean.sh"
+sh "$R/clean.sh"
+check "the init script has the cleanup line" test -s "$R/clean.sh"
+check "a stale uci temp file is removed at start" test ! -e "$R/etc/config/.wireless.uci-AbCdEf"
+check "a fresh one (a commit in progress) is left" test -e "$R/etc/config/.network.uci-QwErTy"
+check "the config file itself is untouched" test -e "$R/etc/config/wireless"
+
 # ── dist.sh: a script's --help header survives the strip ───────────────────
 # openuf-convert/-deps/-bootstrap and the openuf CLI print their usage
 # with `sed -n 'M,Np' "$0"`; a stripped header made them print code instead
