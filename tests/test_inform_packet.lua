@@ -7384,6 +7384,41 @@ return {
 		end
 	},
 	{
+		name = "inform: a push that saw one VAP mid-reload has l2guard rebuilt on the next heartbeat, not after L2GUARD_RESYNC_INTERVAL (F2)",
+		fn = function()
+			local orig = {l2 = inform._l2guard, uci = inform._ucihelper, time = inform._time, state = inform._state,
+				sig = inform._vaps_sig, until_ = inform._vap_settle_until, ds = inform._deny_settle}
+			local real_l2 = dofile("openuf/l2guard.lua")
+			local calls, live, now = {}, {"phy0-ap0"}, 5000
+			inform._l2guard = {parse = real_l2.parse, spec_from = real_l2.spec_from,
+				reconcile = function(_, names) calls[#calls + 1] = table.concat(names, ",") end}
+			inform._ucihelper = {ap_ifnames = function() return live end}
+			inform._time = function() return now end
+			inform._state = {save = function() end}
+			local st = sample_state()
+			local ok, err = pcall(function()
+				inform._vap_watch(now)                 -- the steady state before the push
+				inform._deny_reloaded()                -- apply_config ran `wifi reload`
+				inform._l2guard_apply_push("ebtables.status=enabled\n"
+					.. "ebtables.1.cmd=-t nat -A PREROUTING --in-interface ath0 -d BGA -j DROP\n", st)
+				inform._l2guard_next = now + inform.L2GUARD_RESYNC_INTERVAL   -- worst case: the timer just ran
+				now = now + 10                         -- one heartbeat later the 5 GHz VAPs are back
+				live = {"phy0-ap0", "phy1-ap0", "phy1-ap1"}
+				with_stderr(function()
+					inform._vap_watch(now)
+					inform._l2guard_resync(st)
+				end)
+			end)
+			inform._l2guard, inform._ucihelper, inform._time, inform._state = orig.l2, orig.uci, orig.time, orig.state
+			inform._vaps_sig, inform._vap_settle_until, inform._deny_settle = orig.sig, orig.until_, orig.ds
+			inform._l2guard_next = 0
+			if not ok then error(err, 0) end
+			assert_eq(calls[1], "phy0-ap0", "the push builds from what is up")
+			assert_eq(calls[2], "phy0-ap0,phy1-ap0,phy1-ap1", "the next heartbeat adds the VAPs that came back")
+			assert_eq(table.concat(st.l2guard.ifnames, ","), "phy0-ap0,phy1-ap0,phy1-ap1", "and records them")
+		end
+	},
+	{
 		name = "inform: _vap_watch keeps the gates open for VAP_SETTLE after _deny_reloaded, and a clock step back does not stretch it",
 		fn = function()
 			local orig = {uci = inform._ucihelper, sig = inform._vaps_sig, until_ = inform._vap_settle_until,
