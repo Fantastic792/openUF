@@ -504,6 +504,9 @@ case "$ACTION" in
 				sed -i '/\/hook\/adopt-shell\.sh$/d' /etc/shells
 				echo "Removed the bootstrap shell from /etc/shells."
 			fi
+			# The empty UCI file install made for LuCI. One with settings is
+			# the user's and stays (named at the end).
+			[ -s /etc/config/openuf ] || rm -f /etc/config/openuf
 		fi
 
 		# Drop the sysupgrade keep-list entry for conf.lua: that file goes
@@ -547,7 +550,11 @@ case "$ACTION" in
 		# Remove installed files (leave state dir so authkey is preserved)
 		rm -rf "$INSTALL_DIR"
 
-		echo "Done.  State dir $STATE_DIR left intact (remove manually if needed)."
+		echo "Done.  Left in place (remove by hand if not needed):"
+		echo "  $STATE_DIR  the adoption (authkey), so a reinstall stays adopted"
+		[ -e /etc/config/openuf ] && echo "  /etc/config/openuf  your openUF settings"
+		echo "  packages openUF's features use (lldpd, usteer, nftables, kernel"
+		echo "    modules): other software may need them"
 		;;
 
 	# ────────────────────────────────────────────────────────────────────────

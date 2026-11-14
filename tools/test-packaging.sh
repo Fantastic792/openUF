@@ -476,6 +476,18 @@ check "update.sh refuses to run on a package install" grep -q 'openUF is install
 check "setup.sh does not count the link as a file install" \
 	grep -q '! -L "\$INSTALL_DIR" \] && FILES_INSTALLED=1' setup.sh
 
+# ── F7: uninstall drops the empty UCI file it made and names what stays ────
+newroot un-uci; fileinstall; mkdir -p "$R/etc/config"; : > "$R/etc/config/openuf"
+check "uninstall runs (empty UCI file)" run_install uninstall
+check "uninstall removes the empty /etc/config/openuf install made" test ! -e "$R/etc/config/openuf"
+check "uninstall says the packages stay" grep -qi 'packages' "$R/out"
+check "uninstall names the state dir it keeps" has 'etc/openuf' "$R/out"
+newroot un-uci-set; fileinstall; mkdir -p "$R/etc/config"
+echo "config openuf 'main'" > "$R/etc/config/openuf"
+check "uninstall runs (UCI file with settings)" run_install uninstall
+check "uninstall keeps an /etc/config/openuf that has settings" test -s "$R/etc/config/openuf"
+check "uninstall names the settings file it keeps" has 'etc/config/openuf' "$R/out"
+
 # ── dist.sh: a script's --help header survives the strip ───────────────────
 # openuf-convert/-deps/-bootstrap and the openuf CLI print their usage
 # with `sed -n 'M,Np' "$0"`; a stripped header made them print code instead
