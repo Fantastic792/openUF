@@ -157,6 +157,38 @@ case "$ACTION" in
 			fi
 		fi
 
+		# `cp -r` above only adds: a file an older release shipped and this
+		# one dropped would stay forever. Dead modules cost flash; a dropped
+		# profile is worse, because modelmap/ and ufmodel/ are listed by
+		# directory (uciconf.lua's 'auto', the web UI's lists), so it would
+		# still be offered. .files is what the last install put here; what it
+		# has and this tree has not goes. A file the user added is in no list.
+		_new="$INSTALL_DIR/.files.new"
+		( cd openuf && find . -type f ) | grep -v '^\./etc/' > "$_new"
+		if grep -qxF ./inform.lua "$_new"; then
+			# Installed before the list existed: what the tree has dropped since.
+			[ -f "$INSTALL_DIR/.files" ] || printf '%s\n' ./ftinterop.lua ./hook/openuf-rrb.sh \
+				./rrb/LICENSE ./rrb/README.md ./rrb/rrb-unifi.uc ./ufmodel/us8.lua > "$INSTALL_DIR/.files"
+			grep -vxF -f "$_new" "$INSTALL_DIR/.files" | while IFS= read -r _f; do
+				case "$_f" in ./conf.lua|*..*|"") continue ;; esac
+				[ -f "$INSTALL_DIR/$_f" ] || continue
+				case "$_f" in ./modelmap/*.lua|./ufmodel/*.lua)
+					# A profile or identity this device still names (conf.lua, the
+					# UCI file, another profile) stays: openUF would not start.
+					_n=${_f##*/}; _n=${_n%.lua}
+					if grep -lswF -e "$_n" "$INSTALL_DIR/conf.lua" /etc/config/openuf \
+						"$INSTALL_DIR"/modelmap/*.lua | grep -qvxF "$INSTALL_DIR/${_f#./}"; then
+						echo "Kept ${_f#./}: no longer shipped, but this device names it."
+						continue
+					fi ;;
+				esac
+				rm -f "$INSTALL_DIR/$_f" && echo "Removed ${_f#./} (no longer shipped)."
+				rmdir "$INSTALL_DIR/${_f%/*}" 2>/dev/null
+			done
+			mv "$_new" "$INSTALL_DIR/.files"
+		else
+			rm -f "$_new"
+		fi
 		# Release tarballs arrive already comment-stripped (tools/dist.sh).
 		# When installing from a git clone, strip on the way in using the same
 		# tool so the device gets the same lean tree -- roughly half the bytes,

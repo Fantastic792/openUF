@@ -488,6 +488,44 @@ check "uninstall runs (UCI file with settings)" run_install uninstall
 check "uninstall keeps an /etc/config/openuf that has settings" test -s "$R/etc/config/openuf"
 check "uninstall names the settings file it keeps" has 'etc/config/openuf' "$R/out"
 
+# ── F16: install drops what the tree no longer ships ───────────────────────
+# The block is run from a scratch source tree, as install.sh runs it from the
+# release directory.
+prune_block() {
+	awk '/^\t\t_new="\$INSTALL_DIR\/\.files\.new"$/ { f = 1 } f { print } f && /^\t\tfi$/ { exit }' install.sh \
+		| sed "s#/etc/config/#$R/etc/config/#g" > "$R/prune.sh"   # not reroot: it would rewrite the block's own etc filter
+	( cd "$R/src" && PATH=$R/bin:$PATH && INSTALL_DIR=$D && . "$R/prune.sh" ) > "$R/out" 2>&1
+}
+prune_root() { # name: a source tree and an install of it
+	newroot "$1"; D=$R/opt/openuf
+	mkdir -p "$R/src/openuf/modelmap" "$R/src/openuf/etc/init.d" "$R/etc/config"
+	for f in inform.lua conf.lua modelmap/new.lua etc/init.d/openuf; do echo "-- $f" > "$R/src/openuf/$f"; done
+	mkdir -p "$D"; cp -r "$R/src/openuf/"* "$D/"; rm -rf "$D/etc"
+	echo 'dev = dofile("modelmap/new.lua")' > "$D/conf.lua"
+}
+prune_root prune-old; mkdir -p "$D/rrb" "$D/ufmodel"
+for f in ftinterop.lua rrb/LICENSE ufmodel/us8.lua mine.lua; do : > "$D/$f"; done
+prune_block
+check "install block is found in install.sh" test -s "$R/prune.sh"
+check "an install from before the list drops a known old file" test ! -e "$D/ftinterop.lua"
+check "an emptied directory goes with its files" test ! -e "$D/rrb"
+check "a file the user added stays" test -e "$D/mine.lua"
+check "the list is written, without etc/" sh -c "grep -qxF ./inform.lua '$D/.files' && ! grep -q '^\./etc/' '$D/.files'"
+prune_root prune-list; mkdir -p "$D/modelmap"
+for f in gone.lua modelmap/old.lua modelmap/used.lua; do : > "$D/$f"; done
+printf '%s\n' ./inform.lua ./conf.lua ./gone.lua ./modelmap/old.lua ./modelmap/used.lua > "$D/.files"
+echo 'dev = dofile("modelmap/used.lua")' > "$D/conf.lua"
+prune_block
+check "a file the last install listed and the tree dropped is removed" test ! -e "$D/gone.lua"
+check "a dropped profile nothing names is removed" test ! -e "$D/modelmap/old.lua"
+check "a dropped profile conf.lua names stays" test -e "$D/modelmap/used.lua"
+check "conf.lua is never removed" has 'used.lua' "$D/conf.lua"
+check "the shipped files stay" test -e "$D/inform.lua" -a -e "$D/modelmap/new.lua"
+prune_root prune-empty; : > "$D/gone.lua"; printf '%s\n' ./inform.lua ./gone.lua > "$D/.files"
+rm "$R/src/openuf/inform.lua"
+prune_block
+check "a source tree without inform.lua removes nothing" test -e "$D/gone.lua"
+
 # ── dist.sh: a script's --help header survives the strip ───────────────────
 # openuf-convert/-deps/-bootstrap and the openuf CLI print their usage
 # with `sed -n 'M,Np' "$0"`; a stripped header made them print code instead
