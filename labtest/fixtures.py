@@ -92,6 +92,9 @@ def clean(ctl, conf):
         except (unifi.Refused, RuntimeError):  # a kind this controller has no list for
             continue
         for x in found:
-            ctl.delete(f"{rest}/{x['_id']}")
+            if obj == "User":  # no DELETE for a client record (HTTP 404): it is forgotten by its MAC
+                ctl.post("cmd/stamgr", {"cmd": "forget-sta", "macs": [x["mac"]]})
+            else:
+                ctl.delete(f"{rest}/{x['_id']}")
             n += 1
     return n

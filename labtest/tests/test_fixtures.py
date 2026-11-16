@@ -29,6 +29,9 @@ class FakeCtl:
         self.calls.append(("post", path, json.loads(json.dumps(body))))
         if self.refuse_post:
             raise unifi.Refused(f"controller refused {path}: api.err.Invalid")
+        if path == "cmd/stamgr":  # forget-sta: the one way a client record goes
+            self.items["rest/user"] = [o for o in self.items.get("rest/user", []) if o.get("mac") not in body["macs"]]
+            return [{}]
         self.n += 1
         o = dict(body, _id=f"f{self.n}")
         self.items.setdefault(path, []).append(o)
@@ -44,6 +47,8 @@ class FakeCtl:
     def delete(self, path):
         self.calls.append(("delete", path, None))
         base, oid = path.rsplit("/", 1)
+        if base == "rest/user":  # the controller has no DELETE for a client record
+            raise RuntimeError(f"controller: HTTP 404 on {path}")
         self.items[base] = [o for o in self.items.get(base, []) if o["_id"] != oid]
 
 
@@ -86,6 +91,16 @@ class FixturesTest(unittest.TestCase):
         self.assertEqual(ctl.calls[1][2], {"usergroup_id": "g0"})
         self.assertEqual(ctl.wlans()[0]["usergroup_id"], "g0")
         self.assertEqual(fixtures.clean(ctl, self.conf), 0)                 # nothing left: second call is 0
+
+    def test_clean_forgets_a_user_instead_of_deleting_it(self):
+        # live, 2026-11-16: DELETE rest/user/<id> is HTTP 404; the release stage died on it and the object stayed
+        ctl = FakeCtl()
+        fixtures.make(ctl, "User", self.conf, "h")
+        ctl.calls.clear()
+        self.assertEqual(fixtures.clean(ctl, self.conf), 1)
+        self.assertEqual(ctl.calls, [("post", "cmd/stamgr", {"cmd": "forget-sta",
+                                                             "macs": [fixtures._body("User")["mac"]]})])
+        self.assertEqual(ctl.get("rest/user"), [])
 
     def test_fixture_secret_not_in_results(self):
         ctl = FakeCtl()
