@@ -57,13 +57,16 @@ def run(conf, ctl):
         if not lab_vm:
             return True, SKIP + "needs the lab's air control; on hardware run benchmark H4 by hand"
         air((client, a2, "off"), (a2, client, "off"))
-        if common.join(s, client, w) is None:
+        if common.join(s, client, w, ft=True) is None:
             return False, "the client got no address over WiFi in 90 s"
         iv = s["ping_interval"]
-        cmds = [("before", "iw dev $IF link"), ("ping", f"ping -c {int(30 / iv)} -i {iv} -W 1 -I $IF {wired}"),
+        # the client's cable is down in the window: `lab.sh air` cannot reach it, so its own air is switched
+        # from inside the window (5 s after the commands start = when `move` runs here); the APs' from the host
+        cmds = [("air", f"( sleep 5; echo '{a1.lab_n} off' > /etc/hwsim-air.conf ) &"),
+                ("before", "iw dev $IF link"), ("ping", f"ping -c {int(30 / iv)} -i {iv} -W 1 -I $IF {wired}"),
                 ("after", "iw dev $IF link"),
                 ("wpa", "wpa_cli -i $IF status 2>/dev/null | grep -E '^key_mgmt='")]
-        move = lambda: air((client, a2, "default"), (a2, client, "default"), (client, a1, "off"), (a1, client, "off"))
+        move = lambda: air((a2, client, "default"), (a1, client, "off"))
         r = common.wifi_only(s, client, cmds, 50, during=move)
         b0, b1 = common.bssid(r.get("before", "")), common.bssid(r.get("after", ""))
         g = common.gap(r.get("ping", ""), iv)

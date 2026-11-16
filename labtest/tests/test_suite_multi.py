@@ -55,6 +55,22 @@ class MultiTest(unittest.TestCase):
             c = fakes.by_name(multi.run(lab.conf, lab.ctl))
         self.assertTrue(c["mesh_failover"]["ok"], c["mesh_failover"]["detail"])
 
+    def test_the_clients_air_is_switched_from_inside_its_window(self):
+        # live, 2026-11-16: in the window the client's cable is down, so `lab.sh air 3 ...` never reached it
+        # (its air daemon logged no reload); it went on hearing the first AP and never heard the second
+        lab = fakes.Lab(self)
+        multi.run(lab.conf, lab.ctl)
+        script = next(s.decode() for s in lab.t["vm3"].stdin if s and b"wpa_cli" in s)
+        self.assertIn("echo '1 off' > /etc/hwsim-air.conf", script)
+        airs = [a[-3:] for a in lab.sh if "air" in a]
+        self.assertEqual(airs[:4], [["3", "2", "off"], ["2", "3", "off"], ["2", "3", "default"], ["1", "3", "off"]])
+
+    def test_the_roaming_client_asks_for_fast_transition(self):
+        lab = fakes.Lab(self)
+        multi.run(lab.conf, lab.ctl)
+        sent = next(x.decode() for x in lab.t["vm3"].stdin if x and b"wireless.cl.ssid" in x)
+        self.assertIn("set wireless.cl.ieee80211r=1", sent)
+
     def test_hardware_gets_no_mesh_switch(self):
         lab = fakes.Lab(self, kind="hw")
         multi.run(lab.conf, lab.ctl)

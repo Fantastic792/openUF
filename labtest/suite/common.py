@@ -150,11 +150,11 @@ def ap_bssid(s, ap, client, w):
     return None
 
 
-def join(s, client, w, bssid=None):
+def join(s, client, w, bssid=None, ft=False):
     """Make the client a WPA2 station of WLAN w (of that one BSSID when given: a second AP in range has the
     same SSID). The key goes over SSH's stdin, never on a command line."""
     radio = s["client_radio"]
-    pin = [f"set wireless.cl.bssid={bssid}"] if bssid else []
+    pin = ([f"set wireless.cl.bssid={bssid}"] if bssid else []) + (["set wireless.cl.ieee80211r=1"] if ft else [])
     text = "\n".join(["uci -q delete wireless.cl",  # an old section, and the pin it may hold, goes first
                       "uci -q batch <<EOF", "set network.wwan=interface", "set network.wwan.proto=dhcp",
                       "set network.wwan.metric=100",  # the cable's routes win whenever the cable is up
