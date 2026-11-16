@@ -78,6 +78,8 @@ The few settings that stay on the device, behind the root password:
 
 openUF emulates an access point only: no gateway or switch emulation, by design.
 
+How close it is to a real U6 In-Wall, feature by feature: [docs/U6IW-PARITY.md](docs/U6IW-PARITY.md).
+
 ## Install
 
 One command on the device, over SSH:
