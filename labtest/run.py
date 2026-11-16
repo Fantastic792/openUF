@@ -11,6 +11,7 @@ sys.path.insert(0, REPO)
 from labtest import catalog, report, results, rows, table, target, unifi  # noqa: E402
 from labtest.extra import cycle, fakeboard, garbage, soak, writes  # noqa: E402
 from labtest.safety import flashguard, packguard, plug, proof  # noqa: E402
+from labtest.suite import multi, single  # noqa: E402
 
 
 def guards(args):
@@ -136,11 +137,32 @@ def safety(args):
     return out
 
 
+def _suite(mod, name):
+    def stage(args):
+        conf = target.load_config()
+        if not os.path.exists(conf["account_file"]):
+            return [(name, False, "no account file")]
+        r = mod.run(conf, unifi.Controller(conf))
+        return [(f"{name}.{c['name']}", c["ok"], c["detail"], True) for c in r["checks"]]
+    return stage
+
+
+def release(args):
+    out = []
+    for stage in (safety, vm_stage, _suite(single, "single"), _suite(multi, "multi")):
+        checks = stage(args)
+        out += checks
+        if not all(c[1] for c in checks):
+            break
+    return out
+
+
 # stage name -> function(args) returning [(check_name, passed, detail)]
 STAGES = {"guards": guards, "proof": timer_proof, "plug": pull_plug, "safety": safety, "catalog": catalog_stage,
           "table": table_stage, "writes": writes_stage, "cycle": cycle_stage,
           "garbage": garbage_stage, "soak": soak_stage, "vm": vm_stage,
-          "fakeboard": fakeboard_stage}
+          "fakeboard": fakeboard_stage, "single": _suite(single, "single"), "multi": _suite(multi, "multi"),
+          "release": release}
 
 
 def main(argv=None):

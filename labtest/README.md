@@ -114,3 +114,40 @@ The only way back into a cut-off router is its reset button. Prove it works with
 3. Wait for the boot to finish.
 4. Check: the router answers on its default address, LuCI opens, SSH works.
 5. Write down the model, the date and the result.
+
+## Release suite: one AP, two APs, a WiFi client
+
+Three more stages. They click nothing: every setting is changed through the controller API and
+put back, and a third VM (plain OpenWrt, no openUF) is the WiFi client.
+
+| Stage | What it checks | Needs |
+|---|---|---|
+| `single` | One AP: `boot` (reboot, SSH, openUF, controller, WiFi on, with the seconds), `mgmt` (address and default route), then the client joins and, with its cable down so it can only use WiFi, `client_dhcp`, `client_dns`, `client_reach`, `throughput` (`iperf3`, floor `min_mbps`), `rate_limit` (5 Mbit/s user group), `vlan_tag` and `vlan_isolation` (VLAN 77: the client reaches the host's VLAN address and gets no address from the untagged network), `guest_firewall` and `client_isolation` (the rules are there; config only), `daemon_recovery` (openUF killed), `controller_recovery` (lab controller stopped 60 s; the SSIDs stay on the air), `no_lua_error` | lab up, `ap1` adopted, `client` plain OpenWrt, the account file, `row_wlan` WPA2, the `suite` block |
+| `multi` | Two APs: `propagation` (a push applied on both, same SSIDs), `kv_config` (802.11v, 802.11k, one mobility domain, FT key management on both), `roam` (the air is moved so the client must change AP; longest ping gap at most `roam_max_s`), `mesh_failover` (cable of `ap2` pulled: reachable and connected over the mesh, uplink `wireless`), `loop_guard` (cable back while the mesh is up: no packet storm, the BPDU drop rule on both), `mesh_restore` (uplink back on the cable), `both_healthy` | as `single`, plus `ap2` adopted |
+| `release` | `safety`, `vm`, `single`, `multi`, in that order; stops at the first stage that fails | all of the above |
+
+Exit code as every stage: 0 all passed, 1 a check failed, 2 unknown stage. A check that could
+not run prints `PASS <name>: SKIPPED: <why>`; a release run must have no `SKIPPED` line on a VM
+except where this table says so. Results: `single.json`, `multi.json` in `results_dir`.
+
+The `suite` block of the lab config (addresses stay in that file, never in the repo):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `wired_ip` | none, needed | an address on the cable side that the WiFi client must reach; `iperf3 -s` runs there (the host that runs the suite) |
+| `ap1`, `ap2`, `client` | `vm1`, `vm2`, `vm3` | target names |
+| `min_mbps` | `0` | floor for `throughput`; `0` skips `throughput` and `rate_limit` (no `iperf3` needed) |
+| `vlan_host_ip`, `vlan_client_ip` | none | two addresses of one /24 used only on VLAN 77 during the test; without them the VLAN checks are skipped |
+| `host_if` | `br-lab` | the host interface the APs' cables are on (the VLAN interface is made on it) |
+| `dns_name` | `vm1` | a name the upstream DNS knows |
+| `roam_max_s` | `3` | longest ping gap allowed in `roam` |
+| `ping_interval` | `0.2` | seconds between pings in `roam`; set `1` when the client's `ping` has no `-i 0.2` |
+| `storm_max_pps` | `500` | packets per second into the first AP's bridge that count as a storm |
+| `client_if`, `client_radio`, `client_down` | `phy1-sta0`, `radio1`, `eth0 br-lan` | the client's WiFi interface, its radio, and the client's own interfaces taken down for the WiFi-only window |
+| `controller_container` | `lab-unifi` | the lab controller's Docker name (`controller_recovery`) |
+
+What the suite does not prove: real radios (the lab's are simulated, so `throughput` and
+`roam` numbers mean little there), the switch chip, PoE, STP or RSTP timing (openUF runs
+none), traffic between two WiFi clients, and roaming of a phone. On hardware (`kind` not
+`vm`) `controller_recovery`, `roam`, `mesh_failover` and `mesh_restore` are skipped: do those
+by hand.
