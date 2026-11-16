@@ -82,10 +82,10 @@ def run(conf, ctl):
         time.sleep(10)  # the old SSH path is gone by now: reachable again means over the mesh
         d = common.wait_for(a2.reachable, 180)
         con = d is not None and plug._connected(a2, ctl, secs=300)
-        up = uplink()
-        return bool(con) and up == "wireless", (f"reachable over the mesh after {None if d is None else d + 10} s, "
-                                                f"controller {'connected' if con else 'NOT connected'}, "
-                                                f"uplink type {up}")
+        # the controller shows the new uplink an inform or two after the AP is back
+        seen = bool(con) and common.wait_for(lambda: uplink() == "wireless", 120) is not None
+        return seen, (f"reachable over the mesh after {None if d is None else d + 10} s, "
+                      f"controller {'connected' if con else 'NOT connected'}, uplink type {uplink()}")
 
     def rx():
         try:

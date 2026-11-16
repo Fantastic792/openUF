@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from labtest.suite import multi
 from labtest.suite.common import SKIP
@@ -35,6 +36,24 @@ class MultiTest(unittest.TestCase):
         multi.run(lab.conf, lab.ctl)
         sent = next(x.decode() for x in lab.t["vm3"].stdin if x and b"wireless.cl.ssid" in x)
         self.assertNotIn("wireless.cl.bssid", sent)
+
+    def test_failover_waits_for_the_controller_to_show_the_mesh_uplink(self):
+        # live, 2026-11-16: the AP was back over the mesh after 32 s, the controller still said "wire"
+        lab = fakes.Lab(self)
+        real, looks = lab.ctl.device, []
+
+        def device(host):
+            d = real(host)
+            if lab.ran_sh("cable", "2", "down") and not lab.ran_sh("cable", "2", "up"):
+                looks.append(1)
+                if len(looks) < 3:
+                    d["uplink"] = {"type": "wire"}
+            return d
+        lab.ctl.device = device
+        loop = lambda fn, secs, step=5: next((i for i in range(5) if fn()), None)
+        with mock.patch("labtest.suite.common.wait_for", side_effect=loop):
+            c = fakes.by_name(multi.run(lab.conf, lab.ctl))
+        self.assertTrue(c["mesh_failover"]["ok"], c["mesh_failover"]["detail"])
 
     def test_hardware_gets_no_mesh_switch(self):
         lab = fakes.Lab(self, kind="hw")

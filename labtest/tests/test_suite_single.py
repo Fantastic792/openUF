@@ -113,6 +113,16 @@ class SingleTest(unittest.TestCase):
         self.assertFalse(c["controller_recovery"]["ok"])
         self.assertIn("NOT connected", c["controller_recovery"]["detail"])
 
+    def test_the_join_waits_for_the_aps_bss_and_fails_without_one(self):
+        # live, 2026-11-16: 15 s after a reboot hostapd's config is there but the radio has no channel yet;
+        # the pin was empty and the client joined the lab's other AP
+        lab = fakes.Lab(self)
+        lab.t["vm1"].rules.insert(0, ("print a, $2, s", (0, "")))
+        c = fakes.by_name(single.run(lab.conf, lab.ctl))
+        self.assertFalse(c["client_join"]["ok"])
+        self.assertIn("no BSS", c["client_join"]["detail"])
+        self.assertFalse(any(x and b"wireless.cl.ssid" in x for x in lab.t["vm3"].stdin))
+
     def test_wlan_flags_are_put_back(self):
         lab = fakes.Lab(self)
         single.run(lab.conf, lab.ctl)

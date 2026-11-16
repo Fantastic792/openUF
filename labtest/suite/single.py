@@ -51,7 +51,12 @@ def run(conf, ctl):
         return "inet " in addr and bool(route), f"default route: {route or 'none'}"
 
     def client_join():
-        d = common.join(s, client, w, bssid=common.ap_bssid(s, ap, client, w))
+        def bss():  # hostapd's config is there before the radio has its channel: wait for the BSS itself
+            st["bssid"] = common.ap_bssid(s, ap, client, w)
+            return st["bssid"]
+        if common.wait_for(bss, 120) is None:
+            return False, "the AP has no BSS of the WLAN on the client's band after 120 s"
+        d = common.join(s, client, w, bssid=st["bssid"])
         if d is None:
             return False, "the client got no address over WiFi in 90 s"
         cmds = [("link", "iw dev $IF link"), ("addr", "ip -4 -o addr show dev $IF"),
