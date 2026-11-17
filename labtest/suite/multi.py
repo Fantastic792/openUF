@@ -9,7 +9,7 @@ from labtest.safety import plug
 from labtest.suite import common
 from labtest.suite.common import SKIP
 
-NAMES = ["ready", "propagation", "kv_config", "roam", "mesh_failover", "loop_guard", "mesh_restore",
+NAMES = ["ready", "propagation", "kv_config", "roam", "ap_loss", "mesh_failover", "loop_guard", "mesh_restore",
          "both_healthy"]
 KV = "^(bss_transition|rrm_neighbor_report|mobility_domain|wpa_key_mgmt)="
 BGA = "01:80:c2"  # start of the bridge group address the l2guard rule drops
@@ -53,26 +53,46 @@ def run(conf, ctl):
             missing.append(f"one mobility domain on both ({sorted(md1)} / {sorted(md2)})")
         return not missing, "missing: " + ", ".join(missing) if missing else "802.11r/k/v set alike on both APs"
 
+    def ping():
+        iv = s["ping_interval"]
+        return ("ping", f"ping -c {int(30 / iv)} -i {iv} -W 1 -I $IF {wired}")
+
+    def window(cmds, frm, to, limit, during=None):
+        """Run a 50 s WiFi-only window; ok when the client went from AP frm to AP to within limit seconds."""
+        r = common.wifi_only(s, client, [("before", "iw dev $IF link")] + cmds + [
+            ("after", "iw dev $IF link"), ("wpa", "wpa_cli -i $IF status 2>/dev/null | grep -E '^key_mgmt='")],
+            50, during=during)
+        b0, b1 = common.bssid(r.get("before", "")), common.bssid(r.get("after", ""))
+        g = common.gap(r.get("ping", ""), s["ping_interval"])
+        moved = b1 in common.bssids(to)
+        ok = b0 in common.bssids(frm) and moved and g is not None and g <= s[limit]
+        return ok, (f"{'moved' if moved else 'did NOT move'} from {frm.name} to {to.name}; longest gap {g} s "
+                    f"(limit {s[limit]}); {r.get('wpa', '').strip() or 'key_mgmt unknown'}")
+
     def roam():
+        # F-20 (owner 2026-11-16): both APs up and heard, the client is told to roam (wpa_cli roam), as a
+        # phone walking between two APs does. roam_max_s measures the handover itself.
         if not lab_vm:
             return True, SKIP + "needs the lab's air control; on hardware run benchmark H4 by hand"
         air((client, a2, "off"), (a2, client, "off"))
         if common.join(s, client, w, ft=True) is None:
             return False, "the client got no address over WiFi in 90 s"
-        iv = s["ping_interval"]
+        air((client, a2, "default"), (a2, client, "default"))  # the cable is still up: lab.sh reaches the client
+        st["roamed"] = True
+        targets = "|".join(sorted(common.bssids(a2)))
+        go = (f"( sleep 5; wpa_cli -i $IF scan >/dev/null; sleep 4; "
+              f"B=$(wpa_cli -i $IF scan_results | grep -ioE '{targets}' | head -1); "
+              f"wpa_cli -i $IF roam $B > /tmp/suite-roam.out 2>&1 ) &")
+        return window([("go", go), ping(), ("roamed", "cat /tmp/suite-roam.out")], a1, a2, "roam_max_s")
+
+    def ap_loss():
+        # the AP the client is on vanishes at once: loss detection + scan + join, not a handover (F-20)
+        if "roamed" not in st:
+            return True, SKIP + "as roam"
         # the client's cable is down in the window: `lab.sh air` cannot reach it, so its own air is switched
-        # from inside the window (5 s after the commands start = when `move` runs here); the APs' from the host
-        cmds = [("air", f"( sleep 5; echo '{a1.lab_n} off' > /etc/hwsim-air.conf ) &"),
-                ("before", "iw dev $IF link"), ("ping", f"ping -c {int(30 / iv)} -i {iv} -W 1 -I $IF {wired}"),
-                ("after", "iw dev $IF link"),
-                ("wpa", "wpa_cli -i $IF status 2>/dev/null | grep -E '^key_mgmt='")]
-        move = lambda: air((a2, client, "default"), (a1, client, "off"))
-        r = common.wifi_only(s, client, cmds, 50, during=move)
-        b0, b1 = common.bssid(r.get("before", "")), common.bssid(r.get("after", ""))
-        g = common.gap(r.get("ping", ""), iv)
-        ok = b0 in common.bssids(a1) and b1 in common.bssids(a2) and g is not None and g <= s["roam_max_s"]
-        return ok, (f"{'moved to the second AP' if b1 in common.bssids(a2) else 'did NOT move to the second AP'}; "
-                    f"longest gap {g} s (limit {s['roam_max_s']}); {r.get('wpa', '').strip() or 'key_mgmt unknown'}")
+        # from inside the window (5 s after the commands start = when `move` runs here); the AP's from the host
+        cut = ("cut", f"( sleep 5; echo '{a2.lab_n} off' > /etc/hwsim-air.conf ) &")
+        return window([cut, ping()], a2, a1, "ap_loss_max_s", during=lambda: air((a2, client, "off")))
 
     def uplink():
         return ((ctl.device(a2.host) or {}).get("uplink") or {}).get("type")
@@ -121,7 +141,7 @@ def run(conf, ctl):
         return not problems, "; ".join(problems)
 
     steps = [("ready", lambda: (True, "")), ("propagation", propagation), ("kv_config", kv_config), ("roam", roam),
-             ("mesh_failover", mesh_failover), ("loop_guard", loop_guard), ("mesh_restore", mesh_restore),
+             ("ap_loss", ap_loss), ("mesh_failover", mesh_failover), ("loop_guard", loop_guard), ("mesh_restore", mesh_restore),
              ("both_healthy", both_healthy)]
     with contextlib.ExitStack() as stack:
         before = table._applied(a1)

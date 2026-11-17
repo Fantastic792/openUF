@@ -11,6 +11,7 @@ class MultiTest(unittest.TestCase):
         lab = fakes.Lab(self)
         r = multi.run(lab.conf, lab.ctl)
         self.assertEqual([c["name"] for c in r["checks"]], multi.NAMES)
+        self.assertIn("ap_loss", multi.NAMES)
         self.assertEqual([c for c in r["checks"] if not c["ok"]], [])
         self.assertTrue(r["pass"])
         self.assertEqual(lab.ctl.pushes, 2)  # the forced push and its way back
@@ -55,15 +56,45 @@ class MultiTest(unittest.TestCase):
             c = fakes.by_name(multi.run(lab.conf, lab.ctl))
         self.assertTrue(c["mesh_failover"]["ok"], c["mesh_failover"]["detail"])
 
-    def test_the_clients_air_is_switched_from_inside_its_window(self):
+    def test_the_clients_air_is_switched_from_inside_the_hard_cut_window(self):
         # live, 2026-11-16: in the window the client's cable is down, so `lab.sh air 3 ...` never reached it
         # (its air daemon logged no reload); it went on hearing the first AP and never heard the second
         lab = fakes.Lab(self)
         multi.run(lab.conf, lab.ctl)
-        script = next(s.decode() for s in lab.t["vm3"].stdin if s and b"wpa_cli" in s)
-        self.assertIn("echo '1 off' > /etc/hwsim-air.conf", script)
+        script = next(s.decode() for s in lab.t["vm3"].stdin
+                      if s and b"wpa_cli" in s and b"wpa_cli -i $IF roam" not in s)
+        self.assertIn("echo '2 off' > /etc/hwsim-air.conf", script)
         airs = [a[-3:] for a in lab.sh if "air" in a]
-        self.assertEqual(airs[:4], [["3", "2", "off"], ["2", "3", "off"], ["2", "3", "default"], ["1", "3", "off"]])
+        # joined on AP 1 alone; both APs heard for the soft roam; AP 2 cut for ap_loss
+        self.assertEqual(airs[:5], [["3", "2", "off"], ["2", "3", "off"], ["3", "2", "default"],
+                                    ["2", "3", "default"], ["2", "3", "off"]])
+
+    def test_the_soft_roam_asks_the_client_to_roam_to_the_second_ap(self):
+        # F-20 (owner 2026-11-16): roam_max_s measures a roam with both APs up, not a lost AP
+        lab = fakes.Lab(self)
+        c = fakes.by_name(multi.run(lab.conf, lab.ctl))
+        script = next(s.decode() for s in lab.t["vm3"].stdin if s and b"wpa_cli -i $IF roam" in s)
+        self.assertIn(fakes.mac(2), script)  # the second AP's BSSID is the only one it may pick
+        self.assertNotIn("/etc/hwsim-air.conf", script)  # nobody's air is cut
+        self.assertTrue(c["roam"]["ok"], c["roam"]["detail"])
+
+    def test_a_hard_cut_has_its_own_looser_limit(self):
+        lab = fakes.Lab(self, loss_from=40, loss_to=70)  # 6 s: over roam_max_s 3, under ap_loss_max_s 10
+        c = fakes.by_name(multi.run(lab.conf, lab.ctl))
+        self.assertTrue(c["ap_loss"]["ok"], c["ap_loss"]["detail"])
+        self.assertIn("longest gap 6.0 s (limit 10)", c["ap_loss"]["detail"])
+
+    def test_a_hard_cut_over_its_limit_fails(self):
+        lab = fakes.Lab(self, loss_from=40, loss_to=100)  # 12 s
+        c = fakes.by_name(multi.run(lab.conf, lab.ctl))
+        self.assertFalse(c["ap_loss"]["ok"])
+        self.assertTrue(c["roam"]["ok"], c["roam"]["detail"])
+
+    def test_staying_on_the_lost_ap_fails_the_hard_cut(self):
+        lab = fakes.Lab(self, loss_after=2)
+        c = fakes.by_name(multi.run(lab.conf, lab.ctl))
+        self.assertFalse(c["ap_loss"]["ok"])
+        self.assertIn("did NOT move", c["ap_loss"]["detail"])
 
     def test_the_roaming_client_asks_for_fast_transition(self):
         lab = fakes.Lab(self)
@@ -122,7 +153,7 @@ class MultiTest(unittest.TestCase):
     def test_hardware_skips_air_and_cable_and_never_calls_the_lab(self):
         lab = fakes.Lab(self, kind="hw")
         c = fakes.by_name(multi.run(lab.conf, lab.ctl))
-        for name in ("roam", "mesh_failover", "mesh_restore"):
+        for name in ("roam", "ap_loss", "mesh_failover", "mesh_restore"):
             self.assertTrue(c[name]["detail"].startswith(SKIP), name)
         self.assertEqual(lab.sh, [])
 

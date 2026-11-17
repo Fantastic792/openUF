@@ -74,17 +74,24 @@ def ap_rules(n):
             ("openuf_l2guard", (0, "1\n")), ("rx_packets", (0, "1000\n")), ("logread", (0, ""))]
 
 
-def client_out(vlan_addr="", gap_from=40, gap_to=44, after=2):
-    """The file the client's script leaves, by which window ran (read from the script it was sent)."""
+def client_out(vlan_addr="", gap_from=40, gap_to=44, after=2, loss_from=40, loss_to=60, loss_after=1):
+    """The file the client's script leaves, by which window ran (read from the script it was sent).
+    Soft roam: from AP 1 to AP `after`, pings gap_from..gap_to lost. Hard cut (ap_loss): from AP 2 to AP
+    `loss_after`, pings loss_from..loss_to lost (20 of 0.2 s = 4 s by default)."""
+    def window(b0, b1, lost_from, lost_to, extra=""):
+        seqs = [i for i in range(150) if not lost_from <= i < lost_to]
+        ping = "".join(f"64 bytes from x: seq={i} ttl=64\n" for i in seqs) + "150 packets transmitted\n"
+        return 0, (f"== before\nConnected to {mac(b0)} (on phy1-sta0)\n== ping\n{ping}== after\n"
+                   f"Connected to {mac(b1)} (on phy1-sta0)\n{extra}== wpa\nkey_mgmt=FT-PSK\n== end\n")
+
     def answer(t, cmd, stdin):
         script = next((s.decode() for s in reversed(t.stdin) if s and b"== end" in s), "")
         if "sleep 30" in script:  # the VLAN window
             return 0, f"== wait\n== addr\n{vlan_addr}\n== ping\n3 packets transmitted, 3 received, 0% packet loss\n== end\n"
-        if "wpa_cli" in script:  # the roam window
-            seqs = [i for i in range(150) if not gap_from <= i < gap_to]
-            ping = "".join(f"64 bytes from x: seq={i} ttl=64\n" for i in seqs) + "150 packets transmitted\n"
-            return 0, (f"== before\nConnected to {mac(1)} (on phy1-sta0)\n== ping\n{ping}== after\n"
-                       f"Connected to {mac(after)} (on phy1-sta0)\n== wpa\nkey_mgmt=FT-PSK\n== end\n")
+        if "wpa_cli -i $IF roam" in script:  # the soft roam window
+            return window(1, after, gap_from, gap_to, "== roamed\nOK\n")
+        if "wpa_cli" in script:  # the hard cut window
+            return window(2, loss_after, loss_from, loss_to)
         return 0, (f"== link\nConnected to {mac(1)} (on phy1-sta0)\n== addr\n5: phy1-sta0    inet 198.51.100.50/24\n"
                    "== ping\n5 packets transmitted, 5 packets received, 0% packet loss\n== dns\nrc=0\n"
                    '== iperf\n{"end": {"sum_received": {"bits_per_second": 50000000}}}\n'

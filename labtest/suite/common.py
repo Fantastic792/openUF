@@ -11,7 +11,7 @@ from labtest import results, table, target
 # names only; every address the suite needs comes from the lab's config file, block "suite"
 DEFAULTS = {"ap1": "vm1", "ap2": "vm2", "client": "vm3", "client_if": "phy1-sta0", "client_radio": "radio1",
             "client_down": "eth0 br-lan", "dns_name": "vm1", "host_if": "br-lab",
-            "controller_container": "lab-unifi", "min_mbps": 0, "roam_max_s": 3, "ping_interval": 0.2,
+            "controller_container": "lab-unifi", "min_mbps": 0, "roam_max_s": 3, "ap_loss_max_s": 10, "ping_interval": 0.2,
             "storm_max_pps": 500}
 OUT = "/tmp/suite-client.out"
 SKIP = "SKIPPED: "

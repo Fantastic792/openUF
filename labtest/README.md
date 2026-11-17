@@ -123,7 +123,7 @@ put back, and a third VM (plain OpenWrt, no openUF) is the WiFi client.
 | Stage | What it checks | Needs |
 |---|---|---|
 | `single` | One AP: `boot` (reboot, SSH, openUF, controller, WiFi on, with the seconds), `mgmt` (address and default route), then the client joins and, with its cable down so it can only use WiFi, `client_dhcp`, `client_dns`, `client_reach`, `throughput` (`iperf3`, floor `min_mbps`), `rate_limit` (5 Mbit/s user group), `vlan_tag` and `vlan_isolation` (VLAN 77: the client reaches the host's VLAN address and gets no address from the untagged network), `guest_firewall` and `client_isolation` (the rules are there; config only), `daemon_recovery` (openUF killed), `controller_recovery` (lab controller stopped 60 s; the SSIDs stay on the air), `no_lua_error` | lab up, `ap1` adopted, `client` plain OpenWrt, the account file, `row_wlan` WPA2, the `suite` block |
-| `multi` | Two APs: `propagation` (a push applied on both, same SSIDs), `kv_config` (802.11v, 802.11k, one mobility domain, FT key management on both), `roam` (the air is moved so the client must change AP; longest ping gap at most `roam_max_s`), `mesh_failover` (cable of `ap2` pulled: reachable and connected over the mesh, uplink `wireless`), `loop_guard` (cable back while the mesh is up: no packet storm, the BPDU drop rule on both), `mesh_restore` (uplink back on the cable), `both_healthy` | as `single`, plus `ap2` adopted |
+| `multi` | Two APs: `propagation` (a push applied on both, same SSIDs), `kv_config` (802.11v, 802.11k, one mobility domain, FT key management on both), `roam` (both APs heard, the client is told to roam to `ap2` with `wpa_cli roam`; longest ping gap at most `roam_max_s`), `ap_loss` (`ap2` vanishes at once, the client must find `ap1`; longest gap at most `ap_loss_max_s`), `mesh_failover` (cable of `ap2` pulled: reachable and connected over the mesh, uplink `wireless`), `loop_guard` (cable back while the mesh is up: no packet storm, the BPDU drop rule on both), `mesh_restore` (uplink back on the cable), `both_healthy` | as `single`, plus `ap2` adopted |
 | `release` | `safety`, `vm`, `single`, `multi`, in that order; stops at the first stage that fails | all of the above |
 
 Exit code as every stage: 0 all passed, 1 a check failed, 2 unknown stage. A check that could
@@ -141,6 +141,7 @@ The `suite` block of the lab config (addresses stay in that file, never in the r
 | `host_if` | `br-lab` | the host interface the APs' cables are on (the VLAN interface is made on it) |
 | `dns_name` | `vm1` | a name the upstream DNS knows |
 | `roam_max_s` | `3` | longest ping gap allowed in `roam` |
+| `ap_loss_max_s` | `10` | longest ping gap allowed in `ap_loss` (loss detection, scan and join) |
 | `ping_interval` | `0.2` | seconds between pings in `roam`; set `1` when the client's `ping` has no `-i 0.2` |
 | `storm_max_pps` | `500` | packets per second into the first AP's bridge that count as a storm |
 | `client_if`, `client_radio`, `client_down` | `phy1-sta0`, `radio1`, `eth0 br-lan` | the client's WiFi interface, its radio, and the client's own interfaces taken down for the WiFi-only window |
