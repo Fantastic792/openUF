@@ -256,7 +256,8 @@ toggle. Not yet on a real AP (both lab APs are production).
 or major** release. The run finds the newest version tag by number (`v0.0.1` and `0.0.1`
 both count; none means `0.0.0`), raises that part, refuses if the tag exists, and only
 once the tree has passed verification creates the tag on the chosen branch and the
-release with generated notes, so a failed run leaves no tag and no release behind. The
+release with the notes in `docs/release-notes/<X.Y.Z>.md` (a beta uses its release's file;
+GitHub's generated list only when there is none), so a failed run leaves no tag and no release behind. The
 tag is the version: `PKG_VERSION`, `PKG_HASH` and the download URL in the Makefiles are
 substituted from it in the build and never committed by the run. A tag pushed by hand
 (`git push origin v0.1.0`) or a release published in the web UI (a *draft* fires nothing

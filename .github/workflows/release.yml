@@ -6,8 +6,8 @@
 #   Actions -> Release -> "Run workflow": pick the branch, then whether this
 #   is a patch, minor or major release. The run finds the newest version tag,
 #   raises that part, and -- only once the tree has passed verification --
-#   creates the tag on the chosen branch and the release with generated
-#   notes. A run that fails verification leaves no tag and no release behind.
+#   creates the tag on the chosen branch and the release, with the plain-
+#   language notes in docs/release-notes/<X.Y.Z>.md (generated ones if none). A run that fails verification leaves no tag and no release behind.
 #   A tag pushed by hand (git push origin v0.1.0) or a release published in
 #   the web UI is built the same way: the run creates the release if there is
 #   none and attaches the files to it if there is. What this workflow creates
@@ -170,7 +170,12 @@ jobs:
             pre=
             case "$VERSION" in *_alpha*|*_beta*|*_rc*) pre=--prerelease ;; esac
             # A tag that does not exist yet is created at this run's commit.
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "openUF $TAG" --generate-notes $pre
+            # Plain-language notes from docs/release-notes/<X.Y.Z>.md (a beta uses its
+            # release's file); GitHub's commit list only when there is none.
+            notes=--generate-notes
+            f="docs/release-notes/${VERSION%%_*}.md"
+            [ -f "$f" ] && notes="--notes-file $f"
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "openUF $TAG" $notes $pre
           fi
           gh release upload "$TAG" --clobber \
             openuf-"$VERSION".tar.gz openuf-"$VERSION".tar.gz.sha256 setup.sh update.sh

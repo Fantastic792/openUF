@@ -290,7 +290,7 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
-**Fixed in 1.0.1** (upgrade if you run 1.0.0):
+**Fixed in 1.0.1** (upgrade if you run 1.0.0; [release notes](docs/release-notes/1.0.1.md)):
 
 - **Compressed controller replies could exhaust memory.** A crafted reply of about 8 KB
   could make openUF use about 160 MB of RAM and take down an AP with 128 MB. Sending one
@@ -361,6 +361,7 @@ tested belongs in a [field report](field-reports/README.md).
 | [PACKAGING.md](PACKAGING.md) | The OpenWrt packages, the LuCI app, the theme and the release workflow |
 | [docs/PLUGINS.md](docs/PLUGINS.md) | The opt-in hook for third-party edits to each WLAN's options |
 | [field-reports/](field-reports/README.md) | Hardware test results, and how to send yours |
+| [docs/release-notes/](docs/release-notes/) | What changed in each release, in plain words |
 | [CREDITS.md](CREDITS.md) | Every project openUF used, and what came from each |
 | [CLAUDE.md](CLAUDE.md) | Working notes for contributors: the constraints and the landmines |
 
