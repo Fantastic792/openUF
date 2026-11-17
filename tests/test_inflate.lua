@@ -201,4 +201,24 @@ return {
 			assert_true(tostring(err2):find("output over 4096", 1, true) ~= nil, "and says why")
 		end
 	},
+	{
+		-- F-18: the output is one table slot per byte, so an 8 MiB cap let an
+		-- 8 KB bomb reach 162 MB RSS and take down a 128 MB AP.
+		name = "inflate: the default cap refuses output over 1 MiB",
+		fn = function()
+			local block = string.rep("a", 65535)
+			local function stored(n)       -- n stored blocks of 65535 bytes, the last final
+				local parts = {}
+				for i = 1, n do
+					parts[i] = string.char(i == n and 1 or 0, 0xff, 0xff, 0x00, 0x00) .. block
+				end
+				return table.concat(parts)
+			end
+			local ok, err = pcall(inflate.inflate, stored(17))   -- 1,114,095 bytes
+			assert_false(ok, "over 1 MiB is refused")
+			assert_true(tostring(err):find("output over 1048576", 1, true) ~= nil, "and says why")
+			-- 983,025 bytes: far more than any controller push seen, still inflates.
+			assert_eq(#inflate.inflate(stored(15)), 15 * 65535, "under 1 MiB inflates")
+		end
+	},
 }

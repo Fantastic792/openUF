@@ -3697,7 +3697,12 @@ function M.wlanconf_ifnames(ids)
 	if type(ids) ~= "table" or next(ids) == nil then return out end
 	local cursor = get_uci().cursor()
 	cursor:foreach("wireless", "wifi-iface", function(s)
-		if s.disabled == "1" or not (s.openuf_wlanconf_id and ids[s.openuf_wlanconf_id]) then return end
+		if s.disabled == "1" then return end
+		-- No id (F-6): an openUF VAP is matched by SSID, as _guest_wlans keys it.
+		local hit = s.openuf_wlanconf_id and ids[s.openuf_wlanconf_id]
+			or (not s.openuf_wlanconf_id and s.ssid and ids["ssid:" .. s.ssid]
+				and s[".name"]:sub(1, #OPENUF_PREFIX) == OPENUF_PREFIX)
+		if not hit then return end
 		local ok_if, ifnames = pcall(M.get_ifnames_for_vap, s.device, s.ssid)
 		if not ok_if then return end
 		for _, ifname in ipairs(ifnames) do

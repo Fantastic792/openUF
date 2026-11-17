@@ -5742,7 +5742,12 @@ function M._guest_wlans(vap_table, sys_raw, all)
 		return out
 	end
 	for _, vap in ipairs(vap_table or {}) do
-		if vap.is_guest and vap.wlanconf_id then out[vap.wlanconf_id] = true end
+		if vap.is_guest then
+			-- F-6: a WLAN held without a short_id has no aaa.<n>.id;
+			-- match it by SSID or its guest rules never load.
+			local key = vap.wlanconf_id or (vap.ssid and "ssid:" .. vap.ssid)
+			if key then out[key] = true end
+		end
 	end
 	return out
 end

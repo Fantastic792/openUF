@@ -11345,4 +11345,23 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		-- F-6: a WLAN the controller holds without a short_id carries no
+		-- aaa.<n>.id, and its guest rules were never installed.
+		name = "inform: _guest_wlans keys a guest WLAN without an id by its SSID",
+		fn = function()
+			local vt = {
+				{ssid = "Guest", wlanconf_id = "w1", is_guest = true},
+				{ssid = "NoId", is_guest = true},
+				{ssid = "Home", wlanconf_id = "w2", is_guest = false},
+				{ssid = "HomeNoId", is_guest = false},
+			}
+			local got = inform._guest_wlans(vt, "", true)
+			assert_true(got.w1, "an id still keys by id")
+			assert_true(got["ssid:NoId"], "no id: keyed by SSID")
+			assert_eq(got.w2, nil, "not a guest WLAN")
+			assert_eq(got["ssid:HomeNoId"], nil, "not a guest WLAN, no id")
+			assert_eq(got["ssid:Guest"], nil, "an id is never also keyed by SSID")
+		end
+	},
 }

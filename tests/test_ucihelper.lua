@@ -6220,4 +6220,25 @@ Wiphy phy1
 			assert_eq(e.nas_identifier, "ap-office", "no FT: NAS-ID kept")
 		end
 	},
+	{
+		name = "ucihelper: wlanconf_ifnames matches an openUF VAP with no id by SSID (F-6)",
+		fn = function()
+			with_ucihelper(function(db)
+				local mock = ucihelper._uci.cursor()
+				local function iface(name, ssid, id)
+					mock:set("wireless", name, "wifi-iface")
+					mock:set("wireless", name, "device", "radio0")
+					mock:set("wireless", name, "ssid", ssid)
+					if id then mock:set("wireless", name, "openuf_wlanconf_id", id) end
+				end
+				iface("openuf_radio0_noid", "NoId")
+				iface("default_radio0", "NoId")              -- not openUF's: never matched
+				iface("openuf_radio0_other", "NoId", "w9")   -- has an id: matched by it only
+				ucihelper.get_ifnames_for_vap = function() return {"phy0-ap1"} end
+				local got = ucihelper.wlanconf_ifnames({["ssid:NoId"] = true})
+				assert_eq(#got, 1, "only openUF's VAP without an id")
+				assert_eq(got[1] and got[1].ssid, "NoId", "by its SSID")
+			end)
+		end
+	},
 }

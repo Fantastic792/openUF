@@ -145,8 +145,10 @@ end
 
 -- Largest output inflated, in bytes. A config push is tens of KB; DEFLATE
 -- expands up to ~1000x, so a few KB from a hostile or broken peer could
--- otherwise take every byte of an AP's RAM.
-M.MAX_OUTPUT = 8 * 1024 * 1024
+-- otherwise take every byte of an AP's RAM. The output is held one table
+-- slot per byte (~20x its size in RAM): 8 MiB peaked at 162 MB RSS, which
+-- kills a 128 MB AP; 1 MiB stays near 20 MB.
+M.MAX_OUTPUT = 1024 * 1024
 
 local function too_big()
 	error(("inflate: output over %d bytes -- refused"):format(M.MAX_OUTPUT))

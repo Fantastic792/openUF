@@ -290,18 +290,18 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
-**Open findings from this project's code audit and lab** (being fixed, in this order):
+**Fixed in 1.0.1** (upgrade if you run 1.0.0):
 
-- **Compressed controller replies can exhaust memory.** The inflater caps its output at
-  8 MiB but stores one table slot per byte, so a crafted reply of about 8 KB can use about
-  160 MB of RAM and take down an AP with 128 MB. Sending one needs the device's key, and
-  before adoption that is the public default key: someone on your LAN who can pose as the
-  controller could do it. The fix lowers the cap to 1 MiB.
-- **Guest rules missing on a guest WLAN without a short id.** When the controller sends a
-  guest WLAN without its numeric id, openUF cannot match it to an interface and the guest
-  firewall rules are not installed. Seen on a WLAN created in an unusual way in the lab;
-  whether a normal controller ever sends one is not known. The fix falls back to the guest
-  device names the same push carries.
+- **Compressed controller replies could exhaust memory.** A crafted reply of about 8 KB
+  could make openUF use about 160 MB of RAM and take down an AP with 128 MB. Sending one
+  needs the device's key, which before adoption is the public default key. openUF now
+  refuses any reply that unpacks to more than 1 MiB, far more than a real one.
+- **Guest rules missing on a guest WLAN without an id.** When the controller sent a guest
+  WLAN without its id, the guest firewall rules were not installed. openUF now matches such
+  a WLAN by its name.
+
+**Open findings from this project's lab and code audit:**
+
 - **Five settings in the lab's change-and-restore table** (disable a device, mesh station
   off, network enable, port security, MAC filter) do not restore cleanly. Some look like
   test-side problems; port security needs real switch ports to check.
