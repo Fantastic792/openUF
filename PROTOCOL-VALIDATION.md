@@ -3157,7 +3157,7 @@ descending promise, with why each is worth the toggle:
   `aaa.<n>.radius.{das,dad}.*` (DAS/CoA) — the two deliberate deferrals of the
   WPA-Enterprise commit. **Settled 2026-10-27, both implemented**; `format`,
   `emptypassword` and the whole `dad.*` shape are declined with reasons. **`dad.*`
-  implemented 2026-11-12** (plan v2.0 Task 9e): openUF's own relay, see below. The third key in
+  implemented 2026-11-12** (plan v1.0 Task 9e): openUF's own relay, see below. The third key in
   this row, `aaa.<n>.accept_mac.{status,<k>.vlanid}`, turned out **not** to be part of
   RADIUS MAC auth at all — it is the site's MAC-based VLAN feature, with its own gate and
   its own open question. See
@@ -3738,7 +3738,7 @@ aaa.%d.radius.macacl.emptypassword -> mac_acl_empty_passwd=%d
 
 Two things fall out of that. The `dad.*` shape points hostapd at **localhost** — the request
 reaches the AP's own `mcad`, which checks the CIDR and relays it — so it is unusable without
-that relay. _(2026-11-12, plan v2.0 Task 9e: openUF now has that relay, `openuf/das.lua`,
+that relay. _(2026-11-12, plan v1.0 Task 9e: openUF now has that relay, `openuf/das.lua`,
 adapted from fonix232/openUF. With `aaa.radius.dad.status=enabled` it listens on
 `aaa.radius.dad.port` (3799) from the idle wait, accepts a Disconnect/CoA-Request only from
 an address inside one of `aaa.<n>.radius.dad.client.<k>.cidr`, routes by NAS-Identifier
