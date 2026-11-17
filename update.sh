@@ -183,6 +183,14 @@ check_sha256() {
 # key built in below (keys/openuf-feed.pem). A checksum that comes from the same place
 # as the file only shows the download is whole; the signature shows the maintainer made it.
 verify_sums_sig() {
+	# Stock OpenWrt 25.12 (mbedtls) has no openssl command: take openssl-util from
+	# the system's own signed feed. Small, since lua-openssl needs libopenssl3 anyway.
+	if ! command -v openssl >/dev/null 2>&1; then
+		info "installing openssl-util to check the release signature with"
+		if command -v apk >/dev/null 2>&1; then apk update && apk add openssl-util
+		elif command -v opkg >/dev/null 2>&1; then opkg update && opkg install openssl-util
+		fi >/dev/null 2>&1
+	fi
 	command -v openssl >/dev/null 2>&1 || { warn "no openssl on this image to check the signature with"; return 1; }
 	_pub="$1.pub"
 	cat > "$_pub" <<'PEM'

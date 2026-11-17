@@ -121,6 +121,16 @@ if [ "$1" = "--verify" ]; then
 		echo "  OK   all stripped files are bytecode-identical"
 	fi
 
+	# The shell scripts as shipped: a quote left open in the source (openuf-deps.sh
+	# from 2026-10-25 to 1.0.1) can still parse while every later apostrophe, in
+	# comments too, flips the quoting; stripping those comments then breaks it.
+	echo "verify: stripped shell scripts parse"
+	for dst in "$STAGE"/etc/init.d/* "$STAGE"/hook/*.sh; do
+		[ -f "$dst" ] || continue
+		sh -n "$dst" || { echo "  FAIL ${dst#$STAGE/} -- does not parse after strip"; exit 1; }
+	done
+	echo "  OK"
+
 	echo "verify: test suite against the stripped tree"
 	# The suite dofile()s "openuf/..." relative to cwd, so running it from a
 	# directory whose openuf/ is the stripped one tests exactly what ships.

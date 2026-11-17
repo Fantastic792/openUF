@@ -232,6 +232,11 @@ openssl ecparam -name prime256v1 -genkey -noout -out "$R/other.pem" 2>/dev/null
 openssl dgst -sha256 -sign "$R/other.pem" -out "$R/rel/SHA256SUMS.sig" "$R/rel/SHA256SUMS" 2>/dev/null
 check "verify_sums_sig refuses a list signed by another key" eval '! ( . "$R/f.sh"; verify_sums_sig "$R/rel/SHA256SUMS" "$R/rel/SHA256SUMS.sig" ) >/dev/null 2>&1'
 check "verify_sums_sig refuses a missing signature" eval '! ( . "$R/f.sh"; verify_sums_sig "$R/rel/SHA256SUMS" "$R/rel/nope" ) >/dev/null 2>&1'
+# No openssl command (stock 25.12): openssl-util comes from the system feed first.
+mkdir -p "$R/nossl"; for c in cat chmod; do ln -s "$(command -v $c)" "$R/nossl/$c"; done
+printf '#!/bin/sh\necho "$*" >> "$R/apk.log"\n[ "$1" = add ] && printf "#!/bin/sh\\nexit 0\\n" > "$R/nossl/openssl" && chmod +x "$R/nossl/openssl"\nexit 0\n' > "$R/nossl/apk"
+chmod +x "$R/nossl/apk"
+check "verify_sums_sig installs openssl-util when there is no openssl" eval '( R="$R"; export R; PATH="$R/nossl"; info() { :; }; . "$R/f.sh"; verify_sums_sig "$R/rel/SHA256SUMS" "$R/rel/SHA256SUMS.sig" ) >/dev/null 2>&1 && grep -qx "add openssl-util" "$R/apk.log"'
 check "release_asset finds the archive, not its .sha256" \
 	eval '[ "$( . "$R/f.sh"; release_asset "$R/rel.json" "openuf-[0-9][-.0-9A-Za-z_]*\.tar\.gz" | head -1)" = https://x/d/v1.2.3/openuf-1.2.3.tar.gz ]'
 check "release_asset finds SHA256SUMS" \
