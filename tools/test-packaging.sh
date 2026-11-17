@@ -206,7 +206,7 @@ mkfunc() { # file, function name
 }
 for f in setup.sh update.sh; do
 	check "$f has no --no-check-certificate fetch" eval "! grep -q -- '--no-check-certificate' $f"
-	check "$f's verify helpers match setup.sh's" eval '[ "$(mkfunc '$f' check_sha256; mkfunc '$f' release_asset; mkfunc '$f' verify_sums_sig)" = "$(mkfunc setup.sh check_sha256; mkfunc setup.sh release_asset; mkfunc setup.sh verify_sums_sig)" ]'
+	check "$f's verify helpers match setup.sh's" eval '[ "$(mkfunc '$f' check_sha256; mkfunc '$f' release_asset; mkfunc '$f' verify_sums_sig; mkfunc '$f' fetch_asset)" = "$(mkfunc setup.sh check_sha256; mkfunc setup.sh release_asset; mkfunc setup.sh verify_sums_sig; mkfunc setup.sh fetch_asset)" ]'
 done
 check "setup.sh never defaults to a moving branch" eval "! grep -q 'OPENUF_REF:-main' setup.sh"
 check "update.sh never defaults to a moving branch" eval "! grep -q 'OPENUF_REF:-main' update.sh"
@@ -214,7 +214,7 @@ check "the documented install is a release, checked" grep -q "grep ' setup.sh\$'
 
 newroot sha
 { echo 'warn() { echo "warn: $*"; }'; mkfunc setup.sh sha256_of; mkfunc setup.sh check_sha256
-  mkfunc setup.sh release_asset; mkfunc setup.sh verify_sums_sig; } > "$R/f.sh"
+  mkfunc setup.sh release_asset; mkfunc setup.sh verify_sums_sig; mkfunc setup.sh fetch_asset; } > "$R/f.sh"
 mkdir -p "$R/rel"; echo good > "$R/rel/openuf-1.2.3.tar.gz"; echo pkg > "$R/rel/openuf_1.2.3-r1_all.ipk"
 ( cd "$R/rel" && sha256sum openuf-1.2.3.tar.gz openuf_1.2.3-r1_all.ipk > SHA256SUMS )
 sumcheck() { ( . "$R/f.sh"; check_sha256 "$@" ) >/dev/null 2>&1; }
@@ -236,6 +236,25 @@ check "release_asset finds the archive, not its .sha256" \
 	eval '[ "$( . "$R/f.sh"; release_asset "$R/rel.json" "openuf-[0-9][-.0-9A-Za-z_]*\.tar\.gz" | head -1)" = https://x/d/v1.2.3/openuf-1.2.3.tar.gz ]'
 check "release_asset finds SHA256SUMS" \
 	eval '[ "$( . "$R/f.sh"; release_asset "$R/rel.json" SHA256SUMS)" = https://x/d/v1.2.3/SHA256SUMS ]'
+
+# fetch_asset: stock OpenWrt 25.12 (uclient-fetch + mbedtls) gets no answer
+# from github.com itself while api.github.com and the release CDN work (VM lab,
+# 2026-11-18), so a release file falls back to the API's asset URL.
+mkfunc setup.sh fetch_asset > "$R/fa.sh"
+printf '{"url":"https://api.github.com/repos/o/r/releases/1","assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/7","uploader":{"url":"https://api.github.com/users/u"},"name":"openuf-1.2.3.tar.gz","browser_download_url":"https://x/d/v1.2.3/openuf-1.2.3.tar.gz"},{"url":"https://api.github.com/repos/o/r/releases/assets/9","name":"SHA256SUMS","browser_download_url":"https://x/d/v1.2.3/SHA256SUMS"}]}' \
+	> "$R/api.json"
+mkdir -p "$R/bin"
+printf '#!/bin/sh\necho "$*" > "$UF_LOG"\nwhile [ $# -gt 1 ]; do [ "$1" = -O ] && echo api > "$2"; shift; done\nexit 0\n' > "$R/bin/uclient-fetch"
+chmod +x "$R/bin/uclient-fetch"
+fa() { ( PATH="$R/bin:$PATH"; UF_LOG="$R/uf.log"; export UF_LOG; info() { :; }
+	fetch() { [ "$FETCH_OK" = 1 ] && echo direct > "$2"; }; . "$R/fa.sh"; fetch_asset "$@" ) >/dev/null 2>&1; }
+rm -f "$R/uf.log"; FETCH_OK=0 fa "$R/api.json" https://x/d/v1.2.3/SHA256SUMS "$R/o1"
+check "fetch_asset falls back to the API asset URL of that file" grep -q 'releases/assets/9$' "$R/uf.log"
+check "fetch_asset asks the API for the file, not its JSON" grep -q 'Accept: application/octet-stream' "$R/uf.log"
+check "fetch_asset writes the fallback download" grep -qx api "$R/o1"
+rm -f "$R/uf.log"; FETCH_OK=1 fa "$R/api.json" https://x/d/v1.2.3/openuf-1.2.3.tar.gz "$R/o2"
+check "fetch_asset uses the plain URL when it works" eval 'grep -qx direct "$R/o2" && [ ! -e "$R/uf.log" ]'
+check "fetch_asset gives up on a file the release does not list" eval '! FETCH_OK=0 fa "$R/api.json" https://x/d/v1.2.3/nope "$R/o3"'
 
 # setup.sh's source download, its fetch a stub that serves $R/rel by name.
 srcdl() { # 0 or 1: whether the archive is tampered with; 2: the sums are not signed by the release key

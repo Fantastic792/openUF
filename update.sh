@@ -197,6 +197,26 @@ release_asset() {
 	tr ',' '\n' < "$1" \
 		| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\/'"$2"'\)".*/\1/p'
 }
+# fetch_asset <release.json> <browser_download_url> <dst>: a release file. When
+# github.com itself does not answer -- stock OpenWrt 25.12's uclient-fetch with
+# mbedtls hangs there while api.github.com and the release CDN work (VM lab,
+# 2026-11-18) -- the same file through the API's asset URL. Integrity is
+# unchanged: every file is still checked against the signed SHA256SUMS.
+fetch_asset() {
+	fetch "$2" "$3" && return 0
+	_api=$(tr ',' '\n' < "$1" | awk -v want="\"$2\"" '
+		match($0, /https:\/\/api\.github\.com\/repos\/[^"]*\/releases\/assets\/[0-9]+/) { u = substr($0, RSTART, RLENGTH) }
+		/"browser_download_url"/ && index($0, want) { print u; exit }')
+	[ -n "$_api" ] || return 1
+	info "github.com did not answer; fetching $(basename "$2") through api.github.com"
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -q --header='Accept: application/octet-stream' -O "$3" "$_api" 2>/dev/null && return 0
+	fi
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL -H 'Accept: application/octet-stream' -o "$3" "$_api" 2>/dev/null && return 0
+	fi
+	return 1
+}
 
 WORK="/tmp/openuf-update-$$"
 cleanup() {
@@ -251,8 +271,9 @@ else
 		_sig_url=$(release_asset "$WORK/release.json" 'SHA256SUMS\.sig' | head -1)
 		[ -n "$_sig_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS.sig, so its
       checksums are not signed. Use a newer release, or --branch <branch> --unverified."
-		fetch "$_tgz_url" "$_tgz" && fetch "$_sums_url" "$WORK/SHA256SUMS" \
-			&& fetch "$_sig_url" "$WORK/SHA256SUMS.sig" || die "$_dl_fail"
+		fetch_asset "$WORK/release.json" "$_tgz_url" "$_tgz" \
+			&& fetch_asset "$WORK/release.json" "$_sums_url" "$WORK/SHA256SUMS" \
+			&& fetch_asset "$WORK/release.json" "$_sig_url" "$WORK/SHA256SUMS.sig" || die "$_dl_fail"
 		verify_sums_sig "$WORK/SHA256SUMS" "$WORK/SHA256SUMS.sig" \
 			|| die "SHA256SUMS is not signed by the openUF release key; not installing it"
 		ok "SHA256SUMS signature matches the release key"

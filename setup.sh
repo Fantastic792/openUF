@@ -195,6 +195,26 @@ release_asset() {
 	tr ',' '\n' < "$1" \
 		| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\/'"$2"'\)".*/\1/p'
 }
+# fetch_asset <release.json> <browser_download_url> <dst>: a release file. When
+# github.com itself does not answer -- stock OpenWrt 25.12's uclient-fetch with
+# mbedtls hangs there while api.github.com and the release CDN work (VM lab,
+# 2026-11-18) -- the same file through the API's asset URL. Integrity is
+# unchanged: every file is still checked against the signed SHA256SUMS.
+fetch_asset() {
+	fetch "$2" "$3" && return 0
+	_api=$(tr ',' '\n' < "$1" | awk -v want="\"$2\"" '
+		match($0, /https:\/\/api\.github\.com\/repos\/[^"]*\/releases\/assets\/[0-9]+/) { u = substr($0, RSTART, RLENGTH) }
+		/"browser_download_url"/ && index($0, want) { print u; exit }')
+	[ -n "$_api" ] || return 1
+	info "github.com did not answer; fetching $(basename "$2") through api.github.com"
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -q --header='Accept: application/octet-stream' -O "$3" "$_api" 2>/dev/null && return 0
+	fi
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL -H 'Accept: application/octet-stream' -o "$3" "$_api" 2>/dev/null && return 0
+	fi
+	return 1
+}
 
 # Can /dev/tty actually be OPENED? `[ -r /dev/tty ]` is not the same question:
 # it answers yes in plenty of places where the open then fails with "Device not
@@ -653,8 +673,9 @@ else
 		_sig_url=$(release_asset "$WORK/release.json" 'SHA256SUMS\.sig' | head -1)
 		[ -n "$_sig_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS.sig, so its
        checksums are not signed. Use a newer release, or OPENUF_BRANCH=<branch> OPENUF_UNVERIFIED=1."
-		fetch "$_tgz_url" "$WORK/$(basename "$_tgz_url")" && fetch "$_sums_url" "$WORK/SHA256SUMS" \
-			&& fetch "$_sig_url" "$WORK/SHA256SUMS.sig" || die "$_dl_fail"
+		fetch_asset "$WORK/release.json" "$_tgz_url" "$WORK/$(basename "$_tgz_url")" \
+			&& fetch_asset "$WORK/release.json" "$_sums_url" "$WORK/SHA256SUMS" \
+			&& fetch_asset "$WORK/release.json" "$_sig_url" "$WORK/SHA256SUMS.sig" || die "$_dl_fail"
 		verify_sums_sig "$WORK/SHA256SUMS" "$WORK/SHA256SUMS.sig" \
 			|| die "SHA256SUMS is not signed by the openUF release key; not installing it"
 		ok "SHA256SUMS signature matches the release key"
@@ -1232,7 +1253,7 @@ if [ "$OPT_ROAMING" = 1 ]; then
 			[ -n "$_tag" ] || { _tag=$RRB_UNIFI_PINNED_TAG; info "could not read the latest rrb-unifi release; using the pinned $_tag"; }
 			[ "$_tag" = "$RRB_UNIFI_PINNED_TAG" ] || warn "rrb-unifi $_tag is newer than the pinned $RRB_UNIFI_PINNED_TAG this openUF was checked against; its plugin is installed unverified"
 		fi
-		_url="https://github.com/$RRB_UNIFI_REPO/archive/refs/tags/$_tag.tar.gz"
+		_url="https://codeload.github.com/$RRB_UNIFI_REPO/tar.gz/refs/tags/$_tag"
 		info "fetching rrb-unifi $_tag"
 		if fetch "$_url" "$RRB_WORK/rrb-unifi.tar.gz" && tar -xzf "$RRB_WORK/rrb-unifi.tar.gz" -C "$RRB_WORK" 2>/dev/null; then
 			RRB_SRC=$(dirname "$(find "$RRB_WORK" -name rrb-unifi-setup -type f 2>/dev/null | head -1)")
@@ -1562,12 +1583,12 @@ else
 				*) continue ;;
 			esac
 			info "fetching $_f"
-			fetch "$_u" "$PKG_WORK/$_f" || die "download failed: $_u"
+			fetch_asset "$PKG_WORK/release.json" "$_u" "$PKG_WORK/$_f" || die "download failed: $_u"
 		done
 		_sums_url=$(release_asset "$PKG_WORK/release.json" 'SHA256SUMS' | head -1)
 		[ -n "$_sums_url" ] || die "the release at $OPENUF_RELEASE_URL has no SHA256SUMS to check
        its packages against (a release made before checksums); use a newer release"
-		fetch "$_sums_url" "$PKG_WORK/SHA256SUMS" || die "download failed: $_sums_url"
+		fetch_asset "$PKG_WORK/release.json" "$_sums_url" "$PKG_WORK/SHA256SUMS" || die "download failed: $_sums_url"
 		SRC_PKG_DIR=$PKG_WORK
 	fi
 
