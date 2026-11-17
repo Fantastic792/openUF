@@ -96,7 +96,7 @@ here (some have upstream's own results, [see below](#inherited-results-not-verif
 - ⚪ Hotspot 2.0 / Passpoint, RADIUS MAC authentication and CoA/Disconnect, MAC-based VLANs
   (Virtual Network Override), Lock to AP, guest restrictions without the portal, SNMP
   monitoring, TDLS and Country IE, auto-channel limits, DFS radar reporting
-- ⚪ Not yet released: remote logging to the syslog server set in the controller (the plain
+- ⚪ New in 1.0.2: remote logging to the syslog server set in the controller (the plain
   kind; UniFi's encrypted logging is not supported); WPA2 networks no longer offer the extra
   `WPA-PSK-SHA256` mode that some older Apple devices refuse, matching a real UniFi AP
   (idea from [antoniocosta/unifi-openwrt](https://github.com/antoniocosta/unifi-openwrt))
@@ -117,7 +117,7 @@ here (some have upstream's own results, [see below](#inherited-results-not-verif
 **Statistics**
 - ✅ Clients with WiFi Experience, radios and channel use, the uplink, wired hosts per port,
   neighbouring APs and RF scans
-- ⚪ Not yet released: each client's channel width (20/40/80/160 MHz) in the client panel,
+- ⚪ New in 1.0.2: each client's channel width (20/40/80/160 MHz) in the client panel,
   which showed 20 MHz for everyone before
 
 **Install**
@@ -296,6 +296,19 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
+**Fixed in 1.0.2** (upgrade if you run an older one; [release notes](docs/release-notes/1.0.2.md)):
+
+- **The install command stopped on a fresh OpenWrt 25.12 router**, first at "download
+  failed" (its download tool gets no answer from github.com) and then at "not signed by the
+  openUF release key" (it has no `openssl` to check the signature with), and on images
+  with `iw-full` at "required and could not be installed: iw". The installer now fetches
+  through GitHub's API address, adds `openssl-util` from OpenWrt's own feed and accepts
+  `iw-full`. The whole install passed in the VM lab on stock OpenWrt 25.12.6.
+- **`openuf deps` was broken since 1.0.0** (a "syntax error"), so the dependency page could
+  neither report nor install missing packages.
+- **A MAC filter with no addresses yet stopped every WiFi change** on that AP. It now
+  applies, and with an empty allow list nobody joins that network, as on a UniFi AP.
+
 **Fixed in 1.0.1** (upgrade if you run 1.0.0; [release notes](docs/release-notes/1.0.1.md)):
 
 - **Compressed controller replies could exhaust memory.** A crafted reply of about 8 KB
@@ -308,8 +321,8 @@ than a few hours. The upstream projects' results for some of these are
 
 **Open findings from this project's lab and code audit:**
 
-- **Five settings in the lab's change-and-restore table** (disable a device, mesh station
-  off, network enable, port security, MAC filter) do not restore cleanly. Some look like
+- **Four settings in the lab's change-and-restore table** (disable a device, mesh station
+  off, network enable, port security) do not restore cleanly. Some look like
   test-side problems; port security needs real switch ports to check.
 - The file-by-file audit is about a third of the way through the core files. Findings are
   fixed or listed here before a release.
