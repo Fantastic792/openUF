@@ -1,5 +1,4 @@
--- 802.11k beacon requests for beacon-table-only clients (plan v2.0 Task 7,
--- docs/superpowers/specs/2026-11-11-rrm-beacon-table.md in the notes folder).
+-- 802.11k beacon requests for beacon-table-only clients.
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true

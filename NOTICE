@@ -9,6 +9,15 @@ It contains work by several copyright holders:
     released under the MIT License, whose permission notice follows, as it
     requires; it is distributed here as part of a GPL-3.0-or-later work.
 
+  trueserve (https://github.com/trueserve/openUF), 2016-2017
+    The first openUF, whose commits begin this history; carried by Jonas
+    Sevcik's MIT-licensed work below.
+
+  fonix232 (https://github.com/fonix232/openUF) and d-malinowski
+  (https://github.com/d-malinowski/openUF)
+    Changes ported from their forks of jonasevcik/openUF, which are under
+    the same MIT License (notice below). CREDITS.md lists each port.
+
   Copyright (C) 2026 Yesrab Ali <yesrab.ali111@gmail.com>
     This repository's own work: the adaptations, the packaging (package/), the
     LuCI app and theme.

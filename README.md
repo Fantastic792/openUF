@@ -280,6 +280,7 @@ tested belongs in a [field report](field-reports/README.md).
 | [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md) | What is not implemented yet, what is known about it, and the experiment plan |
 | [PACKAGING.md](PACKAGING.md) | The OpenWrt packages, the LuCI app, the theme and the release workflow |
 | [field-reports/](field-reports/README.md) | Hardware test results, and how to send yours |
+| [CREDITS.md](CREDITS.md) | Every project openUF used, and what came from each |
 | [CLAUDE.md](CLAUDE.md) | Working notes for contributors: the constraints, the landmines, and how to add a hardware profile |
 
 ## Contributing
@@ -366,15 +367,21 @@ Fixes from yesrab/openUF after `6277bdf` are merged in by hand.
 ## Credits
 
 Built on [yesrab/openUF](https://github.com/yesrab/openUF): everything up to its `6277bdf`
-is yesrab's and its contributors' work. openUF began as a fork of
-[jonasevcik/openUF](https://github.com/jonasevcik/openUF) and still exchanges work with it.
-The 802.11r translator for genuine UniFi APs is
-[d-malinowski/unifi-openwrt-roaming](https://github.com/d-malinowski/unifi-openwrt-roaming),
-whose author also contributed the interoperability work around it. The protocol groundwork
-came from [amd989/unifi-gateway](https://github.com/amd989/unifi-gateway),
+is yesrab's and its contributors' work. openUF was started by
+[trueserve/openUF](https://github.com/trueserve/openUF) and grew up as
+[jonasevcik/openUF](https://github.com/jonasevcik/openUF), which this fork still adopts work
+from. Features were also ported from [fonix232/openUF](https://github.com/fonix232/openUF) and
+[d-malinowski/openUF](https://github.com/d-malinowski/openUF); fast roaming with genuine UniFi
+APs uses [d-malinowski/unifi-openwrt-roaming](https://github.com/d-malinowski/unifi-openwrt-roaming).
+The protocol groundwork came from [amd989/unifi-gateway](https://github.com/amd989/unifi-gateway),
 [jeffreykog/unifi-inform-protocol](https://github.com/jeffreykog/unifi-inform-protocol) and
 [fxkr/unifi-protocol-reverse-engineering](https://github.com/fxkr/unifi-protocol-reverse-engineering).
 Built on [OpenWrt](https://openwrt.org/) and [LuCI](https://github.com/openwrt/luci).
+
+**[CREDITS.md](CREDITS.md)** lists every project used, what came from each (with commits),
+what was only read, and the test tools. This fork is maintained by Fantastic792, who also
+contributes to yesrab/openUF; it is not endorsed by the projects above, and was written with
+the help of an AI coding assistant.
 
 ## License
 
