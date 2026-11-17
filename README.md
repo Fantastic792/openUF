@@ -96,6 +96,10 @@ here (some have upstream's own results, [see below](#inherited-results-not-verif
 - ⚪ Hotspot 2.0 / Passpoint, RADIUS MAC authentication and CoA/Disconnect, MAC-based VLANs
   (Virtual Network Override), Lock to AP, guest restrictions without the portal, SNMP
   monitoring, TDLS and Country IE, auto-channel limits, DFS radar reporting
+- ⚪ Not yet released: remote logging to the syslog server set in the controller (the plain
+  kind; UniFi's encrypted logging is not supported); WPA2 networks no longer offer the extra
+  `WPA-PSK-SHA256` mode that some older Apple devices refuse, matching a real UniFi AP
+  (idea from [antoniocosta/unifi-openwrt](https://github.com/antoniocosta/unifi-openwrt))
 
 **Guest network and uplink**
 - ✅ The controller's guest portal: redirect, authorize, per-guest limits
@@ -113,6 +117,8 @@ here (some have upstream's own results, [see below](#inherited-results-not-verif
 **Statistics**
 - ✅ Clients with WiFi Experience, radios and channel use, the uplink, wired hosts per port,
   neighbouring APs and RF scans
+- ⚪ Not yet released: each client's channel width (20/40/80/160 MHz) in the client panel,
+  which showed 20 MHz for everyone before
 
 **Install**
 - ✅ Pure Lua 5.1, no toolchain: one command installs it on OpenWrt 25.12 as packages or as

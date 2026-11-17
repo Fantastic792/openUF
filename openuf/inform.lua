@@ -1684,6 +1684,12 @@ function M.build_json(st, cfg, ufhw)
 					is_11be    = sta.tx_generation == "be",
 					radio_proto = sta.tx_generation or (vap.radio == "na" and "a" or "g"),
 					nss         = sta.tx_nss or 1,
+					-- chwidth 0..3 = 20/40/80/160 MHz, from the tx rate's width
+					-- (antoniocosta/unifi-openwrt): without it the client panel
+					-- shows 20 MHz. shortcut: 320 MHz reads as 160 until a UniFi
+					-- 7 capture shows its code.
+					chwidth     = sta.tx_width and (sta.tx_width >= 160 and 3
+						or sta.tx_width >= 80 and 2 or sta.tx_width >= 40 and 1 or 0),
 					tx_retries       = sta.tx_retries,
 					wifi_tx_attempts = wifi_tx_attempts,
 					wifi_tx_dropped  = sta_dropped,
@@ -4683,6 +4689,12 @@ local RECOGNIZED_SYSTEM_CFG = {
 	"^cron%.status$",
 	"^cron%.%d+%.status$",
 	"^cron%.%d+%.job%.%d+%.",
+	-- Remote syslog to logd (sysconf.lua). syslog.remote.encrypt stays in the
+	-- ledger: openUF cannot send UniFi's encrypted datagrams.
+	"^syslog%.status$",
+	"^syslog%.remote%.status$",
+	"^syslog%.remote%.ip$",
+	"^syslog%.remote%.port$",
 	-- SNMP Monitoring (snmp.lua).
 	"^snmp%.status$",
 	"^snmp%.version$",

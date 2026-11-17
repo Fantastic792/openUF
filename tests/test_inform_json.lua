@@ -967,6 +967,9 @@ return {
 			assert_false(sta_table[1].is_11ac, "not VHT")
 			assert_false(sta_table[1].is_11ax, "not HE")
 			assert_false(sta_table[1].is_11be, "not EHT")
+			-- chwidth 0..3 = 20/40/80/160 MHz; without it the client panel
+			-- shows 20 MHz for every client. No width token in iw = 20 MHz.
+			assert_eq(sta_table[1].chwidth, 0, "bare MCS rate: 20 MHz -> chwidth 0")
 			-- The client panel's "TX Retries" is the controller's delta of
 			-- tx_retries over retries + wifi_tx_attempts + dropped (devmgr
 			-- TtZhv): without tx_retries per station it read 0.0 % for
@@ -3350,6 +3353,7 @@ return {
 			inform._sta_stats_cache = {}
 			local c = client{}
 			assert_eq(inform_once(c), 100, "a clean VHT client at 30 dB SNR")
+			assert_eq(last_vap.sta_table[1].chwidth, 2, "VHT 80MHz rate -> chwidth 2")
 			for _ = 1, 5 do
 				step(c, 100, 40, 5)
 				assert_eq(inform_once(c), 100, "40 % retries: no minute completed yet")

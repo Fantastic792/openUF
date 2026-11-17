@@ -10540,6 +10540,18 @@ return {
 		end
 	},
 	{
+		name = "inform: remote syslog keys are recognized; syslog.remote.encrypt stays in the dropped-key report",
+		fn = function()
+			local rows = inform._dropped_keys(table.concat({
+				"syslog.status=enabled", "syslog.remote.status=enabled",
+				"syslog.remote.ip=192.0.2.20", "syslog.remote.port=514",
+				"syslog.remote.encrypt=enabled",
+			}, "\n"), inform.RECOGNIZED_SYSTEM_CFG)
+			assert_eq(#rows, 1, "only one prefix dropped")
+			assert_eq(rows[1].sample_key, "syslog.remote.encrypt", "the encrypted switch, not handled")
+		end
+	},
+	{
 		name = "cfg-coverage: a replay sorts a push into consumed / inert / ignored",
 		fn = function()
 			local report = cfgcov.analyse(table.concat({

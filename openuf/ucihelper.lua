@@ -2632,6 +2632,20 @@ function M.apply_config(resp, cfg, opts)
 				if vap.pmf_status == "enabled" then w = vap.pmf_mode or 1 end
 				extra.ieee80211w = tostring(w)
 			end
+			-- No WPA-PSK-SHA256. iface.uc adds it to a PSK BSS whenever PMF is
+			-- on (and PMF defaults to optional on sae-mixed); a UAP never
+			-- offers it, and old Apple clients ignore a BSS that does
+			-- (antoniocosta/unifi-openwrt). The list iface.uc builds, less
+			-- that one AKM, as a raw line: hostapd reads wpa_key_mgmt last-wins.
+			-- shortcut: assumes no sae_ext_key (openUF never sets it).
+			local enc = SECURITY_MAP[vap.security]
+			if (enc == "psk2" or enc == "sae-mixed")
+				and (extra.ieee80211w or (enc == "sae-mixed" and "1" or "0")) ~= "0" then
+				local ft = extra.ieee80211r == "1"
+				add_bss_option(extra, "wpa_key_mgmt="
+					.. (enc == "sae-mixed" and (ft and "SAE FT-SAE " or "SAE ") or "")
+					.. "WPA-PSK" .. (ft and " FT-PSK" or ""))
+			end
 			-- 802.1X / WPA-Enterprise. The CANONICAL option names, not the
 			-- aliases: /usr/share/schema/wireless.wifi-iface.json declares
 			-- auth_server/auth_port/auth_secret/acct_server/acct_port/

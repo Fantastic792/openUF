@@ -49,6 +49,15 @@
 	cut to what a hostname may hold; the board's own is stamped once as
 	openuf_hostname_orig. No name pushed: nothing changes.
 
+	Remote syslog (Settings -> System -> Remote Logging) -> logd's
+	system.@system[0].log_ip/log_port/log_proto, key names as
+	antoniocosta/unifi-openwrt read them: syslog.status, syslog.remote.status,
+	.ip, .port (514 when absent). The board's own target is stamped once
+	(openuf_log_ip_orig/_port_orig, marker openuf_syslog_managed) and put back
+	when the controller turns it off. syslog.remote.encrypt (UniFi's own
+	AES-GCM datagrams to :5514, fw_caps 0x1000000) is not something logd can
+	send: the plain target is dropped rather than sending plain lines there.
+
 	The pushed cron user is ignored (jobs run as root here; the pushed account
 	does not exist -- see REVERSE-ENGINEERING.md backlog row 14). The timezone
 	is only ever written when it differs, which on a board setup.sh configured
@@ -167,7 +176,8 @@ end
 -- Returns nil when none of the three is present at all.
 function M.parse(sys_raw)
 	if type(sys_raw) ~= "string" then return nil end
-	local tz, ntp, cron, host = nil, nil, nil, nil
+	local tz, ntp, cron, host, syslog = nil, nil, nil, nil, nil
+	local syslog_rows = {}
 	local ntp_rows, cron_rows = {}, {}
 	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
 		local k, v = line:match("^([^=]+)=(.*)$")
@@ -176,6 +186,9 @@ function M.parse(sys_raw)
 				if v ~= "" then tz = v end
 			elseif k == "resolv.host.1.name" then
 				if v ~= "" then host = v end
+			elseif k:match("^syslog%.") then
+				syslog_rows[k] = v
+				syslog = true
 			elseif k == "ntpclient.status" then
 				ntp = ntp or {servers = {}}
 				ntp.enabled = (v == "enabled")
@@ -244,8 +257,17 @@ function M.parse(sys_raw)
 		end
 		if cron.enabled == nil then cron.enabled = (#cron.jobs > 0) end
 	end
-	if tz == nil and ntp == nil and cron == nil and host == nil then return nil end
-	return {timezone = tz, ntp = ntp, cron = cron, hostname = host}
+	if syslog then
+		syslog = {
+			enabled = syslog_rows["syslog.status"] == "enabled"
+				and syslog_rows["syslog.remote.status"] == "enabled",
+			ip      = syslog_rows["syslog.remote.ip"],
+			port    = syslog_rows["syslog.remote.port"],
+			encrypt = syslog_rows["syslog.remote.encrypt"] == "enabled",
+		}
+	end
+	if tz == nil and ntp == nil and cron == nil and host == nil and syslog == nil then return nil end
+	return {timezone = tz, ntp = ntp, cron = cron, hostname = host, syslog = syslog}
 end
 
 -- ─── Apply ───────────────────────────────────────────────────────────────────
@@ -376,6 +398,60 @@ function M.apply_ntp(ntp)
 	return false
 end
 
+-- logd's remote target <- the pushed syslog block. Written only when it
+-- differs; the board's own log_ip/log_port are stamped once and put back
+-- when the controller turns it off (or asks for encrypted syslog, which logd
+-- cannot send). Absent block: nothing. Returns true when something was written.
+local LOG_OPTS = {"log_ip", "log_port", "log_proto"}
+function M.apply_syslog(sl)
+	if type(sl) ~= "table" then return false end
+	local want
+	if sl.enabled and not sl.encrypt then
+		local port = sl.port
+		if port == nil or port == "" then port = "514" end
+		local n = tonumber(port)
+		if not M.is_valid_server(sl.ip) or not (port:match("^%d+$") and n >= 1 and n <= 65535) then
+			io.stderr:write(("sysconf: ignoring malformed remote syslog target %q:%q\n"):format(
+				tostring(sl.ip), tostring(sl.port)))
+			return false
+		end
+		want = {log_ip = sl.ip, log_port = port, log_proto = "udp"}
+	end
+	local cursor = get_uci().cursor()
+	local sec = system_section(cursor)
+	if not sec then return false end
+	local managed = cursor:get("system", sec, "openuf_syslog_managed")
+	if want then
+		local same = true
+		for _, o in ipairs(LOG_OPTS) do
+			if cursor:get("system", sec, o) ~= want[o] then same = false end
+		end
+		if same then return false end
+		if not managed then
+			for _, o in ipairs({"log_ip", "log_port"}) do
+				local cur = cursor:get("system", sec, o)
+				if cur then cursor:set("system", sec, "openuf_" .. o .. "_orig", cur) end
+			end
+			cursor:set("system", sec, "openuf_syslog_managed", "1")
+		end
+		for _, o in ipairs(LOG_OPTS) do cursor:set("system", sec, o, want[o]) end
+		io.stderr:write(("sysconf: remote syslog -> %s:%s (controller)\n"):format(want.log_ip, want.log_port))
+	else
+		if not managed then return false end
+		for _, o in ipairs(LOG_OPTS) do
+			local orig = cursor:get("system", sec, "openuf_" .. o .. "_orig")
+			if orig then cursor:set("system", sec, o, orig) else cursor:delete("system", sec, o) end
+			cursor:delete("system", sec, "openuf_" .. o .. "_orig")
+		end
+		cursor:delete("system", sec, "openuf_syslog_managed")
+		io.stderr:write("sysconf: remote syslog back to the board's own"
+			.. (sl.encrypt and " (encrypted syslog is not supported)" or "") .. "\n")
+	end
+	cursor:commit("system")
+	M._exec("/etc/init.d/log restart >/dev/null 2>&1")
+	return true
+end
+
 -- Everything in the crontab outside openUF's marked block, normalised to end
 -- with a newline (or be empty).
 local function strip_managed(text)
@@ -451,7 +527,7 @@ end
 function M.apply(parsed)
 	local r = {failed = {}}
 	if type(parsed) ~= "table" then return r end
-	for _, part in ipairs({"timezone", "ntp", "cron", "hostname"}) do
+	for _, part in ipairs({"timezone", "ntp", "cron", "hostname", "syslog"}) do
 		local ok, res = pcall(M["apply_" .. part], parsed[part])
 		r[part] = ok and res or false
 		if not ok then

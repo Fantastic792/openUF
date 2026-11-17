@@ -345,6 +345,7 @@ return {
 			assert_true(r.timezone, "timezone changed")
 			assert_true(r.ntp, "ntp changed")
 			assert_true(r.cron, "cron written")
+			assert_eq(r.syslog, false, "syslog part ran, nothing pushed")
 			assert_eq(#commits, 2, "system committed twice (timezone, ntp)")
 			-- A raising part does not stop the others.
 			sysconf._uci = {cursor = function() error("uci down") end}
@@ -353,6 +354,68 @@ return {
 			assert_contains(out, "sysconf: timezone: ", "and was reported")
 			assert_eq(#r, 0, "no crash")
 			assert_eq(sysconf.apply(nil).timezone, nil, "nil parsed -> nothing")
+		end
+	},
+	{
+		-- Settings -> System -> Remote Logging (syslog.*, key names as
+		-- antoniocosta/unifi-openwrt read them off Network 10.6).
+		name = "sysconf: parse reads the remote syslog block; absent stays nil",
+		fn = function()
+			local p = sysconf.parse("syslog.status=enabled\nsyslog.remote.status=enabled\n" ..
+				"syslog.remote.ip=192.0.2.20\nsyslog.remote.port=1514\n")
+			assert_true(p.syslog.enabled, "both statuses enabled")
+			assert_eq(p.syslog.ip, "192.0.2.20", "ip")
+			assert_eq(p.syslog.port, "1514", "port")
+			assert_false(p.syslog.encrypt, "not encrypted")
+			p = sysconf.parse("syslog.status=enabled\nsyslog.remote.status=disabled\n")
+			assert_false(p.syslog.enabled, "remote off")
+			assert_nil(sysconf.parse(CAPTURE).syslog, "no syslog keys: nil, nothing touched")
+		end
+	},
+	{
+		name = "sysconf: apply_syslog points logd at the server once, keeps the board's own, restores it",
+		fn = function()
+			local db = system_db("UTC", nil, nil)
+			db.system.cfg01.log_ip = "192.0.2.5"
+			local commits, cmds = fresh(db)
+			local on = {enabled = true, ip = "192.0.2.20", port = "1514", encrypt = false}
+			with_stderr(function() assert_true(sysconf.apply_syslog(on), "written") end)
+			local sec = db.system.cfg01
+			assert_eq(sec.log_ip, "192.0.2.20", "log_ip")
+			assert_eq(sec.log_port, "1514", "log_port")
+			assert_eq(sec.log_proto, "udp", "log_proto")
+			assert_eq(sec.openuf_log_ip_orig, "192.0.2.5", "board's own ip stamped")
+			assert_eq(cmds[#cmds], "/etc/init.d/log restart >/dev/null 2>&1", "logd restarted")
+			assert_false(sysconf.apply_syslog(on), "same push: no write")
+			assert_eq(#commits, 1, "one commit")
+			with_stderr(function() assert_true(sysconf.apply_syslog({enabled = false}), "restored") end)
+			assert_eq(sec.log_ip, "192.0.2.5", "board's own ip back")
+			assert_nil(sec.log_port, "no port of its own: deleted")
+			assert_nil(sec.log_proto, "nor proto")
+			assert_nil(sec.openuf_syslog_managed, "stamps gone")
+			assert_false(sysconf.apply_syslog({enabled = false}), "not managed: nothing to undo")
+		end
+	},
+	{
+		name = "sysconf: apply_syslog defaults the port, refuses a bad host or port, leaves encrypted to UniFi",
+		fn = function()
+			local db = system_db("UTC", nil, nil)
+			fresh(db)
+			local sec = db.system.cfg01
+			with_stderr(function() sysconf.apply_syslog({enabled = true, ip = "logs.example.org"}) end)
+			assert_eq(sec.log_port, "514", "no port pushed: 514")
+			local out = with_stderr(function()
+				assert_false(sysconf.apply_syslog({enabled = true, ip = "x; reboot"}), "bad host")
+				assert_false(sysconf.apply_syslog({enabled = true, ip = "192.0.2.9", port = "99999"}), "bad port")
+			end)
+			assert_contains(out, "malformed", "said why")
+			assert_eq(sec.log_ip, "logs.example.org", "unchanged by the bad pushes")
+			-- Encrypted syslog is a UniFi-only datagram format logd cannot send:
+			-- drop the plain target rather than send plain lines to that port.
+			with_stderr(function()
+				assert_true(sysconf.apply_syslog({enabled = true, ip = "192.0.2.9", port = "5514", encrypt = true}), "target dropped")
+			end)
+			assert_nil(sec.log_ip, "no logd target")
 		end
 	},
 	{

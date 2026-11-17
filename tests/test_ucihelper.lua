@@ -2568,11 +2568,42 @@ return {
 						-- drop it, so it rides the raw lines with the other two.
 						assert_eq(s.sae_groups, nil, sec .. ": no UCI sae_groups")
 						assert_eq(table.concat(s.hostapd_bss_options, ","),
-							"sae_groups=19 20,sae_anti_clogging_threshold=5,sae_sync=7",
+							"sae_groups=19 20,sae_anti_clogging_threshold=5,sae_sync=7"
+								.. (sec == "wpa2/wpa3" and ",wpa_key_mgmt=SAE WPA-PSK" or ""),
 							sec .. ": raw options")
 					end
 				end)
 			end
+		end
+	},
+	{
+		-- OpenWrt's iface.uc adds WPA-PSK-SHA256 whenever PMF is on; a UAP
+		-- never offers it and old Apple clients skip a BSS that does
+		-- (antoniocosta/unifi-openwrt). Same list as iface.uc, less that one.
+		name = "ucihelper: a PSK WLAN with PMF on offers the AKMs a UAP does, without WPA-PSK-SHA256",
+		fn = function()
+			local function km(vap)
+				local line
+				with_ucihelper(function(db)
+					vap.ssid, vap.radio, vap.x_passphrase = "corp", "radio0", "hunter22"
+					ucihelper.apply_config({radio_table = {}, vap_table = {vap}}, nil)
+					for _, l in ipairs(db.wireless.openuf_radio0_corp.hostapd_bss_options or {}) do
+						if l:match("^wpa_key_mgmt=") then line = l end
+					end
+				end)
+				return line
+			end
+			assert_eq(km({security = "wpa2", pmf_status = "enabled", pmf_mode = 1}),
+				"wpa_key_mgmt=WPA-PSK", "WPA2, PMF optional")
+			assert_eq(km({security = "wpa2", pmf_status = "enabled", pmf_mode = 2, fast_roaming_enabled = true}),
+				"wpa_key_mgmt=WPA-PSK FT-PSK", "WPA2, PMF required, FT")
+			assert_nil(km({security = "wpa2", pmf_status = "disabled"}), "WPA2 without PMF: OpenWrt's list has no SHA256")
+			assert_nil(km({security = "wpa2"}), "WPA2, PMF not pushed: none")
+			assert_eq(km({security = "wpa2/wpa3"}), "wpa_key_mgmt=SAE WPA-PSK",
+				"mixed: OpenWrt defaults PMF to optional")
+			assert_eq(km({security = "wpa2/wpa3", pmf_status = "enabled", pmf_mode = 1, fast_roaming_enabled = true}),
+				"wpa_key_mgmt=SAE FT-SAE WPA-PSK FT-PSK", "mixed with FT")
+			assert_nil(km({security = "wpa3", pmf_status = "enabled", pmf_mode = 2}), "WPA3 only: no PSK at all")
 		end
 	},
 	{

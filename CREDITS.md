@@ -38,6 +38,7 @@ assistant (Claude, by Anthropic), and reviewed, tested and committed by the main
 | [jamesbraid/unifi-emu](https://github.com/jamesbraid/unifi-emu) (MIT) | Reviewed at `b180786`. Its upgrade handling gave the idea for the optional switch that reports a controller-pushed firmware version (`d923dd8`). No code copied. |
 | [paultyng/go-unifi](https://github.com/paultyng/go-unifi), [unpoller/unifi](https://github.com/unpoller/unifi) | Controller REST models, read when looking for field names; [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) notes where they differ from the device protocol. |
 | [zerotypic/unifi-ble-client](https://github.com/zerotypic/unifi-ble-client) | Bluetooth setup protocol research ([REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md), Investigation 4). Nothing built from it yet. |
+| [antoniocosta/unifi-openwrt](https://github.com/antoniocosta/unifi-openwrt) (GPL-2.0-or-later) | Compared at `6d5a30d` (notes kept outside the repo). Its reverse-engineering of newer UAP firmware gave three features, written fresh in Lua: the remote syslog keys (`syslog.remote.*`), leaving out `WPA-PSK-SHA256` like a UAP, and the client channel width (`chwidth`). |
 | [dutchmillbytes/openwrt](https://github.com/dutchmillbytes/openwrt) | Its TP-Link Deco M5 images and port layout, for `openuf/modelmap/deco-m5.lua`. |
 
 ## Tools used in testing, not shipped
