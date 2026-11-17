@@ -1144,13 +1144,17 @@ case "$INFORM_URL" in https*) OPTIONAL="$OPTIONAL luasec" ;; esac
 # router with internet; the tool itself is fetched below for the same reason.
 [ "$OPT_ROAMING" = 1 ] && OPTIONAL="$OPTIONAL ucode-mod-socket kmod-veth"
 
+# A "-full" build provides the name and does more (iw-full on many images,
+# the VM lab's too): the package manager accepts it for "iw" and installs
+# nothing, so the exact-name check would call iw missing forever.
+req_present() { pkg_installed "$1" || pkg_installed "$1-full"; }
 MISSING=""
-for p in $REQUIRED; do pkg_installed "$p" || MISSING="$MISSING $p"; done
+for p in $REQUIRED; do req_present "$p" || MISSING="$MISSING $p"; done
 if [ -n "$MISSING" ]; then
 	info "required:$MISSING"
 	pkg_add_v $MISSING || warn "could not install all of:$MISSING"
 	STILL=""
-	for p in $MISSING; do pkg_installed "$p" || STILL="$STILL $p"; done
+	for p in $MISSING; do req_present "$p" || STILL="$STILL $p"; done
 	if [ -n "$STILL" ]; then
 		die "these are required and could not be installed:$STILL
        Fix the package feeds (or free up flash) and re-run. Without
