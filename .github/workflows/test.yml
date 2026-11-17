@@ -112,6 +112,13 @@ jobs:
       # the tools, run against a scratch root with uci, init scripts and
       # package managers stubbed (tools/test-packaging.sh). Nothing on the
       # runner is touched.
+      # dist.sh and install.sh strip comments with `lua tools/strip.lua`. The
+      # ubuntu-26.04 image has no lua (24.04's did), and without it 8 checks fail.
+      - name: Install Lua
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.1
+          sudo ln -sf /usr/bin/lua5.1 /usr/local/bin/lua
       - name: Run the packaging tests
         run: sh tools/test-packaging.sh
 
