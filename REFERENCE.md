@@ -399,6 +399,10 @@ brew install lua luarocks      # macOS
 
 # Install test dependencies
 luarocks install --local lua-cjson
+# lua-openssl, the AES binding: crypto.lua has no openssl CLI fallback, so the
+# suite needs it (Debian/Ubuntu: apt install libssl-dev first; macOS:
+# luarocks install --local openssl OPENSSL_DIR=$(brew --prefix openssl))
+luarocks install --local openssl
 
 # Run unit tests (all pure Lua)
 eval $(luarocks path --local)
