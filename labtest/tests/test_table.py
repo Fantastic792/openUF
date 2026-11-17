@@ -252,6 +252,10 @@ class TableTest(unittest.TestCase):
                  'nft: +\t\toifname { "phy0-ap0", "phy1-ap0" } ether daddr 01:80:c2:00:00:00 drop']
         self.assertEqual(table._known(lines), ["known: F2 (l2guard rebuilt late)"])
         self.assertIsNone(table._known(lines + ["uci: +wireless.x.y='1'"]))
+        # release-run6 noise rerun: Device.locked sent nothing, its baseline caught the VLAN-tag rule mid-rebuild
+        vlan = ['nft: -\t\tiifname "phy0-ap0" ether type 8021q drop',
+                'nft: +\t\tiifname { "phy0-ap0", "phy1-ap0" } ether type 8021q drop']
+        self.assertEqual(table._known(lines + vlan), ["known: F2 (l2guard rebuilt late)"])
 
     def test_flip_that_only_moves_l2guard_is_ignored_known_f2(self):
         self.r.guard = "flip"

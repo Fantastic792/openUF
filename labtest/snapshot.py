@@ -21,6 +21,26 @@ def redact(line):
     return line
 
 
+def static_nft(lines):
+    """nft without the elements of `flags dynamic` sets: the data path fills them (assoctrack's ip_seen
+    learns each client MAC for 2 min), so they change with traffic, not with config. The set stays."""
+    out, dynamic, skip = [], False, False
+    for line in lines:
+        s = line.strip()
+        if skip:
+            skip = "}" not in s
+            continue
+        if s.startswith("set "):
+            dynamic = False
+        elif s.startswith("flags ") and "dynamic" in s:
+            dynamic = True
+        elif dynamic and s.startswith("elements = {"):
+            skip = "}" not in s
+            continue
+        out.append(line)
+    return out
+
+
 def take(t):
     script = "; ".join(f"echo '{MARK}{name}'; {cmd}" for name, cmd in SECTIONS.items())
     rc, out = t.ssh(script + " 2>&1", timeout=60)
@@ -32,6 +52,7 @@ def take(t):
             cur = line[len(MARK):]
         elif cur in snap:
             snap[cur].append(redact(line))
+    snap["nft"] = static_nft(snap["nft"])
     return snap
 
 

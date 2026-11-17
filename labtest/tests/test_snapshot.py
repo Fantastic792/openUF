@@ -32,6 +32,16 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(snapshot.volatile(a, b), frozenset(snapshot.diff(a, b)))
         self.assertEqual(snapshot.diff(a, a), [])
 
+    def test_dynamic_set_elements_are_not_config(self):
+        # release-run5: three rows that sent nothing failed "did not go back" on ip_seen's elements
+        dyn = ["\tset ip_seen {", "\t\ttype ether_addr", "\t\tflags dynamic,timeout", "\t\tcounter",
+               "\t\telements = { 02:00:00:00:00:01 counter,", "\t\t\t     02:00:00:00:00:02 counter }", "\t}"]
+        fixed = ["\tset blocked {", "\t\ttype ether_addr", "\t\telements = { 02:00:00:00:00:03 }", "\t}"]
+        out = snapshot.static_nft(dyn + fixed)
+        self.assertEqual(out, dyn[:4] + ["\t}"] + fixed)  # the set stays; a config set keeps its elements
+        one = ["\tset s {", "\t\tflags dynamic", "\t\telements = { 02:00:00:00:00:01 counter }", "\t}", "x"]
+        self.assertEqual(snapshot.static_nft(one), ["\tset s {", "\t\tflags dynamic", "\t}", "x"])
+
     def test_bss_blocks(self):
         snap = {"hostapd": ["## f", "interface=p0", "ssid=A", "ignore_broadcast_ssid=0", "bss=p1", "ssid=B",
                             "ap_isolate=1", "## g", "interface=q0", "ssid=B"]}

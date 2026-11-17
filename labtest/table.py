@@ -20,7 +20,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NO_PUSH = {"cfgversion": None, "keys": {}}
 # known noise, labelled not judged (findings.md): an 802.11r key-holder line (F4), the l2guard drop rule (F2)
 KNOWN = [(re.compile(r"[ .+-]r[01]kh="), "known: F4 (controller made a new roaming key)"),
-         (re.compile(r"^nft: .*ether daddr 01:80:c2:00:00:00 drop"), "known: F2 (l2guard rebuilt late)")]
+         # l2guard's BGA drop and its VLAN-tag drop (`ether type vlan`, listed as 8021q) move together
+         (re.compile(r"^nft: .*ether (daddr 01:80:c2:00:00:00|type 8021q) drop"), "known: F2 (l2guard rebuilt late)")]
 
 
 def _known(lines):
