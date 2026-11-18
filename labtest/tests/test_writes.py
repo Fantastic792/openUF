@@ -78,6 +78,16 @@ class WritesTest(unittest.TestCase):
         self.assertEqual(ctl.pushes, 2)  # there and back
         self.assertEqual(r["idle"]["files"], [])
 
+    def test_idle_window_starts_after_the_last_push_settles(self):
+        t, seen = FakeTarget(), []
+        real = t.ssh
+        t.ssh = lambda cmd, timeout=20, stdin=None: (seen.append(cmd), real(cmd, timeout, stdin))[1]
+        with mock.patch("time.sleep", side_effect=lambda n: seen.append(("sleep", n))):
+            writes.run(self.conf, t, FakeCtl(t), idle=60)
+        first_mark = next(i for i, x in enumerate(seen) if isinstance(x, str) and x.startswith("touch"))
+        self.assertIn(("sleep", writes.SETTLE), seen[:first_mark])
+        self.assertGreater(writes.SETTLE, 300)  # past the ledger's FLUSH_INTERVAL
+
     def test_not_connected_fails_without_measuring(self):
         t = FakeTarget()
         with mock.patch("labtest.extra.writes.plug._connected", return_value=False):

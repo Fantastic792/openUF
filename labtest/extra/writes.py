@@ -7,6 +7,9 @@ from labtest.safety import plug
 MARK = "/tmp/labtest-mark"
 DIRS = "/etc /opt/openuf /usr/lib/openuf /root"
 APPLY_WAIT = 90
+# openUF's unhandled ledger saves repeat counts up to FLUSH_INTERVAL (300 s) after a push: the
+# idle window starts only after that, or it measures the last push, not idling (release-run6)
+SETTLE = 330
 
 
 def sectors(t):
@@ -44,6 +47,7 @@ def run(conf, t, ctl, idle=600):
     if not plug._connected(t, ctl):
         out["error"] = "openUF not connected to the controller"
     else:
+        time.sleep(SETTLE)
         s, _ = sectors(t), mark(t)
         time.sleep(idle)
         out["idle"] = {"secs": idle, "sectors": sectors(t) - s, "files": changed(t)}
