@@ -308,7 +308,8 @@ than a few hours. The upstream projects' results for some of these are
   25.12.6: the feed's web server module does not load in the image's older web server, so
   the web server stopped starting, and on a general profile openUF looked for its address
   on a port outside the LAN and never announced itself. The installer now updates the web
-  server first, openUF's page stays out (LuCI keeps working) while the two do not match,
+  server and all its modules first (a partial upgrade made uhttpd crash on every login, which
+  read as "wrong password"), openUF's page stays out (LuCI keeps working) while the two do not match,
   and the address is found on the LAN bridge.
 - **`openuf deps` was broken since 1.0.0** (a "syntax error"), so the dependency page could
   neither report nor install missing packages.

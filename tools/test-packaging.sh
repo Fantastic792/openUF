@@ -618,6 +618,10 @@ uh_run uhttpd
 check "setup: uhttpd alone is upgraded" grep -qx 'upgrade uhttpd' "$T/uh.log"
 uh_run uhttpd uhttpd-mod-ucode
 check "setup: an installed module is upgraded with it" grep -qx 'upgrade uhttpd uhttpd-mod-ucode' "$T/uh.log"
+# An old uhttpd-mod-ubus under the new uhttpd segfaults on every /ubus call,
+# and the login with it (stock 25.12.6, 2026-11-24).
+uh_run uhttpd uhttpd-mod-ubus uhttpd-mod-ucode
+check "setup: uhttpd-mod-ubus is upgraded with it too" grep -qx 'upgrade uhttpd uhttpd-mod-ubus uhttpd-mod-ucode' "$T/uh.log"
 uh_run
 check "setup: no uhttpd, nothing upgraded" test ! -s "$T/uh.log"
 

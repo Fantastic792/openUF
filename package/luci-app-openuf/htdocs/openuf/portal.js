@@ -280,7 +280,11 @@
 					renderSession();
 					renderSettings();
 				} catch (ex) {
-					err.textContent = 'That password is not correct.';
+					// Only ubus 6 (permission denied) is a wrong password. Anything
+					// else -- uhttpd dying on /ubus under a mismatched uhttpd-mod-ubus
+					// (25.12.6) -- used to read as one too.
+					err.textContent = ex.code === 6 ? 'That password is not correct.'
+						: 'The device could not check the password (' + ex.message + '). The web server may need: apk upgrade uhttpd uhttpd-mod-ubus uhttpd-mod-ucode';
 					pw.classList.add('invalid');
 					pw.select();
 					btn.disabled = false;

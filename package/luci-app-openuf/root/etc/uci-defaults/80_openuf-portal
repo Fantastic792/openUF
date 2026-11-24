@@ -36,7 +36,7 @@ LUCI='/cgi-bin/luci=/usr/share/ucode/luci/uhttpd.uc'
 # module's dependency on uhttpd carries no version. So the gate is first tried
 # on a throwaway uhttpd. When it does not load, the gate comes out of (or never
 # goes into) the configuration, LuCI is served as before, and the non-zero exit
-# keeps this script for the next boot -- after `apk upgrade uhttpd` it passes.
+# keeps this script for the next boot -- once uhttpd and its modules are upgraded together it passes.
 gate_loads() {
 	[ -x /usr/sbin/uhttpd ] && [ -f /usr/share/ucode/openuf/gate.uc ] || return 1
 	/usr/sbin/uhttpd -f -p 127.0.0.1:65081 -h /www \
@@ -56,7 +56,7 @@ if ! gate_loads; then
 	uci commit uhttpd
 	echo "luci-app-openuf: uhttpd cannot load its ucode module (uhttpd and uhttpd-mod-ucode" >&2
 	echo "luci-app-openuf: from different builds?): LuCI stays as it is, without openUF's device page." >&2
-	echo "luci-app-openuf: fix: apk upgrade uhttpd   (opkg: opkg upgrade uhttpd), then reboot" >&2
+	echo "luci-app-openuf: fix: apk upgrade uhttpd uhttpd-mod-ubus uhttpd-mod-ucode   (opkg: opkg upgrade ...), then reboot" >&2
 	exit 1
 fi
 

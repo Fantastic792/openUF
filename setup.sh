@@ -518,12 +518,15 @@ fi
 # luci-app-openuf pulls uhttpd-mod-ucode from the feed, and its dependency on
 # uhttpd carries no version: a module newer than the image's uhttpd keeps
 # uhttpd from starting at all ("Unable to open ucode handler", stock 25.12.6,
-# 2026-11-24). So uhttpd -- and the module, where it is already there -- are
-# brought up to the feed first.
+# 2026-11-24). So uhttpd -- and its installed modules -- are brought up to the
+# feed first, all together: the image's uhttpd-mod-ubus under a newer uhttpd
+# segfaults on every /ubus call, and no login (LuCI's or openUF's) works.
 upgrade_uhttpd() {
 	pkg_installed uhttpd || return 0
 	_u=uhttpd
-	pkg_installed uhttpd-mod-ucode && _u="$_u uhttpd-mod-ucode"
+	for _m in uhttpd-mod-ubus uhttpd-mod-ucode; do
+		pkg_installed $_m && _u="$_u $_m"
+	done
 	$PKG upgrade $_u >/dev/null 2>&1
 }
 
@@ -1639,7 +1642,7 @@ else
 	done
 	ok "sha256 of every package matches SHA256SUMS"
 
-	upgrade_uhttpd || warn "could not upgrade uhttpd; openUF's device page waits for '$PKG upgrade uhttpd' and a reboot"
+	upgrade_uhttpd || warn "could not upgrade uhttpd; openUF's device page waits for '$PKG upgrade uhttpd uhttpd-mod-ubus uhttpd-mod-ucode' and a reboot"
 
 	# One transaction, so luci-app-openuf's dependency on openuf resolves to
 	# the file beside it; everything else (lua, luci-base...) comes from the
