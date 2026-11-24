@@ -88,7 +88,7 @@ endef
 # `restart` (2026-10-26). On a first install nothing is running yet, so
 # nothing restarts here and default_postinst starts the services; a service
 # the user stopped stays stopped.
-define Package/openuf/postinst-pkg
+define Package/openuf/postinst
 if [ -z "$${IPKG_INSTROOT}" ] && ! grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/dev/null; then
 	echo "openuf: hostapd is a basic build (no 802.11v): openUF will not start until a full wpad is installed." >&2
 	echo "openuf: run 'openuf deps --install', or use the button on LuCI's openUF overview." >&2
@@ -165,7 +165,7 @@ endef
 # block, and the bootstrap account, only the one openUF made (its gecos says
 # so). default_prerm sources this in a subshell, then stops and disables the
 # init scripts. With a file install still present those belong to it.
-define Package/openuf/prerm-pkg
+define Package/openuf/prerm
 if [ -z "$${IPKG_INSTROOT}" ] && [ "$${PKG_UPGRADE}" != 1 ] \
 		&& { [ -L /opt/openuf ] || [ ! -f /opt/openuf/inform.lua ]; }; then
 	if uci -q get network.openuf_ftveth >/dev/null 2>&1; then

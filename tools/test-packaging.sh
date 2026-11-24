@@ -67,10 +67,16 @@ add_ubnt() { # gecos, shell
 has()   { grep -q "$1" "$2"; }
 hasnt() { ! grep -q "$1" "$2"; }
 
-# ── B1: the openuf package's preinst and prerm-pkg ─────────────────────────
+# ── B0: script defines the build knows ──────────────────────────────────────
+# OpenWrt packs Package/<p>/postinst and /prerm as the postinst-pkg / prerm-pkg
+# files itself; a define named "postinst-pkg" is silently dropped (1.0.4 on the
+# 6401: no restart on upgrade).
+check "no define named postinst-pkg or prerm-pkg" 	sh -c '! grep -nE "^define Package/[^/]+/(postinst|prerm)-pkg" package/*/Makefile'
+
+# ── B1: the openuf package's preinst and prerm ─────────────────────────────
 MK=package/openuf/Makefile
 run_prerm() { # env assignments...
-	mkdefine "$MK" Package/openuf/prerm-pkg | reroot > "$R/prerm-pkg"
+	mkdefine "$MK" Package/openuf/prerm | reroot > "$R/prerm-pkg"
 	# default_prerm sources it in a subshell and fails the removal on non-zero
 	( PATH=$R/bin:$PATH; IPKG_INSTROOT=; PKG_UPGRADE=; for a in "$@"; do eval "$a"; done
 	  . "$R/prerm-pkg" ) >/dev/null 2>&1
