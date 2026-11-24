@@ -319,6 +319,14 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
+**Fixed in 1.0.5** ([release notes](docs/release-notes/1.0.5.md)):
+
+- **An upgrade left the old version running** until the next reboot: the package's install
+  steps never ran in any 1.0.x package. Upgrading to 1.0.5 restarts openUF on the new version.
+
+**Still open:** Transmit Power Low and Medium run at full power. On the JioRouter AX6000 the
+controller's LED off shows no change (openUF drives only the green part of its one LED).
+
 **Fixed in 1.0.4** ([release notes](docs/release-notes/1.0.4.md)):
 
 - **The install command did not ask its questions** on OpenWrt 25.12: the copy of itself
@@ -535,7 +543,7 @@ Compared with [yesrab/openUF](https://github.com/yesrab/openUF) `main` at `6277b
 | Auto-channel limits | The site's DFS switch and channel blacklist were never sent to the AP | Applied to hostapd's auto-channel; a board profile's DFS exclusion still wins; from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | DFS radar | A radar hit moved the radio off its channel, the controller logged nothing, and nothing ever moved it back | Reported to the controller as the AP's radar event, and the controller's nightly `dfs-reset` puts a pinned radio back; from [jonasevcik/openUF](https://github.com/jonasevcik/openUF) |
 | STUN | Never looked the controller's name up again | Looks it up again after 3 unanswered requests |
-| Package upgrade | Left the old daemon running | Restarts openUF on the new version. Packages up to 1.0.4 never ran this step (the hook had a name the build ignores): after upgrading to 1.0.4 or older, restart openUF once (LuCI: Services > openUF, or reboot) |
+| Package upgrade | Left the old daemon running | Restarts openUF on the new version. Packages up to 1.0.4 never ran this step (the hook had a name the build ignores); fixed in 1.0.5 |
 | LuCI | — | A Setup page for a new router |
 | Tools | — | `tools/selfcheck.sh`, `tools/verify.py` (UniFi OS consoles and the self-hosted Network application), field reports with `tools/field_report.py`, and the VM lab suite in `labtest/` |
 
