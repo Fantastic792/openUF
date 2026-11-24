@@ -297,6 +297,15 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
+**Fixed in 1.0.3** (upgrade if you installed 1.0.2; [release notes](docs/release-notes/1.0.3.md)):
+
+- **The right password was refused as "not correct".** 1.0.2's installer upgraded the web
+  server but not its login module, so the web server crashed on every sign-in, in LuCI and
+  on openUF's page, and the page called that a wrong password. The installer now upgrades
+  all the parts together, and the page says when the device could not check the password.
+  A router that already has it: `apk upgrade uhttpd uhttpd-mod-ubus uhttpd-mod-ucode`,
+  then reboot.
+
 **Fixed in 1.0.2** (upgrade if you run an older one; [release notes](docs/release-notes/1.0.2.md)):
 
 - **The install command stopped on a fresh OpenWrt 25.12 router**, first at "download
@@ -309,8 +318,7 @@ than a few hours. The upstream projects' results for some of these are
   25.12.6: the feed's web server module does not load in the image's older web server, so
   the web server stopped starting, and on a general profile openUF looked for its address
   on a port outside the LAN and never announced itself. The installer now updates the web
-  server and all its modules first (a partial upgrade made uhttpd crash on every login, which
-  read as "wrong password"), openUF's page stays out (LuCI keeps working) while the two do not match,
+  server first, openUF's page stays out (LuCI keeps working) while the two do not match,
   and the address is found on the LAN bridge.
 - **`openuf deps` was broken since 1.0.0** (a "syntax error"), so the dependency page could
   neither report nor install missing packages.
