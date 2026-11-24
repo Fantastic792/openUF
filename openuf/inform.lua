@@ -863,9 +863,15 @@ function M.build_json(st, cfg, ufhw)
 	-- Nor is network gear cabled to it: an LLDP neighbour that says it is a
 	-- bridge, router or AP (an AP below this one sends from its port MAC).
 	-- A PC speaking LLDP announces none of these and stays a client.
+	-- The socket it is on reports no hosts at all: they are behind that
+	-- device, which reports them itself; both reporting the same PC made the
+	-- controller flip it between the two APs. shortcut: a third-party managed
+	-- switch below an AP loses its hosts from the controller too.
+	local infra_ports = {}
 	for _, nbr in ipairs(lldp_nbrs) do
 		for _, cap in ipairs(nbr.capabilities or {}) do
 			if cap == "Bridge" or cap == "Router" or cap == "Wlan" then
+				if nbr.port then infra_ports[nbr.port] = true end
 				for _, id in ipairs({nbr.chassis_id, nbr.port_id}) do
 					if type(id) == "string" and id:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") then
 						self_macs[id:lower()] = true
@@ -2059,7 +2065,7 @@ function M.build_json(st, cfg, ufhw)
 			-- reaches that branch; openUF cannot tell the two cases apart
 			-- from the device, so it reports nothing on the uplink at all
 			-- (upstream read this out of the controller, 2026-09-12).
-			if not entry.is_uplink and not uplink_unknown then
+			if not entry.is_uplink and not uplink_unknown and not infra_ports[p.ifname] then
 				-- This socket's bridge, which is the uplink's for every socket
 				-- openUF has not moved. bridge_of is TTL-cached and
 				-- bridge_fdb_ports is memoized per bridge NAME for the pass,

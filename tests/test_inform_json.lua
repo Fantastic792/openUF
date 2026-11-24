@@ -2432,7 +2432,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: an LLDP bridge/router/AP neighbour is not a wired client, a plain host is",
+		name = "inform json: a socket with an LLDP bridge/router/AP on it reports no hosts, a PC stays",
 		fn = function()
 			-- An AP cabled below this one announces itself over LLDP from its
 			-- port MAC; the bridge learns that MAC and it showed as a client.
@@ -2444,8 +2444,8 @@ return {
 			local d = build_dsa({lldp = '{"lldp":{"interface":['
 				.. nbr("aa:bb:cc:dd:ee:0c", '{"type":"Bridge","enabled":true}') .. "]}}"})
 			local p = by_idx(d.port_table)
-			assert_eq(#p[3].mac_table, 1, "the AP below is gone, the other host stays")
-			assert_eq(p[3].mac_table[1].mac, "aa:bb:cc:dd:ee:12", "the plain host")
+			assert_true(p[3].mac_table == nil,
+				"the AP below reports its own hosts: none from this socket")
 			d = build_dsa({lldp = '{"lldp":{"interface":['
 				.. nbr("aa:bb:cc:dd:ee:0c", '{"type":"Station","enabled":true}') .. "]}}"})
 			assert_eq(#by_idx(d.port_table)[3].mac_table, 2, "a PC speaking LLDP stays a client")

@@ -323,8 +323,11 @@ than a few hours. The upstream projects' results for some of these are
 
 - **An AP cabled below another showed up as a wired client** of the AP above it, next to
   itself in the topology: it announces itself over LLDP from its port's MAC, and the AP
-  above learned that MAC. An LLDP neighbour that says it is a bridge, router or access
-  point is no longer reported as a wired client; a PC stays one (proven on hardware).
+  above learned that MAC. And a PC plugged into the lower AP was reported by both APs, so
+  the controller kept moving it between them and the topology lost it. Now a port where an
+  LLDP neighbour says it is a bridge, router or access point reports no wired clients:
+  that device reports its own (proven on hardware). A third-party managed switch below an
+  AP's port therefore hides its clients from the controller.
 
 **Fixed in 1.0.6** ([release notes](docs/release-notes/1.0.6.md)):
 
