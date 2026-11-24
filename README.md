@@ -83,7 +83,8 @@ here (some have upstream's own results, [see below](#inherited-results-not-verif
   through the same locked-down `ubnt` login a real AP has; adoption by inform URL across
   subnets
 - ✅ Locate, client blocking, Forget and re-adopt, in-place upgrades
-- ✅ A device page instead of LuCI's login, with LuCI one step away, a dashboard, the Halo
+- ✅ A device page instead of LuCI's login, with LuCI one step away (*Open LuCI* in Local
+  Settings), a dashboard, the Halo
   theme, and a Setup page that turns a new router into an AP
 
 **WiFi from the controller**

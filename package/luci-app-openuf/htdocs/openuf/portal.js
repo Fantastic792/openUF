@@ -10,7 +10,7 @@
  *                   root password (rpcd session.login, the same login LuCI
  *                   uses).
  *
- * The Konami code (or seven taps on the device picture) offers LuCI; the gate
+ * "Open LuCI" in Local Settings, the Konami code or seven taps on the device picture offer LuCI; the gate
  * then lets LuCI through until its login session ends.
  *
  * Plain ES2017, no framework, no build step: this ships as-is to routers.
@@ -510,7 +510,9 @@
 			h('div', { class: 'settings-head' },
 				h('div', {}, h('h2', {}, 'Local Settings'), h('p', {}, adopted
 					? 'Wireless networks and radios are managed by your controller.'
-					: 'Wireless networks and radios will be managed by your controller once it adopts this device.'))),
+					: 'Wireless networks and radios will be managed by your controller once it adopts this device.')),
+				// Signed-in users looked for LuCI here and found no way in.
+				h('button', { class: 'btn', type: 'button', onclick: offerLuci, html: ICON.terminal + 'Open LuCI' })),
 			...groups);
 		renderSavebar();
 	}

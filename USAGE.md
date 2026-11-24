@@ -457,7 +457,8 @@ an openUF access point belongs to its controller, and the page says so:
   On a tarball install (`install.sh`, no `main` section in `/etc/config/openuf`) openUF's
   own fields are shown read-only: they live in `conf.lua` there.
 
-**Getting to LuCI.** On the device page type the Konami code -- ↑ ↑ ↓ ↓ ← → ← → B A -- or,
+**Getting to LuCI.** Sign in under *Local Settings* and press *Open LuCI* (top right).
+Without signing in: on the device page type the Konami code -- ↑ ↑ ↓ ↓ ← → ← → B A -- or,
 on a phone, tap the picture of the device seven times. A prompt offers LuCI; accept and
 LuCI asks for the root password as usual. LuCI then shows *Exit LuCI mode* next to its own
 *Refreshing* indicator: it signs out of LuCI and returns to the device page. The page comes
