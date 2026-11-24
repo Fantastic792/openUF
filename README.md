@@ -319,7 +319,7 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
-**Fixed after 1.0.5, not released yet:**
+**Fixed in 1.0.6** ([release notes](docs/release-notes/1.0.6.md)):
 
 - **Channel AI's quick scan swept every band on each radio** on boards where one radio
   can use several bands, and reported the other bands' channels as its own. Each radio
