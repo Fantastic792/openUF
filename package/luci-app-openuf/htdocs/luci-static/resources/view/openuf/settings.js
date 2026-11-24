@@ -278,6 +278,11 @@ return view.extend({
 		o.placeholder = '8';
 		o.datatype = 'uinteger';
 
+		o = s.taboption('features', form.Flag, 'honour_controller_width', _('Use the controller\'s channel width'),
+			_('On: the radios run exactly the width the controller sends, so a Channel AI plan goes on the air as planned. Set 80 MHz in the controller (WiFi, Default WiFi Speeds, or per access point) if you want it. Off: this board may raise the controller\'s width to its own minimum (the JioRouter boards turn 40 MHz into 80 MHz).'));
+		o.default = '0';
+		o.rmempty = false;
+
 		o = s.taboption('features', form.Value, 'country_override', _('Country code override'),
 			_('A two-letter country code programmed into the radios instead of the one the controller sends. Leave empty to follow the controller.'));
 		o.placeholder = _('for example SE');

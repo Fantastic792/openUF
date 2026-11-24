@@ -3545,6 +3545,25 @@ Wiphy phy2
 		end
 	},
 	{
+		name = "ucihelper: honour_width keeps the controller's width and skips the board floor",
+		fn = function()
+			with_ucihelper(function(db)
+				-- openuf.main.honour_controller_width: the owner chose the
+				-- controller's width (Channel AI plans at it), so the board's
+				-- HE80 floor must not turn a 40 MHz plan into 80 MHz.
+				ucihelper._popen = function() return JIDU6101_IW_PHY end
+				seed_radios({"radio1"})
+				ucihelper._uci.cursor():set("wireless", "radio1", "band", "5g")
+				ucihelper.rf_config("radio1", "HT40", 36, nil, nil, nil, nil, nil,
+					nil, JIDU_POLICY, {honour_width = true})
+				assert_eq(db.wireless.radio1.htmode, "HE40", "40 MHz as pushed, at the band's HE")
+				ucihelper.rf_config("radio1", "HT80", 36, nil, nil, nil, nil, nil,
+					nil, JIDU_POLICY, {honour_width = true})
+				assert_eq(db.wireless.radio1.htmode, "HE80", "80 MHz when the controller asks for 80")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: a country override programs the driver but reports the controller's",
 		fn = function()
 			with_ucihelper(function(db)

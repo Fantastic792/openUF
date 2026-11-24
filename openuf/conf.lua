@@ -209,6 +209,13 @@ config = {
 	-- The threshold itself comes from the controller.
 	roam_assist_diff_db = 8,
 
+	-- Channel width: false lets a board map raise the controller's width to the
+	-- board's floor (the JioRouter maps turn the controller's 40 MHz default
+	-- into 80 MHz); true runs exactly the width the controller pushes, so
+	-- Channel AI's plan is what goes on the air. Set 80 MHz in the controller
+	-- (WiFi -> Default WiFi Speeds, or per AP) if you want it with this on.
+	honour_controller_width = false,
+
 	-- Uplink Connectivity Monitor: SSIDs go off the air while the uplink is
 	-- unreachable (uplinkmon.lua). nil = follow the controller's site setting;
 	-- true/false forces it. uplink_monitor_host: what to ping (default: the

@@ -41,7 +41,7 @@ return baseclass.extend({
 			if (c[k] != null && c[k] !== '')
 				uci.set('openuf', 'main', k, String(c[k]));
 		const flags = [ 'use_only_unifi_wlan', 'l2_announce', 'rrm_enrichment', 'debug_dump_requests',
-			'uplink_monitor' ];
+			'uplink_monitor', 'honour_controller_width' ];
 		for (const k of flags)
 			if (c[k] != null)
 				uci.set('openuf', 'main', k, c[k] ? '1' : '0');

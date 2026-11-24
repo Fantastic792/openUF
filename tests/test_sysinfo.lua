@@ -2427,8 +2427,9 @@ return {
 	{
 		name = "sysinfo: phy_frequencies() lists the radio's usable channels with their passive flag, from the cached phy dump",
 		fn = function()
+			local DEV_5G = "Interface wlan0\n\twiphy 0\n\tchannel 36 (5180 MHz), width: 80 MHz, center1: 5210 MHz\n"
 			with_fixtures({}, {
-				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
+				["dev wlan0 info"] = DEV_5G,
 				["phy#0 info"]  = fixture("iw_phy_info_5g.txt"),
 			}, function()
 				local f = sysinfo.phy_frequencies("wlan0")
@@ -2445,7 +2446,7 @@ return {
 			end)
 			-- The device's own spelling ("5180.0 MHz") and a disabled channel.
 			with_fixtures({}, {
-				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
+				["dev wlan0 info"] = DEV_5G,
 				["phy#0 info"]  = "Wiphy phy0\n\tBand 2:\n\t\tFrequencies:\n" ..
 					"\t\t\t* 5745.0 MHz [149] (30.0 dBm)\n\t\t\t* 5765.0 MHz [153] (30.0 dBm) (no IR)\n" ..
 					"\t\t\t* 5845.0 MHz [169] (disabled)\n",
@@ -2454,6 +2455,25 @@ return {
 				assert_eq(#f, 2, "the disabled one is left out")
 				assert_eq(f[1].freq, 5745, "decimal MHz parsed")
 				assert_true(f[2].passive, "no IR: passive")
+			end)
+			-- One phy, several bands (mac80211_hwsim; OpenWrt 25.12's multi-radio
+			-- wiphys): only the band the interface runs on. The whole phy made a
+			-- 2.4 GHz Quick Scan sweep 5/6 GHz too, time out at the controller,
+			-- and report channels 48/64/93 as 2.4 GHz rows.
+			local multi = "Wiphy phy0\n\tBand 1:\n\t\tFrequencies:\n" ..
+				"\t\t\t* 2412.0 MHz [1] (20.0 dBm)\n\t\t\t* 2437.0 MHz [6] (20.0 dBm)\n" ..
+				"\tBand 2:\n\t\tFrequencies:\n\t\t\t* 5180.0 MHz [36] (23.0 dBm)\n" ..
+				"\tBand 4:\n\t\tFrequencies:\n\t\t\t* 6415.0 MHz [93] (23.0 dBm) (no IR)\n"
+			with_fixtures({}, {["dev wlan0 info"] = fixture("iw_dev_info.txt"), ["phy#0 info"] = multi}, function()
+				local f = sysinfo.phy_frequencies("wlan0")
+				assert_eq(#f, 2, "2.4 GHz interface: the 2.4 GHz channels only")
+				assert_eq(f[1].freq .. "," .. f[2].freq, "2412,2437", "1 and 6")
+			end)
+			with_fixtures({}, {["dev wlan0 info"] = "Interface wlan0\n\twiphy 0\n\tchannel 93 (6415 MHz), width: 20 MHz\n",
+				["phy#0 info"] = multi}, function()
+				local f = sysinfo.phy_frequencies("wlan0")
+				assert_eq(#f, 1, "6 GHz interface: 6 GHz only, not 5 GHz")
+				assert_eq(f[1].channel, 93, "channel 93")
 			end)
 		end
 	},

@@ -1143,10 +1143,16 @@ function M.phy_frequencies(ifname)
 	if not phy then return nil end
 	local text = M._phy_info(phy)
 	if not text or text == "" then return nil end
+	-- One phy can hold several bands (mac80211_hwsim, OpenWrt's multi-radio
+	-- wiphys): keep the band this interface runs on, else a 2.4 GHz sweep
+	-- also crossed 5/6 GHz and reported those as 2.4 GHz rows.
+	local function band(f) return f < 3000 and 2 or (f < 5930 and 5 or 6) end
+	local cur = tonumber(dev_info:match("channel%s+%d+%s+%((%d+)%s+MHz%)"))
 	local out = {}
 	for line in text:gmatch("[^\n]+") do
 		local freq, ch, rest = line:match("^%s*%*%s+(%d+)%.?%d*%s+MHz%s+%[(%d+)%]%s*(.*)$")
-		if freq and not rest:find("disabled", 1, true) then
+		if freq and not rest:find("disabled", 1, true)
+			and (not cur or band(tonumber(freq)) == band(cur)) then
 			out[#out + 1] = {
 				freq    = tonumber(freq),
 				channel = tonumber(ch),

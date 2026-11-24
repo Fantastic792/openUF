@@ -1848,7 +1848,10 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 				want = best .. width
 			end
 		end
-		if policy and policy.htmode_floor and not force_wifi4 then
+		-- openuf.main.honour_controller_width: the owner chose the controller's
+		-- width (Channel AI plans at it), so no board floor.
+		local honour_width = type(opts) == "table" and opts.honour_width or false
+		if policy and policy.htmode_floor and not force_wifi4 and not honour_width then
 			local raised, from = M.raise_htmode(want, policy.htmode_floor)
 			if from then
 				io.stderr:write(string.format(
@@ -2427,6 +2430,7 @@ function M.apply_config(resp, cfg, opts)
 				radio.min_rssi_enabled, radio.min_rssi, rates, radio.disabled,
 				radio.country, cfg and cfg.radio,
 				{force_wifi4 = iot_by_radio[radio.name] or false,
+				 honour_width = (cfg and cfg.config and cfg.config.honour_controller_width) or false,
 				 maxsta = radio.loadbalance_maxsta,
 				 country_beacon = country_beacon_by_radio[radio.name],
 				 acs_exclude_dfs = radio.acs_exclude_dfs,
