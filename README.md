@@ -319,6 +319,16 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
+**Fixed after 1.0.5, not released yet:**
+
+- **Channel AI's quick scan swept every band on each radio** on boards where one radio
+  can use several bands, and reported the other bands' channels as its own. Each radio
+  now scans only its own band, which also makes the scan shorter.
+- **Channel AI's 40 MHz plan went on the air at 80 MHz** on the JioRouter AX6000: its board
+  map raises the width to 80 MHz. New setting **Use the controller's channel width**
+  (LuCI, openUF Settings, WiFi behaviour; UCI `openuf.main.honour_controller_width`). On: the
+  radios run exactly the width the controller sends. Off (the default): unchanged.
+
 **Fixed in 1.0.5** ([release notes](docs/release-notes/1.0.5.md)):
 
 - **An upgrade left the old version running** until the next reboot: the package's install
