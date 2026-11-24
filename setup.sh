@@ -224,6 +224,15 @@ fetch_asset() {
 	fi
 	return 1
 }
+# self_fetch <name> <name BRE>: a file of this release into $_selfdir, for the re-exec
+# below. github.com alone is not enough (see fetch_asset): on a failure the same file
+# comes by the release JSON and fetch_asset's api.github.com URL.
+self_fetch() {
+	fetch "$RELEASE_DL/$1" "$_selfdir/$1" && return 0
+	[ -s "$_selfdir/release.json" ] || fetch "$OPENUF_RELEASE_URL" "$_selfdir/release.json" || return 1
+	_u=$(release_asset "$_selfdir/release.json" "$2" | head -1)
+	[ -n "$_u" ] && fetch_asset "$_selfdir/release.json" "$_u" "$_selfdir/$1"
+}
 
 # Can /dev/tty actually be OPENED? `[ -r /dev/tty ]` is not the same question:
 # it answers yes in plenty of places where the open then fails with "Device not
@@ -268,11 +277,14 @@ if [ -z "${OPENUF_REEXEC:-}" ] && [ ! -t 0 ]; then
 		# its line in SHA256SUMS by that name.
 		_selfdir="/tmp/openuf-setup.$$"
 		_self="$_selfdir/setup.sh"
-		if mkdir -p "$_selfdir" && fetch "$OPENUF_SELF_URL" "$_self"; then
+		_rel=0
+		[ -z "$OPENUF_BRANCH" ] && [ "$OPENUF_SELF_URL" = "$RELEASE_DL/setup.sh" ] && _rel=1
+		if mkdir -p "$_selfdir" && if [ "$_rel" = 1 ]; then self_fetch setup.sh 'setup\.sh'
+				else fetch "$OPENUF_SELF_URL" "$_self"; fi; then
 			# The copy about to run as root is the release's, by its checksum.
-			if [ -z "$OPENUF_BRANCH" ] && [ "$OPENUF_SELF_URL" = "$RELEASE_DL/setup.sh" ]; then
-				{ fetch "$RELEASE_DL/SHA256SUMS" "$_selfdir/SHA256SUMS" \
-					&& fetch "$RELEASE_DL/SHA256SUMS.sig" "$_selfdir/SHA256SUMS.sig" \
+			if [ "$_rel" = 1 ]; then
+				{ self_fetch SHA256SUMS 'SHA256SUMS' \
+					&& self_fetch SHA256SUMS.sig 'SHA256SUMS\.sig' \
 					&& verify_sums_sig "$_selfdir/SHA256SUMS" "$_selfdir/SHA256SUMS.sig" \
 					&& check_sha256 "$_self" "$_selfdir/SHA256SUMS"; } \
 					|| die "the downloaded setup.sh could not be checked against the release's
@@ -1829,7 +1841,9 @@ if [ "$OPT_ROAMING" = 1 ] && [ -n "$RRB_SRC" ]; then
 			|| warn "could not link /opt/openuf to $PKG_DIR; an rrb-unifi-setup older than 1.5.1 will not see openUF"
 	fi
 	if ( cd "$RRB_SRC" && sh ./rrb-unifi-setup install --yes ); then
-		[ -x /usr/sbin/rrb-unifi-setup ] && /usr/sbin/rrb-unifi-setup confirm >/dev/null 2>&1
+		# Its "confirm within 120s" is answered here: this script is the session.
+		[ -x /usr/sbin/rrb-unifi-setup ] && /usr/sbin/rrb-unifi-setup confirm >/dev/null 2>&1 \
+			&& ok "rrb-unifi network change confirmed (nothing to do by hand)"
 		ok "rrb-unifi translator installed and enabled (service rrb-unifi)"
 	else
 		warn "rrb-unifi-setup install did not finish (its output is above). The roaming"
@@ -2156,8 +2170,8 @@ say ""
 if [ "$HEADLESS" = 0 ]; then
 	say "  Web: after the reboot the device's address opens openUF's page (status"
 	say "  for anyone on the network, settings behind the root password). LuCI is"
-	say "  one step behind it -- the Konami code, or seven taps on the device"
-	say "  picture -- and opens on its new dashboard. 'uci set openuf.web.portal=0'"
+	say "  one step behind it -- sign in under Local Settings and press Open LuCI"
+	say "  -- and opens on its new dashboard. 'uci set openuf.web.portal=0'"
 	say "  makes the address open LuCI directly."
 	say ""
 fi

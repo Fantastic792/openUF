@@ -59,6 +59,12 @@ class CycleTest(unittest.TestCase):
         self.assertEqual(cycle.leftovers(before, after, keep), ["/etc/init.d/openuf", "/opt/openuf/inform.lua"])
         self.assertTrue(all(reason for _, reason in cycle.KEEP))  # every keep says why
 
+    def test_leftovers_skips_files_a_kept_package_owns(self):
+        before = ["/etc/passwd"]
+        after = before + ["/etc/init.d/lldpd", "/usr/sbin/lldpd", "/lib/apk/packages/lldpd.list", "/opt/openuf/x"]
+        self.assertEqual(cycle.leftovers(before, after, owned=["etc/init.d/lldpd", "/usr/sbin/lldpd"]),
+                         ["/opt/openuf/x"])
+
     def test_cycle_refuses_hardware(self):
         with self.assertRaises(SystemExit):
             cycle.run(self.conf, FakeTarget(kind="hw"), FakeCtl())

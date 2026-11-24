@@ -260,6 +260,14 @@ check "fetch_asset writes the fallback download" grep -qx api "$R/o1"
 rm -f "$R/uf.log"; FETCH_OK=1 fa "$R/api.json" https://x/d/v1.2.3/openuf-1.2.3.tar.gz "$R/o2"
 check "fetch_asset uses the plain URL when it works" eval 'grep -qx direct "$R/o2" && [ ! -e "$R/uf.log" ]'
 check "fetch_asset gives up on a file the release does not list" eval '! FETCH_OK=0 fa "$R/api.json" https://x/d/v1.2.3/nope "$R/o3"'
+# self_fetch: the re-exec (wget ... | sh) fetches its own copy the same way.
+mkfunc setup.sh self_fetch > "$R/sf.sh"
+sf() { ( PATH="$R/bin:$PATH"; UF_LOG="$R/uf.log"; export UF_LOG; info() { :; }
+	RELEASE_DL=https://x/latest; OPENUF_RELEASE_URL=https://api/rel; _selfdir="$R/sd"; mkdir -p "$_selfdir"
+	fetch() { [ "$1" = https://api/rel ] && cp "$R/api.json" "$2"; }
+	. "$R/f.sh"; . "$R/fa.sh"; . "$R/sf.sh"; self_fetch "$@" ) >/dev/null 2>&1; }
+rm -rf "$R/uf.log" "$R/sd"; sf SHA256SUMS SHA256SUMS
+check "setup.sh's re-exec fetches through the API when github.com fails" 	eval 'grep -qx api "$R/sd/SHA256SUMS" && grep -q "releases/assets/9$" "$R/uf.log"'
 
 # setup.sh's source download, its fetch a stub that serves $R/rel by name.
 srcdl() { # 0 or 1: whether the archive is tampered with; 2: the sums are not signed by the release key

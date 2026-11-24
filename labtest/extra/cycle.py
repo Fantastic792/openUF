@@ -7,7 +7,11 @@ import time
 from labtest import results, table
 
 # what install.sh's uninstall) block leaves on purpose: (prefix, the install.sh line saying so)
-KEEP = [("/etc/openuf/", "install.sh uninstall: 'Remove installed files (leave state dir so authkey is preserved)'")]
+KEEP = [("/etc/openuf/", "install.sh uninstall: 'Remove installed files (leave state dir so authkey is preserved)'"),
+        ("/lib/apk/", "install.sh uninstall: 'packages openUF's features use ... other software may need them' (apk db)"),
+        ("/usr/lib/opkg/", "install.sh uninstall: the same packages, opkg's db")]
+# The package lists of what is still installed: a file one of them owns is one of those packages', not a leftover.
+OWNED = "cat /lib/apk/packages/*.list /usr/lib/opkg/info/*.list 2>/dev/null"
 SKIP = ("/proc/", "/sys/", "/dev/", "/tmp/", "/var/run/")
 OLD = "v0.13.0"
 BOOT_WAIT = 45  # the lab's fresh-VM recipe: reset; start; sleep 45; provision; prepare
@@ -16,8 +20,10 @@ GOES_ON = {"leftovers"}  # recorded failure; later steps do not need it, so the 
 UNINSTALL ="f=/opt/openuf/install.sh; [ -f $f ] || f=/tmp/openUF/install.sh; sh $f uninstall"
 
 
-def leftovers(before, after, keep=KEEP):
-    return sorted(p for p in set(after) - set(before) if not any(p.startswith(k) for k, _ in keep))
+def leftovers(before, after, keep=KEEP, owned=()):
+    owned = {"/" + p.lstrip("/") for p in owned}
+    return sorted(p for p in set(after) - set(before)
+                  if p not in owned and not any(p.startswith(k) for k, _ in keep))
 
 
 def _files(t):
@@ -68,7 +74,7 @@ def run(conf, t, ctl):
         return rc == 0, out.strip()[-200:]
 
     def left():
-        lo = leftovers(state["before"], _files(t))
+        lo = leftovers(state["before"], _files(t), owned=t.ssh(OWNED, timeout=60)[1].split())
         return not lo, ", ".join(lo[:10])
 
     def install_old():

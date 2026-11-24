@@ -297,6 +297,12 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
+**Fixed in 1.0.4** ([release notes](docs/release-notes/1.0.4.md)):
+
+- **The install command did not ask its questions** on OpenWrt 25.12: the copy of itself
+  it downloads to talk to the keyboard failed (the same github.com download problem), so
+  it ran with the default answers. It now fetches that copy through GitHub's API address.
+
 **Fixed in 1.0.3** (upgrade if you installed 1.0.2; [release notes](docs/release-notes/1.0.3.md)):
 
 - **The right password was refused as "not correct".** 1.0.2's installer upgraded the web
