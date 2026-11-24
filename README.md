@@ -319,6 +319,13 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
+**Fixed after 1.0.6, not released yet:**
+
+- **An AP cabled below another showed up as a wired client** of the AP above it, next to
+  itself in the topology: it announces itself over LLDP from its port's MAC, and the AP
+  above learned that MAC. An LLDP neighbour that says it is a bridge, router or access
+  point is no longer reported as a wired client; a PC stays one (proven on hardware).
+
 **Fixed in 1.0.6** ([release notes](docs/release-notes/1.0.6.md)):
 
 - **Channel AI's quick scan swept every band on each radio** on boards where one radio

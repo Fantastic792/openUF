@@ -2432,6 +2432,26 @@ return {
 		end
 	},
 	{
+		name = "inform json: an LLDP bridge/router/AP neighbour is not a wired client, a plain host is",
+		fn = function()
+			-- An AP cabled below this one announces itself over LLDP from its
+			-- port MAC; the bridge learns that MAC and it showed as a client.
+			local function nbr(mac, caps)
+				return '{"name":"lan3","neighbor":{"chassis":{"id":{"type":"mac","value":"'
+					.. mac .. '"},"capability":[' .. caps .. ']},"port":{"id":{"type":"mac","value":"'
+					.. mac .. '"}}}}'
+			end
+			local d = build_dsa({lldp = '{"lldp":{"interface":['
+				.. nbr("aa:bb:cc:dd:ee:0c", '{"type":"Bridge","enabled":true}') .. "]}}"})
+			local p = by_idx(d.port_table)
+			assert_eq(#p[3].mac_table, 1, "the AP below is gone, the other host stays")
+			assert_eq(p[3].mac_table[1].mac, "aa:bb:cc:dd:ee:12", "the plain host")
+			d = build_dsa({lldp = '{"lldp":{"interface":['
+				.. nbr("aa:bb:cc:dd:ee:0c", '{"type":"Station","enabled":true}') .. "]}}"})
+			assert_eq(#by_idx(d.port_table)[3].mac_table, 2, "a PC speaking LLDP stays a client")
+		end
+	},
+	{
 		name = "inform json: an undetectable DSA uplink reports ports but no wired clients",
 		fn = function()
 			-- Refuse rather than guess. A map that asked for detection and got

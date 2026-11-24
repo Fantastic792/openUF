@@ -860,6 +860,21 @@ function M.build_json(st, cfg, ufhw)
 	for _, iface in ipairs(ifaces) do
 		if iface.mac and iface.mac ~= "" then self_macs[iface.mac] = true end
 	end
+	-- Nor is network gear cabled to it: an LLDP neighbour that says it is a
+	-- bridge, router or AP (an AP below this one sends from its port MAC).
+	-- A PC speaking LLDP announces none of these and stays a client.
+	for _, nbr in ipairs(lldp_nbrs) do
+		for _, cap in ipairs(nbr.capabilities or {}) do
+			if cap == "Bridge" or cap == "Router" or cap == "Wlan" then
+				for _, id in ipairs({nbr.chassis_id, nbr.port_id}) do
+					if type(id) == "string" and id:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") then
+						self_macs[id:lower()] = true
+					end
+				end
+				break
+			end
+		end
+	end
 
 	-- ufuci: VAP/radio info (require("uci") calls inside it can legitimately
 	-- fail off-target, so individual calls are still pcall-wrapped below)
