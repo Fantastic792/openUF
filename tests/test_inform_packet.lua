@@ -2070,6 +2070,14 @@ return {
 			assert_eq(radio_table[2].channel, 36, "explicit channel parsed as a number")
 			assert_eq(radio_table[2].tx_power, 17, "explicit tx_power parsed as a number")
 
+			local rt = inform._parse_wifi_system_cfg(
+				"radio.1.phyname=radio0\nradio.1.txpower=auto\nradio.1.txpower_mode=low\n"
+				.. "radio.2.phyname=radio1\nradio.2.txpower=auto\nradio.2.txpower_mode=medium\n"
+				.. "radio.3.phyname=radio2\nradio.3.txpower=auto\nradio.3.txpower_mode=high\n")
+			assert_eq(rt[1].tx_power, "low", "Transmit Power Low reaches rf_config")
+			assert_eq(rt[2].tx_power, "medium", "Transmit Power Medium reaches rf_config")
+			assert_eq(rt[3].tx_power, "auto", "High stays the driver's max")
+
 			assert_eq(#vap_table, 1, "one vap parsed (only wireless.1.* present)")
 			assert_eq(vap_table[1].ssid, "openuf-test", "ssid from wireless.1.ssid")
 			assert_eq(vap_table[1].radio, "radio0", "radio from wireless.1.parent")

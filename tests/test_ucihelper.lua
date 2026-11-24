@@ -2519,6 +2519,26 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: Transmit Power Low/Medium run below the radio's max",
+		fn = function()
+			with_ucihelper(function(db)
+				-- The controller's Low/Medium arrive as txpower=auto +
+				-- txpower_mode=low|medium; full power for those was the bug.
+				ucihelper._popen = function() return JIDU6101_IW_PHY end
+				seed_radios({"radio1"})
+				ucihelper._uci.cursor():set("wireless", "radio1", "band", "5g")
+				local max = ucihelper.phy_caps().na.max_txpower
+				assert(max and max > 12, "fixture has a 5 GHz max")
+				ucihelper.rf_config("radio1", nil, nil, "medium")
+				assert_eq(db.wireless.radio1.txpower, tostring(max - 6), "Medium = max - 6 dB")
+				ucihelper.rf_config("radio1", nil, nil, "low")
+				assert_eq(db.wireless.radio1.txpower, tostring(max - 12), "Low = max - 12 dB")
+				ucihelper.rf_config("radio1", nil, nil, "auto")
+				assert_eq(db.wireless.radio1.txpower, nil, "High/Auto back to the driver's max")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: apply_config deletes a stale fixed txpower when the controller reverts to Auto",
 		fn = function()
 			-- "Transmit Power: Auto" arrives as the literal radio.<n>.txpower=auto.

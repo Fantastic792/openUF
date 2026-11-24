@@ -1892,6 +1892,16 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 		end
 		cursor:set("wireless", radio, "htmode", clamped)
 	end
+	if txpwr == "low" or txpwr == "medium" then
+		-- shortcut: max - 12 / max - 6 dB is a guess (no stock table found;
+		-- needs RE of a UAP's firmware), change here when one is known.
+		local max = (M.phy_caps()[band] or {}).max_txpower
+		if max then
+			txpwr = math.max(1, max - (txpwr == "low" and 12 or 6))
+		else
+			txpwr = "auto"
+		end
+	end
 	if txpwr == "auto" then
 		-- UCI has no auto txpower value: absent option = driver default/max.
 		-- Deleting is what makes "Transmit Power: Auto" actually revert a

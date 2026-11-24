@@ -3373,7 +3373,11 @@ function M._parse_wifi_system_cfg(sys_raw)
 				-- option for it. Dropping it to nil instead stranded the last
 				-- fixed dBm in UCI, silently overriding the user's switch
 				-- back to Auto. Absent/garbage still -> nil, leaving UCI alone.
-				tx_power = tonumber(r.txpower) or (r.txpower == "auto" and "auto" or nil),
+				-- Transmit Power Low/Medium arrive as txpower=auto plus
+				-- txpower_mode=low|medium: the mode wins, rf_config turns it
+				-- into dBm below the radio's max (High is plain auto = max).
+				tx_power = ((r.txpower_mode == "low" or r.txpower_mode == "medium") and r.txpower_mode)
+					or tonumber(r.txpower) or (r.txpower == "auto" and "auto" or nil),
 				-- nil for an absent/unrecognized token, leaving htmode alone.
 				htmode   = _htmode_from_ieee_mode(r.ieee_mode),
 				-- Per-radio disable (Devices -> [AP] -> Radios -> Transmit

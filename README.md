@@ -328,14 +328,17 @@ than a few hours. The upstream projects' results for some of these are
   map raises the width to 80 MHz. New setting **Use the controller's channel width**
   (LuCI, openUF Settings, WiFi behaviour; UCI `openuf.main.honour_controller_width`). On: the
   radios run exactly the width the controller sends. Off (the default): unchanged.
+- **Transmit Power Low and Medium ran at full power.** Medium now runs 6 dB and Low 12 dB
+  below the radio's maximum (proven on hardware). The stock firmware's exact values are not
+  known; these are a choice, not a copy.
+- **LED off left the JioRouter AX6000's LED red**: openUF turned off only the green colour,
+  and OpenWrt's running light is the red one. LED off now turns off every colour of that
+  LED and LED on puts them back (proven on hardware).
 
 **Fixed in 1.0.5** ([release notes](docs/release-notes/1.0.5.md)):
 
 - **An upgrade left the old version running** until the next reboot: the package's install
   steps never ran in any 1.0.x package. Upgrading to 1.0.5 restarts openUF on the new version.
-
-**Still open:** Transmit Power Low and Medium run at full power. On the JioRouter AX6000 the
-controller's LED off shows no change (openUF drives only the green part of its one LED).
 
 **Fixed in 1.0.4** ([release notes](docs/release-notes/1.0.4.md)):
 

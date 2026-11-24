@@ -161,9 +161,50 @@ end
 -- with the LED already off -- keeps the old steady "none" at full scale.
 M._default_trigger = {}
 
+-- Injectable: the names in /sys/class/leds.
+M._list_leds = function()
+	local out = {}
+	for n in (util.popen("ls " .. LED_ROOT) or ""):gmatch("%S+") do out[#out + 1] = n end
+	return out
+end
+
+-- The other colours of the same LED ("red:status" for "green:status", same
+-- vendor prefix and function), each with the state it had before LED off.
+-- A board whose running LED is another colour of the one lamp (JioRouter
+-- AX6000: red) otherwise stays lit through the controller's LED off.
+-- shortcut: in memory only, so a restart while off restores them as off;
+-- persist like Locate's snapshot if that matters.
+M._siblings = {}
+
+local function siblings(led_path, enabled)
+	local name = led_path:match("([^/]+)$")
+	local head, fn = name:match("^(.-)[^:]+:([^:]+)$")
+	if not fn then return end
+	for _, n in ipairs(M._list_leds()) do
+		local p = LED_ROOT .. n
+		if n ~= name and n:match("^(.-)[^:]+:([^:]+)$") == head and n:match(":([^:]+)$") == fn then
+			local saved = M._siblings[p]
+			if not enabled then
+				if not saved then
+					local b = M._read_file(p .. "/brightness")
+					M._siblings[p] = {trigger = active_trigger(p) or "none",
+						brightness = type(b) == "string" and b:match("%d+") or "0"}
+				end
+				M._write_file(p .. "/trigger", "none")
+				M._write_file(p .. "/brightness", "0")
+			elseif saved then
+				M._write_file(p .. "/trigger", saved.trigger)
+				if saved.trigger == "none" then M._write_file(p .. "/brightness", saved.brightness) end
+				M._siblings[p] = nil
+			end
+		end
+	end
+end
+
 function M.set_enabled(led, enabled)
 	local led_path = _resolve(led)
 	if not led_path then return false end
+	siblings(led_path, enabled)
 	local cur = active_trigger(led_path)
 	if cur and cur ~= "none" and cur ~= "timer" and not M._default_trigger[led_path] then
 		M._default_trigger[led_path] = cur

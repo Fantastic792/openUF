@@ -27,6 +27,47 @@ end
 
 return {
 	{
+		name = "led: LED off also darkens the other colours of the same LED, on puts them back",
+		fn = function()
+			-- JioRouter AX6000: one LED, three colours. openUF owns green;
+			-- OpenWrt's running LED is red, so "LED off" left it lit.
+			local fs = {
+				["green:status"] = {t = "none", b = "1"},
+				["red:status"] = {t = "none", b = "1"},
+				["blue:status"] = {t = "none", b = "0"},
+				["mt76-phy0"] = {t = "phy0tpt", b = "0"},
+			}
+			local orig_w, orig_r, orig_l = led._write_file, led._read_file, led._list_leds
+			led._list_leds = function() return {"blue:status", "green:status", "mt76-phy0", "red:status"} end
+			led._write_file = function(path, v)
+				local n, f = path:match("/sys/class/leds/([^/]+)/(%a+)$")
+				if f == "trigger" then fs[n].t = v elseif f == "brightness" then fs[n].b = v end
+				return true
+			end
+			led._read_file = function(path)
+				local n, f = path:match("/sys/class/leds/([^/]+)/([%a_]+)$")
+				if f == "trigger" then return "none timer [" .. fs[n].t .. "]\n" end
+				if f == "brightness" then return fs[n].b .. "\n" end
+				if f == "max_brightness" then return "1\n" end
+			end
+			led._saved_trigger, led._default_trigger, led._siblings = {}, {}, {}
+			local ok, err = pcall(function()
+				led.set_enabled("green:status", false)
+				led.set_enabled("green:status", false)   -- every push repeats it
+				assert_eq(fs["red:status"].b, "0", "red off with green")
+				assert_eq(fs["blue:status"].b, "0", "blue stays off")
+				assert_eq(fs["mt76-phy0"].t, "phy0tpt", "a radio LED is not a sibling")
+				led.set_enabled("green:status", true)
+				assert_eq(fs["red:status"].b, "1", "red back on")
+				assert_eq(fs["blue:status"].b, "0", "blue back to off, not lit")
+				assert_eq(fs["green:status"].b, "1", "green on")
+			end)
+			led._write_file, led._read_file, led._list_leds = orig_w, orig_r, orig_l
+			led._saved_trigger, led._default_trigger, led._siblings = {}, {}, {}
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "led: locate_start returns false with nil led_path (no-op)",
 		fn = function()
 			assert_false(led.locate_start(nil), "no-op without led_path")
