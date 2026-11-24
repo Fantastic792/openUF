@@ -221,7 +221,11 @@ class Controller:
                 return
             except urllib.error.HTTPError as e:
                 # UniFi OS answers a bad password 401/403; the self-hosted
-                # application 400 (api.err.Invalid). A 404 is the wrong flavour.
+                # application 400 (api.err.Invalid). A 404 is the wrong flavour,
+                # and so is the self-hosted 10.x's 401 api.err.LoginRequired on
+                # /api/auth/login, a route it only serves after a login.
+                if b"LoginRequired" in (e.read() or b""):
+                    continue
                 if e.code in (400, 401, 403):
                     raise RuntimeError("controller refused the login (HTTP %d)" % e.code)
             except (urllib.error.URLError, ValueError):

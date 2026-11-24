@@ -537,7 +537,7 @@ Compared with [yesrab/openUF](https://github.com/yesrab/openUF) `main` at `6277b
 | STUN | Never looked the controller's name up again | Looks it up again after 3 unanswered requests |
 | Package upgrade | Left the old daemon running | Restarts openUF and the translator |
 | LuCI | — | A Setup page for a new router |
-| Tools | — | `tools/selfcheck.sh`, `tools/verify.py`, field reports with `tools/field_report.py`, and the VM lab suite in `labtest/` |
+| Tools | — | `tools/selfcheck.sh`, `tools/verify.py` (UniFi OS consoles and the self-hosted Network application), field reports with `tools/field_report.py`, and the VM lab suite in `labtest/` |
 
 ## Inherited results, not verified here
 

@@ -431,6 +431,36 @@ PYEOF
 check "verify.py redact_text hides secret values, keeps the rest" python3 "$T/rt.py"
 check "verify.py writes router.txt through redact_text" grep -q 'f.write(redact_text(raw))' tools/verify.py
 
+# ── B15b: verify.py logs in to a self-hosted Network application ─────────────
+# Network 10.x answers /api/auth/login with 401 api.err.LoginRequired (not a 404), which
+# was read as a wrong password: verify.py never tried /api/login (JIDU6401, 2026-11-24).
+cat > "$T/login.py" <<'PYEOF'
+import io, sys, urllib.error
+sys.path.insert(0, "tools")
+import verify
+def ctl(answers):
+    c = verify.Controller("https://ctl:8443", "default", None, "u", "p", False)
+    def req(path, body=None):
+        code, msg = answers[path]
+        if code != 200:
+            raise urllib.error.HTTPError(path, code, "x", {}, io.BytesIO(msg.encode()))
+        return {}
+    c._req = req
+    return c
+c = ctl({"/api/auth/login": (401, '{"meta":{"rc":"error","msg":"api.err.LoginRequired"},"data":[]}'),
+         "/api/login": (200, "")})
+c.login(); assert c.prefix == "", c.prefix
+c = ctl({"/api/auth/login": (200, "")}); c.login(); assert c.prefix == "/proxy/network"
+for answers in ({"/api/auth/login": (401, '{"code":"AUTHENTICATION_FAILED_INVALID_CREDENTIALS"}')},
+                {"/api/auth/login": (401, '{"meta":{"msg":"api.err.LoginRequired"}}'),
+                 "/api/login": (400, '{"meta":{"rc":"error","msg":"api.err.Invalid"}}')}):
+    try:
+        ctl(answers).login(); raise SystemExit("a wrong password logged in")
+    except RuntimeError as e:
+        assert "refused the login" in str(e), e
+PYEOF
+check "verify.py: self-hosted 401 LoginRequired falls through to /api/login; a wrong password still refuses" python3 "$T/login.py"
+
 # ── B16: field_report.py also refuses MACs, LAN IPs, SSIDs and hostnames ───
 _fr() { # a report whose first result's evidence is $1 -> checker exit status
 	sed "s|^evidence = .*|evidence = \"$1\"|;" "$T/fr-base.toml" > "$T/fr.toml"
