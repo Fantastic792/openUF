@@ -242,9 +242,9 @@ check "release_asset finds the archive, not its .sha256" \
 check "release_asset finds SHA256SUMS" \
 	eval '[ "$( . "$R/f.sh"; release_asset "$R/rel.json" SHA256SUMS)" = https://x/d/v1.2.3/SHA256SUMS ]'
 
-# fetch_asset: stock OpenWrt 25.12 (uclient-fetch + mbedtls) gets no answer
-# from github.com itself while api.github.com and the release CDN work (VM lab,
-# 2026-11-18), so a release file falls back to the API's asset URL.
+# fetch_asset: stock OpenWrt 25.12's uclient-fetch cannot take github.com's
+# release redirects (a header line over 4 KB), so a release file falls back to
+# the API's asset URL.
 mkfunc setup.sh fetch_asset > "$R/fa.sh"
 printf '{"url":"https://api.github.com/repos/o/r/releases/1","assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/7","uploader":{"url":"https://api.github.com/users/u"},"name":"openuf-1.2.3.tar.gz","browser_download_url":"https://x/d/v1.2.3/openuf-1.2.3.tar.gz"},{"url":"https://api.github.com/repos/o/r/releases/assets/9","name":"SHA256SUMS","browser_download_url":"https://x/d/v1.2.3/SHA256SUMS"}]}' \
 	> "$R/api.json"
@@ -564,6 +564,62 @@ check "the init script has the cleanup line" test -s "$R/clean.sh"
 check "a stale uci temp file is removed at start" test ! -e "$R/etc/config/.wireless.uci-AbCdEf"
 check "a fresh one (a commit in progress) is left" test -e "$R/etc/config/.network.uci-QwErTy"
 check "the config file itself is untouched" test -e "$R/etc/config/wireless"
+
+# ── luci-app-openuf: the gate goes in only where uhttpd can load it ────────
+# uhttpd-mod-ucode newer than the image's uhttpd: uhttpd exits at start with
+# "Unable to open ucode handler" and the whole web interface is gone (stock
+# 25.12.6, 2026-11-24). The stub uhttpd exits at once (cannot load) or stays up.
+portal_run() { # loads | fails
+	newroot "portal-$1"; mkdir -p "$R/etc/config" "$R/usr/share/ucode/openuf" "$R/etc/uci-defaults"
+	: > "$R/etc/config/uhttpd"; : > "$R/usr/share/ucode/openuf/gate.uc"
+	if [ "$1" = loads ]; then printf '#!/bin/sh\nexec sleep 5\n' > "$R/usr/sbin/uhttpd"
+	else printf '#!/bin/sh\necho "Error: Unable to open ucode handler" >&2\nexit 1\n' > "$R/usr/sbin/uhttpd"; fi
+	cat > "$R/bin/uci" <<EOF
+#!/bin/sh
+[ "\$1" = -q ] && shift
+echo "\$*" >> "$R/uci.log"
+case "\$1" in
+	show) [ "\$2" = uhttpd ] && echo "uhttpd.main=uhttpd" ;;
+esac
+exit 0
+EOF
+	chmod +x "$R/bin/uci" "$R/usr/sbin/uhttpd"
+	reroot < package/luci-app-openuf/root/etc/uci-defaults/80_openuf-portal \
+		| sed "s#/usr/share/ucode/#$R/usr/share/ucode/#g" > "$R/portal.sh"
+	( PATH="$R/bin:$PATH" sh "$R/portal.sh" ) 2> "$R/portal.err"
+}
+# The scratch-root rewrite also moves the gate's path inside the prefix string.
+G='ucode_prefix=/cgi-bin/luci=.*/usr/share/ucode/openuf/gate\.uc$'
+portal_run loads
+check "portal: a loadable gate exits 0" test $? = 0
+check "portal: a loadable gate is added" grep -q "^add_list uhttpd\.main\.$G" "$R/uci.log"
+portal_run fails
+check "portal: a gate uhttpd cannot load exits non-zero (kept for the next boot)" test $? != 0
+check "portal: a gate uhttpd cannot load is not added" eval "! grep -qF 'add_list' '$R/uci.log'"
+check "portal: LuCI's own line is left alone then" eval "! grep -q 'ucode/luci/uhttpd.uc' '$R/uci.log'"
+check "portal: it says how to fix it" grep -q 'upgrade uhttpd' "$R/portal.err"
+portal_run fails
+check "portal: a gate already in place that cannot load is taken out" grep -q "^del_list uhttpd\.main\.$G" "$R/uci.log"
+check "portal: and committed" grep -qx 'commit uhttpd' "$R/uci.log"
+
+# setup.sh brings uhttpd (and an installed uhttpd-mod-ucode) up to the feed
+# before luci-app-openuf pulls the module in.
+uh_run() { # installed packages...
+	{ echo "INST='$*'; pkg_installed() { case \" \$INST \" in *\" \$1 \"*) return 0 ;; esac; return 1; }"
+	  echo "PKG=pkgstub; pkgstub() { echo \"\$*\" >> '$T/uh.log'; }"
+	  sed -n '/^upgrade_uhttpd() {$/,/^}$/p' setup.sh
+	  echo upgrade_uhttpd; } > "$T/uh.sh"
+	: > "$T/uh.log"; sh "$T/uh.sh"
+}
+check "setup: upgrade_uhttpd is in setup.sh" grep -q '^upgrade_uhttpd() {$' setup.sh
+check "setup: upgrade_uhttpd runs before the package install" \
+	test "$(grep -n 'upgrade_uhttpd ||' setup.sh | cut -d: -f1)" -lt "$(grep -n 'pkg_add_v --allow-untrusted "\$P_OPENUF"' setup.sh | cut -d: -f1)"
+uh_run uhttpd
+check "setup: uhttpd alone is upgraded" grep -qx 'upgrade uhttpd' "$T/uh.log"
+uh_run uhttpd uhttpd-mod-ucode
+check "setup: an installed module is upgraded with it" grep -qx 'upgrade uhttpd uhttpd-mod-ucode' "$T/uh.log"
+uh_run
+check "setup: no uhttpd, nothing upgraded" test ! -s "$T/uh.log"
 
 # ── dist.sh: a script's --help header survives the strip ───────────────────
 # openuf-convert/-deps/-bootstrap and the openuf CLI print their usage

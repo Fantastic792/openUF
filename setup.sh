@@ -204,9 +204,10 @@ release_asset() {
 		| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\/'"$2"'\)".*/\1/p'
 }
 # fetch_asset <release.json> <browser_download_url> <dst>: a release file. When
-# github.com itself does not answer -- stock OpenWrt 25.12's uclient-fetch with
-# mbedtls hangs there while api.github.com and the release CDN work (VM lab,
-# 2026-11-18) -- the same file through the API's asset URL. Integrity is
+# github.com does not answer, the same file through the API's asset URL: OpenWrt
+# 25.12's uclient-fetch drops any response with a header line over 4 KB, and
+# github.com's release redirects carry a 4.2 KB Content-Security-Policy line,
+# while the API's do not (lab, 2026-11-24). Integrity is
 # unchanged: every file is still checked against the signed SHA256SUMS.
 fetch_asset() {
 	fetch "$2" "$3" && return 0
@@ -513,6 +514,18 @@ elif command -v opkg >/dev/null 2>&1; then
 else
 	die "neither apk nor opkg found; cannot install dependencies."
 fi
+
+# luci-app-openuf pulls uhttpd-mod-ucode from the feed, and its dependency on
+# uhttpd carries no version: a module newer than the image's uhttpd keeps
+# uhttpd from starting at all ("Unable to open ucode handler", stock 25.12.6,
+# 2026-11-24). So uhttpd -- and the module, where it is already there -- are
+# brought up to the feed first.
+upgrade_uhttpd() {
+	pkg_installed uhttpd || return 0
+	_u=uhttpd
+	pkg_installed uhttpd-mod-ucode && _u="$_u uhttpd-mod-ucode"
+	$PKG upgrade $_u >/dev/null 2>&1
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 0b — probe the device
@@ -1625,6 +1638,8 @@ else
 			|| die "$(basename "$_p") failed its checksum; not installing anything"
 	done
 	ok "sha256 of every package matches SHA256SUMS"
+
+	upgrade_uhttpd || warn "could not upgrade uhttpd; openUF's device page waits for '$PKG upgrade uhttpd' and a reboot"
 
 	# One transaction, so luci-app-openuf's dependency on openuf resolves to
 	# the file beside it; everything else (lua, luci-base...) comes from the

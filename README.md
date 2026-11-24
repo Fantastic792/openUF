@@ -303,7 +303,13 @@ than a few hours. The upstream projects' results for some of these are
   openUF release key" (it has no `openssl` to check the signature with), and on images
   with `iw-full` at "required and could not be installed: iw". The installer now fetches
   through GitHub's API address, adds `openssl-util` from OpenWrt's own feed and accepts
-  `iw-full`. The whole install passed in the VM lab on stock OpenWrt 25.12.6.
+  `iw-full`.
+- **After the install, neither the router's page nor adoption worked** on stock OpenWrt
+  25.12.6: the feed's web server module does not load in the image's older web server, so
+  the web server stopped starting, and on a general profile openUF looked for its address
+  on a port outside the LAN and never announced itself. The installer now updates the web
+  server first, openUF's page stays out (LuCI keeps working) while the two do not match,
+  and the address is found on the LAN bridge.
 - **`openuf deps` was broken since 1.0.0** (a "syntax error"), so the dependency page could
   neither report nor install missing packages.
 - **A MAC filter with no addresses yet stopped every WiFi change** on that AP. It now

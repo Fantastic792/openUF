@@ -30,7 +30,37 @@ fi
 GATE='/cgi-bin/luci=/usr/share/ucode/openuf/gate.uc'
 LUCI='/cgi-bin/luci=/usr/share/ucode/luci/uhttpd.uc'
 
-for s in $(uci -q show uhttpd | sed -n "s/^uhttpd\.\([^.=]*\)=uhttpd$/\1/p"); do
+# uhttpd does not start at all when it cannot load a ucode handler, and LuCI
+# goes with it. uhttpd-mod-ucode from a feed newer than the image's uhttpd does
+# exactly that ("Unable to open ucode handler", stock 25.12.6, 2026-11-24): the
+# module's dependency on uhttpd carries no version. So the gate is first tried
+# on a throwaway uhttpd. When it does not load, the gate comes out of (or never
+# goes into) the configuration, LuCI is served as before, and the non-zero exit
+# keeps this script for the next boot -- after `apk upgrade uhttpd` it passes.
+gate_loads() {
+	[ -x /usr/sbin/uhttpd ] && [ -f /usr/share/ucode/openuf/gate.uc ] || return 1
+	/usr/sbin/uhttpd -f -p 127.0.0.1:65081 -h /www \
+		-o /cgi-bin/luci -O /usr/share/ucode/openuf/gate.uc >/dev/null 2>&1 &
+	_p=$!
+	sleep 2
+	kill -0 "$_p" 2>/dev/null || return 1
+	kill "$_p" 2>/dev/null; wait "$_p" 2>/dev/null
+	return 0
+}
+SECTIONS=$(uci -q show uhttpd | sed -n "s/^uhttpd\.\([^.=]*\)=uhttpd$/\1/p")
+
+if ! gate_loads; then
+	for s in $SECTIONS; do
+		uci -q del_list "uhttpd.$s.ucode_prefix=$GATE"
+	done
+	uci commit uhttpd
+	echo "luci-app-openuf: uhttpd cannot load its ucode module (uhttpd and uhttpd-mod-ucode" >&2
+	echo "luci-app-openuf: from different builds?): LuCI stays as it is, without openUF's device page." >&2
+	echo "luci-app-openuf: fix: apk upgrade uhttpd   (opkg: opkg upgrade uhttpd), then reboot" >&2
+	exit 1
+fi
+
+for s in $SECTIONS; do
 	list=$(uci -q get "uhttpd.$s.ucode_prefix")
 	case " $list " in *" $GATE "*) continue ;; esac
 	uci -q del_list "uhttpd.$s.ucode_prefix=$LUCI"

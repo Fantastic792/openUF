@@ -240,6 +240,11 @@ local function candidates(iface)
 		c[#c + 1] = child
 		c[#c + 1] = master_of(child)
 	end
+	-- Last resort: OpenWrt's LAN bridge. A generic profile's eth1 can be a
+	-- port outside br-lan altogether (x86, 2026-11-24): it has a MAC and no
+	-- address, so the AP never announced and no controller ever saw it.
+	for _, d in ipairs(c) do if d == "br-lan" then return c end end
+	c[#c + 1] = "br-lan"
 	return c
 end
 

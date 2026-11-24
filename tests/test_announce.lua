@@ -541,7 +541,7 @@ return {
 			assert_eq(#asked, 3, "re-resolved after a backwards clock step")
 			-- Another interface is not answered from eth0's holder.
 			asked = {}
-			assert_nil(announce.get_ip("eth1"), "eth1 has no address")
+			announce.get_ip("eth1")  -- found on br-lan again, by the last-resort hop
 			assert_eq(asked[1], "ip -4 addr show dev eth1", "eth1 is asked itself")
 			announce._popen, announce._read_file, announce._now = orig, orig_read, orig_now
 			announce._holder = nil
@@ -570,6 +570,28 @@ return {
 			announce._popen, announce._read_file = orig, orig_read
 			assert_not_nil(ip, "found in the same call, not a tick later")
 			assert_eq(announce._holder and announce._holder.dev, "eth0.1", "the new holder is remembered")
+			announce._holder = nil
+		end
+	},
+	{
+		name = "announce: get_ip falls back to br-lan when the port is not in it",
+		fn = function()
+			announce._holder = nil
+			-- A generic profile names eth1, but on this board eth1 is a
+			-- spare port outside br-lan (x86, 2026-11-24): it has a MAC and
+			-- no address, so announce stayed silent and no controller saw it.
+			local orig, orig_read = announce._popen, announce._read_file
+			announce._popen = function(cmd)
+				if cmd:match("addr show dev br%-lan") then
+					return "    inet 192.0.2.7/24 brd 192.0.2.255 scope global br-lan\n"
+				end
+				return ""
+			end
+			announce._read_file = function() return nil end
+			local ip = announce.get_ip("eth1")
+			announce._popen, announce._read_file = orig, orig_read
+			assert_not_nil(ip, "br-lan's address is the last resort")
+			assert_eq(table.concat(ip, "."), "192.0.2.7", "br-lan octets parsed")
 			announce._holder = nil
 		end
 	},

@@ -206,9 +206,10 @@ release_asset() {
 		| sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\(http[^"]*\/'"$2"'\)".*/\1/p'
 }
 # fetch_asset <release.json> <browser_download_url> <dst>: a release file. When
-# github.com itself does not answer -- stock OpenWrt 25.12's uclient-fetch with
-# mbedtls hangs there while api.github.com and the release CDN work (VM lab,
-# 2026-11-18) -- the same file through the API's asset URL. Integrity is
+# github.com does not answer, the same file through the API's asset URL: OpenWrt
+# 25.12's uclient-fetch drops any response with a header line over 4 KB, and
+# github.com's release redirects carry a 4.2 KB Content-Security-Policy line,
+# while the API's do not (lab, 2026-11-24). Integrity is
 # unchanged: every file is still checked against the signed SHA256SUMS.
 fetch_asset() {
 	fetch "$2" "$3" && return 0
