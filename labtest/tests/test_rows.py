@@ -18,6 +18,11 @@ class RowsTest(unittest.TestCase):
         self.assertEqual(rows.risk(f("wlan_band")), "safe")  # "wlan" is not "lan"
         self.assertEqual(rows.risk(f("iptv_enabled")), "safe")  # "iptv" is not "ip"
 
+    def test_setting_preference_is_skipped(self):
+        # flipping it made the controller drop the WLAN's short_id; the put-back can't restore it
+        self.assertTrue(rows.risk(f("setting_preference", "enum")).startswith("skip"))
+        self.assertEqual(rows.risk(f("setting_preference", "enum", obj="Device")), "safe")
+
     def test_port_rows_are_cutoff_and_hw(self):
         fields = [f("isolation", obj="Device.port_overrides"), f("eee_enabled", obj="PortConf"),
                   f("stp_enabled", obj="Device"), f("jumbo", obj="Setting.global_switch"), f("led_enabled", obj="Device"),

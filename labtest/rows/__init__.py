@@ -15,6 +15,8 @@ CHECKS = {}
 def risk(field):
     if field["key"].startswith("x_"):
         return "skip: secret"
+    if (field["obj"], field["key"]) == ("WlanConf", "setting_preference"):
+        return "skip: the controller drops the WLAN's short_id, only the UI gives it back"
     if field["kind"] == "other":
         return "skip: not a simple on/off or pick-one"
     return "cutoff" if field["obj"] in PORT_OBJS or CUT.search(field["key"]) else "safe"
