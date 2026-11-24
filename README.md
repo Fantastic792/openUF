@@ -187,6 +187,28 @@ apk update && apk add openuf luci-app-openuf
 Later releases: `apk update && apk upgrade`. If `apk update` says `WARNING: updating and
 opening ...openuf...: UNTRUSTED signature`, the key is not in `/etc/apk/keys/`.
 
+### Install from LuCI, no SSH (OpenWrt 25.12)
+
+The same signed feed, from the web interface of a router fresh from a reset. The release
+page's `.apk` files cannot go through LuCI's *Upload Package*: they are not signed one by
+one (the feed's index is), so apk refuses them with `UNTRUSTED signature`. Use the feed:
+
+1. **System → Administration → Repo Public Keys**: paste
+   `https://raw.githubusercontent.com/Fantastic792/openUF/main/keys/openuf-feed.pem` and add it.
+2. **System → Software → Configure apk**: add this line to `customfeeds.list` and save:
+   `https://fantastic792.github.io/openUF/apk/packages.adb`
+3. **Update lists...**, then install `luci-app-openuf` (it brings `openuf` and everything
+   it needs) and, for the Halo look, `luci-theme-halo`.
+4. If the install warns that the web server and its modules do not match, open the
+   **Updates** tab and upgrade `uhttpd` and `uhttpd-mod-ubus`. Until then openUF's page
+   stays out and LuCI keeps working.
+5. **Services → openUF → Overview**: press *Replace hostapd with the full build* if it is
+   offered (openUF does not start on a basic build).
+6. **Services → openUF → Setup**: check the detected board, enter the controller address
+   (`http://<controller>:8080/inform`), *Save & Apply*, then *Convert to an access point
+   and reboot*. The conversion keeps a backup in `/etc/openuf/convert-backup.tgz`.
+7. Adopt the device in the UniFi controller. Later releases arrive in LuCI's **Updates** tab.
+
 Upgrade with `openuf-update` on the device, or by installing the next release's packages.
 Install the packages or the files, never both. The [usage guide](USAGE.md) covers every
 option, the device page, upgrading, uninstalling and troubleshooting.
