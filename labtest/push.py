@@ -9,10 +9,22 @@ BAK = CONF + ".labtest-bak"
 NIL = "debug_dump_file = nil,"
 ON = f'debug_dump_file = "{DUMP}",'
 RESTART = "/etc/init.d/openuf restart"
+# With a `main` section in /etc/config/openuf (every package install), uciconf.lua replaces
+# conf.lua's config table, so the dump is switched in UCI; the old value waits in /tmp.
+UBAK = "/tmp/labtest-dump-uci-bak"
+UCI_BACK = (f'if [ -f {UBAK} ]; then uci set openuf.main.debug_dump_file="$(cat {UBAK})"; '
+            f"uci commit openuf; rm -f {UBAK}; fi")
 
 
 def on(t):
-    t.ssh(f"if [ -f {BAK} ]; then mv {BAK} {CONF}; fi")  # a run that died left its backup: put it back first
+    # a run that died left its backup: put it back first
+    t.ssh(f"if [ -f {BAK} ]; then mv {BAK} {CONF}; fi; {UCI_BACK}")
+    if t.ssh("uci -q get openuf.main")[1].strip():
+        rc, out = t.ssh(f"uci -q get openuf.main.debug_dump_file > {UBAK}; "
+                        f"uci set openuf.main.debug_dump_file={DUMP} && uci commit openuf && rm -f {DUMP} && {RESTART}")
+        if rc != 0:
+            raise RuntimeError(f"push.on {t.name} failed ({rc}): {out.strip()}")
+        return
     if t.ssh(f"grep -q '{NIL}' {CONF}")[0] != 0:
         raise RuntimeError(f"push.on {t.name}: no '{NIL}' line in {CONF}")
     rc, out = t.ssh(f"cp {CONF} {BAK} && sed -i 's|{NIL}|{ON}|' {CONF} && rm -f {DUMP} && {RESTART}")
@@ -21,7 +33,7 @@ def on(t):
 
 
 def off(t):
-    rc, out = t.ssh(f"if [ -f {BAK} ]; then mv {BAK} {CONF}; fi; rm -f {DUMP}; {RESTART}")
+    rc, out = t.ssh(f"if [ -f {BAK} ]; then mv {BAK} {CONF}; fi; {UCI_BACK}; rm -f {DUMP}; {RESTART}")
     if rc != 0:
         raise RuntimeError(f"push.off {t.name} failed ({rc}): {out.strip()}")
 

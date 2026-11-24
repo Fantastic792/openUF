@@ -43,6 +43,21 @@ class PushTest(unittest.TestCase):
             push.on(t)
         self.assertFalse(any("sed -i" in c for c in t.cmds))
 
+    def test_on_uses_uci_when_openuf_main_exists(self):
+        # a package install (or any device with a `main` section): UCI, not conf.lua, sets the dump
+        t = FakeTarget({"uci -q get openuf.main": (0, "settings\n")})
+        push.on(t)
+        joined = " ".join(t.cmds)
+        self.assertIn(f"uci set openuf.main.debug_dump_file={push.DUMP}", joined)
+        self.assertIn(f"> {push.UBAK}", joined)
+        self.assertIn("/etc/init.d/openuf restart", joined)
+        self.assertFalse(any("sed -i" in c or "grep -q" in c for c in t.cmds))
+
+    def test_off_puts_the_uci_value_back(self):
+        t = FakeTarget()
+        push.off(t)
+        self.assertIn(f'uci set openuf.main.debug_dump_file="$(cat {push.UBAK})"', t.cmds[0])
+
     def test_off_puts_the_backup_back_and_removes_the_dump(self):
         t = FakeTarget()
         push.off(t)
