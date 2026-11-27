@@ -2054,6 +2054,43 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 			end
 		end
 	end
+	-- 2.4 GHz Auto picks only among 1, 6 and 11, the three that do not
+	-- overlap (the idea is antoniocosta/unifi-openwrt's 2564c0d): ACS alone can
+	-- land on 3 or 9 and overlap two neighbours at once. A site blacklist is
+	-- narrowed further, never widened; a board's radio_policy channels and a
+	-- chanlist openUF did not write are left alone; a radio with none of the
+	-- three keeps the list it had.
+	local ac = cursor:get("wireless", radio, "channel")
+	if (ac == "auto" or ac == "0")
+			and not (policy and type(policy.channels) == "table" and #policy.channels > 0)
+			and (cursor:get("wireless", radio, "chanlist") == nil
+				or cursor:get("wireless", radio, "openuf_chanlist") == "1") then
+		local sb = cursor:get("wireless", radio, "band")
+		local hw = cursor:get("wireless", radio, "hwmode")
+		-- Same rule as the blacklist above: "auto" is no channel number, so
+		-- the band must come from the section's own band/hwmode.
+		if (sb or hw) and band_for_device({band = sb, hwmode = hw}) == "ng" then
+			local base = chanlist
+			local caps = M.phy_caps().ng
+			if not base and caps and caps.channels then
+				base = {}
+				for _, c in ipairs(caps.channels) do base[#base + 1] = tostring(c) end
+			end
+			if base then
+				-- A blacklist that left no list (it covered everything) still
+				-- rules: never pick a channel the site blocked.
+				local blocked = {}
+				for _, ch in ipairs(acs_blacklist or {}) do blocked[tostring(ch)] = true end
+				local pick = {}
+				for _, c in ipairs(base) do
+					if (c == "1" or c == "6" or c == "11") and not blocked[c] then
+						pick[#pick + 1] = c
+					end
+				end
+				if #pick > 0 and #pick < #base then chanlist = pick end
+			end
+		end
+	end
 	if chanlist then
 		cursor:set("wireless", radio, "chanlist", chanlist)
 		-- Same ledger shape as openuf_rates below: the blacklist going empty

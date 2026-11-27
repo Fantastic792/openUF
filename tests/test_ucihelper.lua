@@ -3294,13 +3294,12 @@ return {
 				assert_eq(cl[2], "6", "channel 6 kept")
 				assert_eq(db.wireless.radio0.openuf_chanlist, "1", "openUF stamps what it wrote")
 				-- A blacklist that names only channels the regdomain already
-				-- withholds narrows nothing, so it writes nothing rather than
-				-- churning the band's whole channel list into UCI every push.
+				-- withholds narrows nothing; 2.4 GHz Auto still keeps to 1/6/11.
 				ucihelper.rf_config("radio0", nil, "auto", nil, nil, nil, nil, nil,
 					nil, nil, {acs_blacklist = {14}})
-				assert_nil(db.wireless.radio0.chanlist,
-					"a blacklist this radio has nothing in common with writes no chanlist")
-				assert_nil(db.wireless.radio0.openuf_chanlist, "and clears the stamp")
+				assert_eq(table.concat(db.wireless.radio0.chanlist, ","), "1,6",
+					"no blacklist narrowing, only the non-overlapping channels")
+				assert_eq(db.wireless.radio0.openuf_chanlist, "1", "stamped")
 				ucihelper.rf_config("radio0", nil, "auto", nil, nil, nil, nil, nil,
 					nil, nil, {acs_blacklist = {2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14}})
 				-- 5GHz, same push: acsdfs=disabled is its own hostapd flag,
@@ -3326,16 +3325,57 @@ return {
 				ucihelper.rf_config("radio0", nil, "auto", nil, nil, nil, nil, nil,
 					nil, nil, {acs_blacklist = {6}})
 				assert_eq(db.wireless.radio0.chanlist[1], "1", "narrowed")
-				-- The site clearing its blacklist is the key simply vanishing.
+				-- The site clearing its blacklist is the key simply vanishing:
+				-- back to 2.4 GHz Auto's own 1/6/11 list.
 				ucihelper.rf_config("radio0", nil, "auto", nil, nil, nil, nil, nil,
 					nil, nil, {})
-				assert_nil(db.wireless.radio0.chanlist, "chanlist removed with the blacklist")
+				assert_eq(table.concat(db.wireless.radio0.chanlist, ","), "1,6",
+					"blacklist gone, 1/6/11 left")
+				-- A fixed channel tears openUF's list down.
+				ucihelper.rf_config("radio0", nil, 6, nil, nil, nil, nil, nil,
+					nil, nil, {})
+				assert_nil(db.wireless.radio0.chanlist, "chanlist removed on a fixed channel")
 				assert_nil(db.wireless.radio0.openuf_chanlist, "stamp removed too")
 				-- A chanlist openUF never wrote is the user's own and stays.
+				cursor:set("wireless", "radio0", "channel", "auto")
 				cursor:set("wireless", "radio0", "chanlist", {"11"})
 				ucihelper.rf_config("radio0", nil, "auto", nil, nil, nil, nil, nil,
 					nil, nil, {})
 				assert_eq(db.wireless.radio0.chanlist[1], "11", "hand-set chanlist untouched")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: 2.4 GHz Auto keeps to channels 1, 6 and 11",
+		fn = function()
+			with_ucihelper(function(db)
+				ucihelper._popen = function() return ARCHER_C5_IW_PHY end
+				seed_radios({"radio0", "radio1"})
+				local cursor = ucihelper._uci.cursor()
+				cursor:set("wireless", "radio0", "band", "2g")
+				cursor:set("wireless", "radio1", "band", "5g")
+				ucihelper.rf_config("radio0", nil, "auto", nil, nil, nil, nil, nil, nil, nil, {})
+				assert_eq(table.concat(db.wireless.radio0.chanlist, ","), "1,6",
+					"this phy has 1, 6, 13: 13 overlaps, so out")
+				ucihelper.rf_config("radio1", nil, "auto", nil, nil, nil, nil, nil, nil, nil, {})
+				assert_nil(db.wireless.radio1.chanlist, "5 GHz is left to ACS")
+				-- A board's own ACS channel list wins.
+				ucihelper.rf_config("radio0", nil, "auto", nil, nil, nil, nil, nil, nil,
+					{ng = {channels = {1, 13}}}, {})
+				assert_nil(db.wireless.radio0.chanlist, "radio_policy channels: no 1/6/11 list")
+				-- A radio with none of 1/6/11 keeps what ACS had.
+				ucihelper._popen = function() return [[
+Wiphy phy0
+	Band 1:
+		Capabilities: 0x11ef
+			HT20/HT40
+		Frequencies:
+			* 2467.0 MHz [12] (20.0 dBm)
+			* 2472.0 MHz [13] (20.0 dBm)
+]] end
+				ucihelper._phy_caps_cache = nil
+				ucihelper.rf_config("radio0", nil, "auto", nil, nil, nil, nil, nil, nil, nil, {})
+				assert_nil(db.wireless.radio0.chanlist, "no 1/6/11 on this radio: no list")
 			end)
 		end
 	},
