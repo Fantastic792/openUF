@@ -3750,7 +3750,28 @@ function M._parse_wifi_system_cfg(sys_raw)
 		local wpa3_support    = _wire_bool(a["wpa3.support"])
 		local wpa3_transition = _wire_bool(a["wpa3.transition"])
 
+		-- What would otherwise fall through to "open" below but is not: WEP
+		-- (aaa.<n>.security=wep64/wep128/aes128) and an Enhanced Open marked
+		-- only by wpa3.support, with no OWE akm (antoniocosta/unifi-openwrt
+		-- 5961f19). Neither is built here, and neither may come up as an open
+		-- network: refused like the other security types openUF cannot build.
+		local not_open = nil
+		if a.wpa == nil and not is_enterprise and not owe_transition
+				and not akm:find("OWE", 1, true) then
+			local sec = a.security
+			if sec and sec ~= "" and sec ~= "none" and sec ~= "open" then
+				not_open = "security " .. tostring(sec) .. " (WEP)"
+			elseif wpa3_support then
+				not_open = "Enhanced Open without an OWE key management"
+			end
+		end
+		if not_open and w.ssid then
+			io.stderr:write(("inform: skipping WLAN %q -- %s is not supported,"
+				.. " and it must not come up as an open network\n"):format(w.ssid, not_open))
+		end
+
 		if w.ssid and w.parent and (not is_enterprise or radius) and not radius_psk_only
+				and not not_open
 				and not is_station
 				and not mac_auth_broken
 				and not (a.devname and owe_hidden_half[a.devname]) then

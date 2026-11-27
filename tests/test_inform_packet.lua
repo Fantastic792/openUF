@@ -4113,6 +4113,26 @@ return {
 		end
 	},
 	{
+		name = "inform packet: a WEP WLAN, or Enhanced Open with no OWE akm, is skipped, never built open",
+		fn = function()
+			local function parse(extra)
+				local sys_cfg = "aaa.1.ssid=old\n" .. extra
+					.. "wireless.1.ssid=old\nwireless.1.parent=radio0\n"
+				local real = io.stderr
+				io.stderr = {write = function() end}
+				local _, vt = inform._parse_wifi_system_cfg(sys_cfg)
+				io.stderr = real
+				return vt
+			end
+			assert_eq(#parse("aaa.1.security=wep128\n"), 0, "WEP: skipped")
+			assert_eq(#parse("aaa.1.wpa3.support=enabled\n"), 0, "OWE marked only by wpa3.support: skipped")
+			local open = parse("aaa.1.security=open\n")
+			assert_eq(#open, 1, "a real open network is still built")
+			assert_eq(open[1].security, "open")
+			assert_eq(#parse(""), 1, "no security key at all: open, as before")
+		end
+	},
+	{
 		name = "inform packet: mesh backhaul entries (uplink station, downlink vwire AP) are never provisioned as user APs",
 		fn = function()
 			-- Captured live 2026-10-03 (AP2, 10.6.106): a meshing device's push
