@@ -71,6 +71,8 @@ hasnt() { ! grep -q "$1" "$2"; }
 # OpenWrt packs Package/<p>/postinst and /prerm as the postinst-pkg / prerm-pkg
 # files itself; a define named "postinst-pkg" is silently dropped (1.0.4 on the
 # 6401: no restart on upgrade).
+check "openuf-deps enables wpad after the swap" has "init.d/wpad enable" openuf/hook/openuf-deps.sh
+check "setup.sh enables wpad after the swap" has "init.d/wpad enable" setup.sh
 check "no define named postinst-pkg or prerm-pkg" 	sh -c '! grep -nE "^define Package/[^/]+/(postinst|prerm)-pkg" package/*/Makefile'
 
 # ── B1: the openuf package's preinst and prerm ─────────────────────────────

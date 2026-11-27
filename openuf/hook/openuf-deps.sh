@@ -356,6 +356,10 @@ install() {   # install <only-wpad 0|1> <library or empty> <theme 0|1>
 		# The package scripts stop the old daemon and start the new one, but
 		# netifd configured the radios against the old one, and a plain
 		# `wifi reload` sees no changed configuration and does nothing.
+		# enable first: the old build's prerm disables the shared wpad init
+		# script, and in one apk transaction it can run after the new build's
+		# postinst enabled it, which left hostapd stopped on a second 6401.
+		[ -x /etc/init.d/wpad ] && /etc/init.d/wpad enable >/dev/null 2>&1
 		[ -x /etc/init.d/wpad ] && /etc/init.d/wpad restart >/dev/null 2>&1
 		if wifi up >/dev/null 2>&1; then say "  radios brought up on the new build"; fi
 	fi

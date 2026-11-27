@@ -1254,6 +1254,9 @@ else
 	done
 	if [ -n "$SWAPPED" ]; then
 		ok "$SWAPPED installed"
+		# The old build's prerm disables the wpad init script both builds
+		# share; without this the radios stay down after the reboot.
+		[ -x /etc/init.d/wpad ] && /etc/init.d/wpad enable >/dev/null 2>&1
 	else
 		warn "no full wpad/hostapd build could be installed"
 		if [ -n "$CUR" ]; then
