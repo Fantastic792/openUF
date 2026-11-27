@@ -1780,6 +1780,15 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 			regdomain_changed()
 		end
 	end
+	-- A channel acs_pin set after ACS gave up holds while the controller still
+	-- asks for Auto, or ACS would fail the same way after every push; a fixed
+	-- channel from the controller ends the pin.
+	local acspin = cursor:get("wireless", radio, "openuf_acspin")
+	if acspin and (chan == "auto" or tostring(chan) == "0") then
+		chan = acspin
+	elseif acspin and chan then
+		cursor:delete("wireless", radio, "openuf_acspin")
+	end
 	if chan then
 		cursor:set("wireless", radio, "channel", tostring(chan))
 	end
@@ -3311,6 +3320,10 @@ function M.forget()
 	end)
 	for _, s in ipairs(radios) do
 		local name = s[".name"]
+		if s.openuf_acspin then
+			cursor:set("wireless", name, "channel", "auto")
+			cursor:delete("wireless", name, "openuf_acspin")
+		end
 		for _, opt in ipairs(FORGET_RADIO_OPTS) do
 			if s[opt] ~= nil then cursor:delete("wireless", name, opt) end
 		end
@@ -3640,6 +3653,61 @@ end
 -- wireless backhaul -- is not a VAP and is left out: l2guard's tag-drop on
 -- an uplink would cut the AP off. Empty when wireless is not up or ubus
 -- cannot be asked; callers treat that as "nothing to protect yet".
+-- Radios on Auto whose AP interfaces have no live channel: hostapd's channel
+-- selection gave up (acsguard.lua). A radio with a station on it (the mesh
+-- uplink) runs on its parent's channel and is skipped, as is one with no AP
+-- interface or no band/hwmode in UCI ("auto" is no channel number to guess a
+-- band from). One `iw dev` fork per radio on Auto per call; the first live
+-- channel ends the look.
+function M.acs_failing()
+	local status = wireless_status()
+	local out = {}
+	if type(status) ~= "table" then return out end
+	local cursor = get_uci().cursor()
+	for radio, entry in pairs(status) do
+		local ch = cursor:get("wireless", radio, "channel")
+		local sb = cursor:get("wireless", radio, "band")
+		local hw = cursor:get("wireless", radio, "hwmode")
+		if (ch == "auto" or ch == "0") and (sb or hw) and type(entry) == "table"
+				and cursor:get("wireless", radio, "disabled") ~= "1" then
+			local ap, sta, live = 0, false, false
+			for _, i in ipairs(type(entry.interfaces) == "table" and entry.interfaces or {}) do
+				local mode = type(i.config) == "table" and i.config.mode or nil
+				if mode == "sta" then
+					sta = true
+				elseif mode == nil or mode == "ap" then
+					ap = ap + 1
+					-- Interpolated into a shell command line.
+					if not live and type(i.ifname) == "string" and i.ifname:match("^[%w%-%._]+$")
+							and (M._popen("iw dev " .. i.ifname .. " info 2>/dev/null") or "")
+								:match("channel%s+%d+") then
+						live = true
+					end
+				end
+			end
+			if ap > 0 and not sta and not live then
+				local band = band_for_device({band = sb, hwmode = hw})
+				local caps = M.phy_caps()[band]
+				out[#out + 1] = {name = radio, band = band, legal = caps and caps.channels,
+					chanlist = cursor:get("wireless", radio, "chanlist")}
+			end
+		end
+	end
+	table.sort(out, function(a, b) return a.name < b.name end)
+	return out
+end
+
+-- Pin a fixed channel on a radio ACS left without one; rf_config keeps it
+-- while the controller asks for Auto, forget() puts Auto back.
+function M.acs_pin(radio, ch)
+	local cursor = get_uci().cursor()
+	cursor:set("wireless", radio, "channel", tostring(ch))
+	cursor:set("wireless", radio, "openuf_acspin", tostring(ch))
+	cursor:commit("wireless")
+	M._run_cmd("wifi reload")
+	M._ws_cache = nil
+end
+
 function M.ap_ifnames()
 	local status = wireless_status()
 	local out = {}

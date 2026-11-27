@@ -971,6 +971,10 @@ M._FEATURES = {
 		end},
 	sched = {tick = function(st) pcall(M._sched_resync, st) end,
 		forget_by = {state = {"sched_vaps_down"}}},
+	-- A radio on Auto whose hostapd channel selection gave up gets a channel
+	-- (acsguard.lua); a minute gate inside.
+	acsguard = {tick = function() pcall(M._acsguard_resync) end,
+		forget_by = {none = "its pin is a wireless option ucihelper.forget puts back to auto"}},
 	rrbguard = {tick = function() pcall(M._rrbguard_tick) end,
 		forget_by = {none = "watches hostapd's own socket; no controller setting"}},
 	-- The address this inform reports, read now rather than at startup (see
@@ -1076,7 +1080,7 @@ M._FEATURES = {
 M._FEATURE_ORDER = {
 	tick = {"stun", "neighbours", "scan_job", "rrm", "dfs_reset", "vap_watch", "l2guard",
 		"bcfilt", "backhaul", "uplinkmon", "meshvlan", "guest", "guest_wg", "das", "hairpin",
-		"usteer", "block", "sched", "rrbguard", "net_info"},
+		"usteer", "block", "sched", "rrbguard", "acsguard", "net_info"},
 	tick_late = {"shaper"},
 	forget = {"meshvlan", "switchvlan", "usteer", "ucihelper", "l2guard", "guest", "cron",
 		"snmp", "airtime", "led", "block", "shaper"},

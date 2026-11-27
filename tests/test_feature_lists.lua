@@ -327,7 +327,7 @@ test("_tick runs its steps in today's order", function()
 		"_maybe_service_dfs_reset", "_vap_watch", "_l2guard_resync", "_bcfilt_resync",
 		"_backhaul_tick", "_uplinkmon_resync", "_meshvlan_resync", "_guest_resync",
 		"_guest_wg_resync", "_hairpin_resync", "_usteer_filter_resync", "_block_resync",
-		"_sched_resync", "_rrbguard_tick", "_refresh_net_info", "build_json", "_shaper_resync"}
+		"_sched_resync", "_rrbguard_tick", "_acsguard_resync", "_refresh_net_info", "build_json", "_shaper_resync"}
 	for _, n in ipairs(STEPS) do M[n] = rec(n) end
 	M._ucihelper, M._sysinfo = {}, {}
 	M._reload_if_changed = function() return nil end

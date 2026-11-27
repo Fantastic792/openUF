@@ -675,6 +675,28 @@ end
 -- SSID back on the air while the uplink is dead, nor the uplink returning
 -- one the schedule has off. conf.lua's uplink_monitor (true/false) overrides
 -- the controller's switch; uplink_monitor_host names the host to ping.
+-- Once a minute: a radio on Auto whose hostapd channel selection gave up gets
+-- a channel (acsguard.lua). The since-times live in memory, not state.json: a
+-- restart only starts the minute over.
+M._acs_since, M._acs_last = {}, nil
+function M._acsguard_resync()
+	local ag, ufuci = M._acsguard, M._ucihelper
+	if not (ag and ufuci and ufuci.acs_failing and ufuci.acs_pin) then return false end
+	local now = M._time()
+	if M._acs_last and now - M._acs_last < 60 then return false end
+	M._acs_last = now
+	local ok, failing = pcall(ufuci.acs_failing)
+	if not ok or type(failing) ~= "table" then return false end
+	local pins = ag.decide(failing, M._acs_since, now)
+	for _, p in ipairs(pins) do
+		io.stderr:write(string.format("acsguard: %s has had no channel for %d s on Auto"
+			.. " (hostapd's channel selection failed) -- channel %d until the controller"
+			.. " sends a fixed one\n", p.name, ag.WAIT, p.channel))
+		pcall(ufuci.acs_pin, p.name, p.channel)
+	end
+	return #pins > 0
+end
+
 function M._uplinkmon_resync(st, cfg)
 	local um, ufuci = M._uplinkmon, M._ucihelper
 	if not (um and ufuci and ufuci.ap_ifnames and M._wlansched) then return false end

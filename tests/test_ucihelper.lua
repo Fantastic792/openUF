@@ -4800,6 +4800,64 @@ Wiphy phy2
 		end
 	},
 	{
+		name = "ucihelper: acs_failing names a radio on Auto whose AP has no live channel",
+		fn = function()
+			with_ucihelper(function()
+				seed_radios({"radio0", "radio1", "radio2"})
+				local cursor = ucihelper._uci.cursor()
+				cursor:set("wireless", "radio0", "band", "2g")
+				cursor:set("wireless", "radio0", "channel", "auto")
+				cursor:set("wireless", "radio1", "band", "5g")
+				cursor:set("wireless", "radio1", "channel", "auto")
+				cursor:set("wireless", "radio2", "band", "5g")
+				cursor:set("wireless", "radio2", "channel", "auto")
+				ucihelper._popen = function(cmd)
+					if cmd:find("^ubus") then
+						return '{"radio0":{"up":true,"interfaces":[{"section":"a","ifname":"phy0-ap0","config":{"mode":"ap"}}]},'
+							.. '"radio1":{"up":true,"interfaces":[{"section":"b","ifname":"phy1-ap0","config":{"mode":"ap"}}]},'
+							.. '"radio2":{"up":true,"interfaces":[{"section":"c","ifname":"phy2-ap0","config":{"mode":"ap"}},'
+							.. '{"section":"d","ifname":"phy2-sta0","config":{"mode":"sta"}}]}}'
+					end
+					if cmd:find("iw dev phy0-ap0", 1, true) then
+						return "Interface phy0-ap0\n\ttype AP\n\tchannel 6 (2437 MHz), width: 20 MHz\n"
+					end
+					if cmd:find("iw dev", 1, true) then return "Interface x\n\ttype AP\n" end
+					return ARCHER_C5_IW_PHY
+				end
+				ucihelper.end_pass()
+				local out = ucihelper.acs_failing()
+				assert_eq(#out, 1, "radio0 has a channel, radio2 carries the uplink")
+				assert_eq(out[1].name, "radio1"); assert_eq(out[1].band, "na")
+				assert_true(type(out[1].legal) == "table" and #out[1].legal > 0, "legal channels read")
+				cursor:set("wireless", "radio1", "channel", "36")
+				assert_eq(#ucihelper.acs_failing(), 0, "a fixed channel is not ACS")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: an ACS pin holds through an Auto push, ends on a fixed one, and forget puts Auto back",
+		fn = function()
+			with_ucihelper(function(db)
+				seed_radios({"radio1"})
+				local cursor = ucihelper._uci.cursor()
+				cursor:set("wireless", "radio1", "band", "5g")
+				cursor:set("wireless", "radio1", "channel", "auto")
+				ucihelper.acs_pin("radio1", 36)
+				assert_eq(db.wireless.radio1.channel, "36", "pinned")
+				assert_eq(db.wireless.radio1.openuf_acspin, "36", "stamped")
+				ucihelper.rf_config("radio1", nil, "auto", nil, nil, nil, nil, nil, nil, nil, {})
+				assert_eq(db.wireless.radio1.channel, "36", "Auto again from the controller: pin holds")
+				ucihelper.rf_config("radio1", nil, 44, nil, nil, nil, nil, nil, nil, nil, {})
+				assert_eq(db.wireless.radio1.channel, "44", "a fixed channel wins")
+				assert_nil(db.wireless.radio1.openuf_acspin, "and ends the pin")
+				ucihelper.acs_pin("radio1", 36)
+				pcall(ucihelper.forget)
+				assert_eq(db.wireless.radio1.channel, "auto", "forget: back on Auto")
+				assert_nil(db.wireless.radio1.openuf_acspin, "stamp gone")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: ap_ifnames lists AP-mode VAP netdevs in radio order and skips sta/mesh backhauls",
 		fn = function()
 			local orig = ucihelper._popen
