@@ -181,6 +181,7 @@ def one(env, row):
     t.ssh(f"logger -t labtest '{stamp}'")
     base = (push.pushes(t) or [env["base"]])[-1]
     before, pid = _snap(env), _pid(t)
+    radios = _radios(ctl, row)
     try:
         ctl.put(path, new)
     except unifi.Refused as e:
@@ -215,14 +216,34 @@ def one(env, row):
         cut = True
         raise
     finally:
-        _put_back(env, row, r, path, old, pushed, before, cut)
+        _put_back(env, row, r, path, old, pushed, before, cut, radios)
         r["secs"] = round(time.monotonic() - start)
 
 
-def _put_back(env, row, r, path, old, pushed, before, cut):
+def _radios(ctl, row):
+    """Every AP's radio_table before a row that is not a Device row. The controller rewrites them itself:
+    iot_channel_lock sets 2.4 GHz to 6 on every AP of the site, and its put-back sets Auto, not the channel
+    that was there (lab, 2026-11-28). shortcut: not in the journal, so a run that dies mid-row leaves them."""
+    if row["obj"] == "Device":
+        return {}
+    return {d["_id"]: d["radio_table"] for d in ctl.devices() if d.get("radio_table")}
+
+
+def _radios_back(ctl, r, radios):
+    now = {d["_id"]: d.get("radio_table") for d in ctl.devices()}
+    moved = [i for i, rt in radios.items() if i in now and now[i] != rt]
+    for i in moved:
+        ctl.put(f"rest/device/{i}", {"radio_table": radios[i]})
+    if moved:  # a router change in this row may be the controller's radio rewrite, not the setting
+        r["also_changed"] = sorted(set(r["also_changed"]) | {"Device.radio_table"})
+
+
+def _put_back(env, row, r, path, old, pushed, before, cut, radios=None):
     t, ctl = env["t"], env["ctl"]
     try:
         ctl.put(path, old)
+        if radios:
+            _radios_back(ctl, r, radios)
         now = _locate(env, row["obj"])
     except Exception as e:  # noqa: BLE001 -- any failure here leaves the setting flipped
         raise PutBackFailed(f"{row['name']}: put-back failed: {e}") from None
@@ -235,6 +256,11 @@ def _put_back(env, row, r, path, old, pushed, before, cut):
         if back is not None:
             _wait_applied(env, back)
         env["base"] = back or pushed
+    if radios:  # again: the controller rewrites AP after AP, some only after the push (the 6401, 2026-11-28)
+        try:
+            _radios_back(ctl, r, radios)
+        except Exception as e:  # noqa: BLE001 -- an AP left on the controller's channel
+            raise PutBackFailed(f"{row['name']}: radio_table put-back failed: {e}") from None
     gone = snapshot.diff(before, _snap(env), env["ignore"])
     for _ in range(BACK_WAIT // (2 * POLL)):  # each round: a sleep plus a _snap of at least one POLL
         if not gone:

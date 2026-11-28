@@ -101,7 +101,14 @@ class Ctl:
     def locate(self, obj, host, wlan):
         return ("rest/wlanconf/w1", dict(self.obj)) if obj == "WlanConf" and wlan == "T" else None
 
+    def devices(self):  # devs: APs whose radio_table each put rewrites, as iot_channel_lock does (rewrite=False: not)
+        return [dict(d) for d in getattr(self, "devs", [])]
+
     def put(self, path, body):
+        if path.startswith("rest/device/"):
+            self.dev_puts = getattr(self, "dev_puts", []) + [(path, body)]
+            next(d for d in self.devs if path.endswith(d["_id"])).update(body)
+            return
         self.puts.append((path, dict(body)))
         if self.refuse:
             raise unifi.Refused(f"controller refused {path}: api.err.Invalid")
@@ -111,6 +118,8 @@ class Ctl:
         self.obj.update(body)
         if is_flip or self.sticky:
             self.obj.update(self.side)
+        for d in getattr(self, "devs", []) if getattr(self, "rewrite", True) else []:
+            d["radio_table"] = [dict(x, channel=6 if is_flip else "auto") for x in d["radio_table"]]
         self.r.react(self.obj, is_flip)
 
     def force_push(self, wlan_id):
@@ -298,6 +307,35 @@ class TableTest(unittest.TestCase):
         self.assertEqual(self.ctl.obj["wlan_band"], "both")
         self.assertEqual(self.flips()[-1], {"hide_ssid": False, "wlan_band": "both", "name": "T"})
         self.assertNotIn("hunter2", str(self.ctl.puts))
+
+    def test_radio_tables_the_controller_rewrote_are_put_back(self):
+        # iot_channel_lock: the flip sets 2.4 GHz to 6 on every AP, the put-back to Auto, not to 11 (lab 2026-11-28)
+        self.ctl.devs = [{"_id": "d1", "radio_table": [{"radio": "ng", "channel": 11}]},
+                         {"_id": "d2", "radio_table": [{"radio": "ng", "channel": 6}]}]
+        res = table.one(self.env(), row())
+        self.assertEqual([d["radio_table"][0]["channel"] for d in self.ctl.devs], [11, 6])
+        self.assertIn("Device.radio_table", res["also_changed"])
+
+    def test_a_radio_table_rewritten_late_is_put_back_too(self):
+        self.ctl.devs = [{"_id": "d1", "radio_table": [{"radio": "ng", "channel": 6}]}]
+        self.ctl.rewrite, seen = False, []
+
+        def late():  # the controller reaches this AP only after the first look
+            seen.append(1)
+            if len(seen) == 3:
+                self.ctl.devs[0]["radio_table"] = [{"radio": "ng", "channel": "auto"}]
+            return [dict(d) for d in self.ctl.devs]
+        with mock.patch.object(self.ctl, "devices", side_effect=late):
+            table.one(self.env(), row())
+        self.assertEqual(len(getattr(self.ctl, "dev_puts", [])), 1)  # put back after the push, not before
+        self.assertEqual(self.ctl.devs[0]["radio_table"][0]["channel"], 6)
+
+    def test_untouched_radio_tables_are_not_put(self):
+        self.ctl.devs = [{"_id": "d1", "radio_table": [{"radio": "ng", "channel": 11}]}]
+        with mock.patch.object(self.ctl, "devices", return_value=[{"_id": "d1", "radio_table": [{"radio": "ng", "channel": 11}]}]):
+            res = table.one(self.env(), row())
+        self.assertEqual(getattr(self.ctl, "dev_puts", []), [])
+        self.assertNotIn("Device.radio_table", res["also_changed"])
 
     def test_a_key_that_does_not_come_back_stops_the_row_loudly(self):
         self.ctl.obj["wlan_band"] = "both"
