@@ -4,6 +4,7 @@ import argparse
 import os
 import re
 import sys
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
@@ -116,25 +117,37 @@ def soak_stage(args):
              f"{last['rss_kb']}, fds {last['fds']}, tmp {last['tmp_kb']} kB, pushes {r['pushes']}", True)]
 
 
-def vm_stage(args):
+def _log(msg):
+    """Progress on stderr, flushed: a long stage prints its checks only at the end."""
+    print(time.strftime("[%H:%M:%S] ") + msg, file=sys.stderr, flush=True)
+
+
+def _chain(label, steps):
+    """Run (name, fn, args) steps in order, logging each; stop after the first with a failing check."""
     out = []
-    for fn, tgt in ((catalog_stage, args.target), (table_stage, args.target), (writes_stage, args.target),
-                    (cycle_stage, "vm4"), (garbage_stage, "vm4")):  # cycle wipes its VM: always the spare one
-        checks = fn(argparse.Namespace(**dict(vars(args), target=tgt)))
+    for i, (name, fn, a) in enumerate(steps, 1):
+        _log(f"{label} {i}/{len(steps)} {name}: start")
+        checks = fn(a)
+        bad = sum(1 for c in checks if not c[1])
+        _log(f"{label} {i}/{len(steps)} {name}: {len(checks) - bad} pass, {bad} fail")
         out += checks
-        if not all(c[1] for c in checks):
+        if bad:
+            _log(f"{label}: stopped at {name}")
             break
     return out
+
+
+def vm_stage(args):
+    def on(tgt):
+        return argparse.Namespace(**dict(vars(args), target=tgt))
+    return _chain("vm", [("catalog", catalog_stage, args), ("table", table_stage, args),
+                         ("writes", writes_stage, args),
+                         ("cycle", cycle_stage, on("vm4")),  # cycle wipes its VM: always the spare one
+                         ("garbage", garbage_stage, on("vm4"))])
 
 
 def safety(args):
-    out = []
-    for stage in (guards, timer_proof, pull_plug):
-        checks = stage(args)
-        out += checks
-        if not all(c[1] for c in checks):
-            break
-    return out
+    return _chain("safety", [("guards", guards, args), ("proof", timer_proof, args), ("plug", pull_plug, args)])
 
 
 def _suite(mod, name):
@@ -148,13 +161,8 @@ def _suite(mod, name):
 
 
 def release(args):
-    out = []
-    for stage in (safety, vm_stage, _suite(single, "single"), _suite(multi, "multi")):
-        checks = stage(args)
-        out += checks
-        if not all(c[1] for c in checks):
-            break
-    return out
+    return _chain("release", [("safety", safety, args), ("vm", vm_stage, args),
+                              ("single", _suite(single, "single"), args), ("multi", _suite(multi, "multi"), args)])
 
 
 # stage name -> function(args) returning [(check_name, passed, detail)]
@@ -176,6 +184,8 @@ def main(argv=None):
     if args.stage not in STAGES:
         print(f"unknown stage {args.stage}; stages: {', '.join(STAGES) or '(none yet)'}")
         return 2
+    if hasattr(sys.stdout, "reconfigure"):  # each line reaches the log file as it is printed
+        sys.stdout.reconfigure(line_buffering=True)
     failed = False
     for name, passed, detail, *show in STAGES[args.stage](args):  # show: print the detail on PASS too
         print((f"PASS {name}: {detail}" if show else f"PASS {name}") if passed else f"FAIL {name}: {detail}")

@@ -50,6 +50,15 @@ class StageTest(unittest.TestCase):
             out = run.release(self.args)
         self.assertEqual([c[0] for c in out], ["s", "v", "single.ready", "multi.ready"])
 
+    def test_release_logs_progress_as_it_goes(self):
+        with mock.patch("labtest.run.safety", return_value=[("s", True, "")]), \
+                mock.patch("labtest.run.vm_stage", return_value=[("v", False, "broke")]), \
+                mock.patch("labtest.run._log") as log:
+            run.release(self.args)
+        self.assertEqual([c.args[0] for c in log.call_args_list],
+                         ["release 1/4 safety: start", "release 1/4 safety: 1 pass, 0 fail",
+                          "release 2/4 vm: start", "release 2/4 vm: 0 pass, 1 fail", "release: stopped at vm"])
+
     def test_main_exit_codes(self):
         one = {"checks": [{"name": "ready", "ok": False, "detail": "vm1 is not reachable"}], "pass": False}
         with mock.patch("labtest.run.single.run", return_value=one), mock.patch("builtins.print"):
