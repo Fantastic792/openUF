@@ -319,60 +319,17 @@ than a few hours. The upstream projects' results for some of these are
 
 ## Known issues
 
-**Fixed in 1.0.7** ([release notes](docs/release-notes/1.0.7.md)):
-
-- **The full hostapd swap could leave the radios down**: the wpad service was left
-  disabled. It is now enabled and restarted after the swap.
-- **A WEP WLAN, or an Enhanced Open WLAN pushed without its OWE setting, came up as an
-  open network.** openUF cannot build either, so it now skips them with a log line.
-- **2.4 GHz on Auto could pick a channel such as 3 or 9** and overlap two neighbours. It
-  now picks only among 1, 6 and 11.
-- **A radio whose automatic channel selection failed stayed off the air.** After a minute
-  openUF gives it a channel that needs no radar check (1, 6, 11, 36 or 149).
-
-- **An AP cabled below another showed up as a wired client** of the AP above it, next to
-  itself in the topology: it announces itself over LLDP from its port's MAC, and the AP
-  above learned that MAC. And a PC plugged into the lower AP was reported by both APs, so
-  the controller kept moving it between them and the topology lost it. Now a port where an
-  LLDP neighbour says it is a bridge, router or access point reports no wired clients:
-  that device reports its own (proven on hardware). A third-party managed switch below an
-  AP's port therefore hides its clients from the controller.
-
 **Fixed in 1.0.6** ([release notes](docs/release-notes/1.0.6.md)):
 
 - **Channel AI's quick scan swept every band on each radio** on boards where one radio
   can use several bands, and reported the other bands' channels as its own. Each radio
   now scans only its own band, which also makes the scan shorter.
-- **Channel AI's 40 MHz plan went on the air at 80 MHz** on the JioRouter AX6000: its board
-  map raises the width to 80 MHz. New setting **Use the controller's channel width**
-  (LuCI, openUF Settings, WiFi behaviour; UCI `openuf.main.honour_controller_width`). On: the
-  radios run exactly the width the controller sends. Off (the default): unchanged.
-- **Transmit Power Low and Medium ran at full power.** Medium now runs 6 dB and Low 12 dB
-  below the radio's maximum (proven on hardware). The stock firmware's exact values are not
-  known; these are a choice, not a copy.
-- **LED off left the JioRouter AX6000's LED red**: openUF turned off only the green colour,
-  and OpenWrt's running light is the red one. LED off now turns off every colour of that
-  LED and LED on puts them back (proven on hardware).
-
-**Fixed in 1.0.5** ([release notes](docs/release-notes/1.0.5.md)):
-
-- **An upgrade left the old version running** until the next reboot: the package's install
-  steps never ran in any 1.0.x package. Upgrading to 1.0.5 restarts openUF on the new version.
 
 **Fixed in 1.0.4** ([release notes](docs/release-notes/1.0.4.md)):
 
 - **The install command did not ask its questions** on OpenWrt 25.12: the copy of itself
   it downloads to talk to the keyboard failed (the same github.com download problem), so
   it ran with the default answers. It now fetches that copy through GitHub's API address.
-
-**Fixed in 1.0.3** (upgrade if you installed 1.0.2; [release notes](docs/release-notes/1.0.3.md)):
-
-- **The right password was refused as "not correct".** 1.0.2's installer upgraded the web
-  server but not its login module, so the web server crashed on every sign-in, in LuCI and
-  on openUF's page, and the page called that a wrong password. The installer now upgrades
-  all the parts together, and the page says when the device could not check the password.
-  A router that already has it: `apk upgrade uhttpd uhttpd-mod-ubus uhttpd-mod-ucode`,
-  then reboot.
 
 **Fixed in 1.0.2** (upgrade if you run an older one; [release notes](docs/release-notes/1.0.2.md)):
 
@@ -388,8 +345,6 @@ than a few hours. The upstream projects' results for some of these are
   on a port outside the LAN and never announced itself. The installer now updates the web
   server first, openUF's page stays out (LuCI keeps working) while the two do not match,
   and the address is found on the LAN bridge.
-- **`openuf deps` was broken since 1.0.0** (a "syntax error"), so the dependency page could
-  neither report nor install missing packages.
 - **A MAC filter with no addresses yet stopped every WiFi change** on that AP. It now
   applies, and with an empty allow list nobody joins that network, as on a UniFi AP.
 
